@@ -79,6 +79,59 @@ Run the example:
 cargo run --example hello
 ```
 
+## Replace The HTTP Backend
+
+The core crate depends on the `HttpAdapter` trait, not on Axum. Axum is the
+first adapter because it is a strong default for async Rust services, but a
+Boot application can be served by any backend that can translate Boot routes,
+requests, and responses.
+
+Disable the default adapter when you only want the framework-neutral core:
+
+```toml
+[dependencies]
+a3s-boot = { version = "0.1", default-features = false }
+```
+
+Implement an adapter for another HTTP stack, test harness, in-process gateway,
+or custom runtime:
+
+```rust
+use std::net::SocketAddr;
+
+use a3s_boot::{BootApplication, BoxFuture, HttpAdapter, Result};
+
+#[derive(Debug)]
+struct RouteSnapshot {
+    routes: Vec<(String, &'static str)>,
+}
+
+#[derive(Debug, Default)]
+struct SnapshotAdapter;
+
+impl HttpAdapter for SnapshotAdapter {
+    type Output = RouteSnapshot;
+
+    fn build(&self, app: BootApplication) -> Result<Self::Output> {
+        Ok(RouteSnapshot {
+            routes: app
+                .routes()
+                .iter()
+                .map(|route| (route.path().to_string(), route.method().as_str()))
+                .collect(),
+        })
+    }
+
+    fn serve(&self, app: BootApplication, addr: SocketAddr) -> BoxFuture<'static, Result<()>> {
+        let route_count = app.routes().len();
+        Box::pin(async move {
+            println!("serving {route_count} routes on {addr}");
+            Ok(())
+        })
+    }
+}
+```
+
 ## Design Direction
 
 A3S Boot aims to provide a structured service framework for A3S components:

@@ -399,4 +399,42 @@ mod tests {
 
         assert!(matches!(result, Err(BootError::InvalidRoutePath(_))));
     }
+
+    struct RecordingAdapter;
+
+    impl HttpAdapter for RecordingAdapter {
+        type Output = Vec<(HttpMethod, String)>;
+
+        fn build(&self, app: BootApplication) -> Result<Self::Output> {
+            Ok(app
+                .routes()
+                .iter()
+                .map(|route| (route.method(), route.path().to_string()))
+                .collect())
+        }
+
+        fn serve(
+            &self,
+            app: BootApplication,
+            _addr: std::net::SocketAddr,
+        ) -> BoxFuture<'static, Result<()>> {
+            let route_count = app.routes().len();
+            Box::pin(async move {
+                assert!(route_count > 0);
+                Ok(())
+            })
+        }
+    }
+
+    #[test]
+    fn builds_with_a_custom_http_adapter() {
+        let app = BootApplication::builder()
+            .import(HealthModule)
+            .build()
+            .unwrap();
+
+        let routes = app.into_adapter(&RecordingAdapter).unwrap();
+
+        assert_eq!(routes, vec![(HttpMethod::Get, "/health".to_string())]);
+    }
 }

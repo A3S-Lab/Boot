@@ -24,8 +24,14 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
-      - name: Test
+      - name: Test core without default adapter
+        run: cargo test --all-targets --no-default-features
+
+      - name: Test default adapter
         run: cargo test --all-targets
 
-      - name: Clippy
+      - name: Clippy core without default adapter
+        run: cargo clippy --all-targets --no-default-features -- -D warnings
+
+      - name: Clippy default adapter
         run: cargo clippy --all-targets -- -D warnings
