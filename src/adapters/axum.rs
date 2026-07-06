@@ -90,8 +90,10 @@ async fn dispatch_route(route: RouteDefinition, request: Request, body_limit: us
         Err(err) => return error_response(StatusCode::BAD_REQUEST, err.to_string()),
     };
 
-    match route.handler().call(boot_request).await {
+    match route.call(boot_request).await {
         Ok(response) => to_axum_response(response),
+        Err(BootError::Forbidden(message)) => error_response(StatusCode::FORBIDDEN, message),
+        Err(BootError::BadRequest(message)) => error_response(StatusCode::BAD_REQUEST, message),
         Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
     }
 }
@@ -102,6 +104,7 @@ async fn to_boot_request(
     body_limit: usize,
 ) -> Result<BootRequest> {
     let path = request.uri().path().to_string();
+    let query_string = request.uri().query().map(str::to_string);
     let headers = request
         .headers()
         .iter()
@@ -117,12 +120,11 @@ async fn to_boot_request(
         .map_err(|err| BootError::Adapter(err.to_string()))?
         .to_vec();
 
-    Ok(BootRequest {
-        method,
-        path,
-        headers,
-        body,
-    })
+    let mut request = BootRequest::new(method, path);
+    if let Some(query_string) = query_string {
+        request = request.with_query_string(query_string);
+    }
+    Ok(request.with_body(body).with_headers(headers))
 }
 
 fn to_axum_response(response: BootResponse) -> Response {
