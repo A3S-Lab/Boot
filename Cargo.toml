@@ -1,0 +1,33 @@
+[package]
+name = "a3s-boot"
+version = "0.1.0"
+edition = "2021"
+authors = ["A3S Lab"]
+license = "MIT"
+description = "Modular Rust web framework for A3S inspired by Nest.js"
+repository = "https://github.com/A3S-Lab/Boot"
+documentation = "https://docs.rs/a3s-boot"
+readme = "README.md"
+keywords = ["web", "framework", "modular", "nest", "axum"]
+categories = ["web-programming", "asynchronous"]
+
+[lib]
+name = "a3s_boot"
+path = "src/lib.rs"
+
+[features]
+default = ["axum"]
+axum = ["dep:axum", "dep:tokio"]
+
+[dependencies]
+axum = { version = "0.8", optional = true }
+thiserror = "2"
+tokio = { version = "1", features = ["net"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
+
+[[example]]
+name = "hello"
+path = "examples/hello.rs"
+required-features = ["axum"]
