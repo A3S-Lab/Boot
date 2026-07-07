@@ -1,4 +1,7 @@
-use a3s_boot::{BootApplication, BootError, BoxFuture, HttpAdapter, Module, ModuleRef, Result};
+use a3s_boot::{
+    BootApplication, BootError, BoxFuture, HttpAdapter, Module, ModuleRef, ProviderDefinition,
+    ProviderOnApplicationBootstrap, ProviderOnApplicationShutdown, ProviderOnModuleInit, Result,
+};
 use std::sync::Arc;
 
 struct LifecycleModule {
@@ -55,6 +58,112 @@ impl Module for LifecycleModule {
     }
 }
 
+struct LifecycleProvider {
+    name: &'static str,
+    log: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl ProviderOnModuleInit for LifecycleProvider {
+    fn on_module_init(&self, _module_ref: &ModuleRef) -> Result<()> {
+        self.log
+            .lock()
+            .unwrap()
+            .push(format!("provider-init:{}", self.name));
+        Ok(())
+    }
+}
+
+impl ProviderOnApplicationBootstrap for LifecycleProvider {
+    fn on_application_bootstrap(&self, _module_ref: ModuleRef) -> BoxFuture<'static, Result<()>> {
+        let name = self.name;
+        let log = Arc::clone(&self.log);
+        Box::pin(async move {
+            log.lock()
+                .unwrap()
+                .push(format!("provider-bootstrap:{name}"));
+            Ok(())
+        })
+    }
+}
+
+impl ProviderOnApplicationShutdown for LifecycleProvider {
+    fn on_application_shutdown(&self, _module_ref: ModuleRef) -> BoxFuture<'static, Result<()>> {
+        let name = self.name;
+        let log = Arc::clone(&self.log);
+        Box::pin(async move {
+            log.lock()
+                .unwrap()
+                .push(format!("provider-shutdown:{name}"));
+            Ok(())
+        })
+    }
+}
+
+struct ProviderLifecycleModule {
+    log: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl Module for ProviderLifecycleModule {
+    fn name(&self) -> &'static str {
+        "provider-lifecycle"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::singleton(LifecycleProvider {
+            name: "service",
+            log: Arc::clone(&self.log),
+        })
+        .with_on_module_init::<LifecycleProvider>()
+        .with_on_application_bootstrap::<LifecycleProvider>()
+        .with_on_application_shutdown::<LifecycleProvider>()])
+    }
+
+    fn on_module_init(&self, _module_ref: &ModuleRef) -> Result<()> {
+        self.log.lock().unwrap().push("module-init".to_string());
+        Ok(())
+    }
+
+    fn on_application_bootstrap(&self, _module_ref: ModuleRef) -> BoxFuture<'static, Result<()>> {
+        let log = Arc::clone(&self.log);
+        Box::pin(async move {
+            log.lock().unwrap().push("module-bootstrap".to_string());
+            Ok(())
+        })
+    }
+
+    fn on_application_shutdown(&self, _module_ref: ModuleRef) -> BoxFuture<'static, Result<()>> {
+        let log = Arc::clone(&self.log);
+        Box::pin(async move {
+            log.lock().unwrap().push("module-shutdown".to_string());
+            Ok(())
+        })
+    }
+}
+
+struct RequestScopedLifecycleModule {
+    log: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl Module for RequestScopedLifecycleModule {
+    fn name(&self) -> &'static str {
+        "request-scoped-lifecycle"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        let log = Arc::clone(&self.log);
+        Ok(vec![ProviderDefinition::request_scoped::<
+            LifecycleProvider,
+            _,
+        >(move |_| {
+            Ok(LifecycleProvider {
+                name: "request",
+                log: Arc::clone(&log),
+            })
+        })
+        .with_on_module_init::<LifecycleProvider>()])
+    }
+}
+
 struct FailingBootstrapModule {
     log: Arc<std::sync::Mutex<Vec<String>>>,
     fail_shutdown: bool,
@@ -84,6 +193,46 @@ impl Module for FailingBootstrapModule {
             Ok(())
         })
     }
+}
+
+#[tokio::test]
+async fn singleton_provider_lifecycle_hooks_run_with_module_lifecycle() {
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let app = BootApplication::builder()
+        .import(ProviderLifecycleModule {
+            log: Arc::clone(&log),
+        })
+        .build()
+        .unwrap();
+
+    app.bootstrap().await.unwrap();
+    app.shutdown().await.unwrap();
+
+    assert_eq!(
+        log.lock().unwrap().as_slice(),
+        [
+            "provider-init:service",
+            "module-init",
+            "provider-bootstrap:service",
+            "module-bootstrap",
+            "module-shutdown",
+            "provider-shutdown:service",
+        ]
+    );
+}
+
+#[test]
+fn provider_lifecycle_hooks_require_singleton_scope() {
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let result = BootApplication::builder()
+        .import(RequestScopedLifecycleModule { log })
+        .build();
+
+    assert!(matches!(
+        result,
+        Err(BootError::Internal(message))
+            if message.contains("provider lifecycle hooks require singleton scope")
+    ));
 }
 
 #[tokio::test]

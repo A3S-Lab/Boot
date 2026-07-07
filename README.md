@@ -46,7 +46,7 @@ This repository contains the first framework slice:
 - `ModuleRef` for typed provider lookup, optional lookup, presence checks, token listing,
   and request-context lookup through `BootRequest`
 - `ProviderDefinition` for singleton, request-scoped, transient, factory, and
-  shared `Arc` factory providers
+  shared `Arc` factory providers, plus singleton provider lifecycle hooks
 - module-scoped provider visibility with explicit `exports()`, transitive
   re-exports, global modules, and `DynamicModule` for runtime-built modules
 - `ControllerDefinition` for prefix-based route groups
@@ -1104,6 +1104,11 @@ struct Repository {
 }
 
 #[derive(Debug)]
+struct Formatter {
+    client: Arc<Client>,
+}
+
+#[derive(Debug)]
 struct RequestContext {
     request_id: String,
 }
@@ -1126,8 +1131,8 @@ let providers = vec![
             request_id: "generated-per-request".to_string(),
         })
     }),
-    ProviderDefinition::transient::<Repository, _>(|module_ref| {
-        Ok(Repository {
+    ProviderDefinition::transient::<Formatter, _>(|module_ref| {
+        Ok(Formatter {
             client: module_ref.get::<Client>()?,
         })
     }),
@@ -1187,6 +1192,38 @@ impl Module for CatsModule {
     }
 }
 ```
+
+Singleton providers can opt into Nest-style lifecycle hooks:
+
+```rust
+use a3s_boot::{
+    BoxFuture, ModuleRef, ProviderDefinition, ProviderOnApplicationShutdown,
+    ProviderOnModuleInit, Result,
+};
+
+#[derive(Debug)]
+struct CatsService;
+
+impl ProviderOnModuleInit for CatsService {
+    fn on_module_init(&self, _module_ref: &ModuleRef) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl ProviderOnApplicationShutdown for CatsService {
+    fn on_application_shutdown(&self, _module_ref: ModuleRef) -> BoxFuture<'static, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+let provider = ProviderDefinition::singleton(CatsService)
+    .with_on_module_init::<CatsService>()
+    .with_on_application_shutdown::<CatsService>();
+```
+
+Lifecycle hooks require singleton scope. Request-scoped and transient providers
+are created for request or resolution contexts, so they do not participate in
+application startup or shutdown hooks.
 
 ## Testing Modules
 

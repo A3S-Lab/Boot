@@ -83,6 +83,7 @@ impl ModuleRegistry {
             }
         }
 
+        module_ref.initialize_local_providers()?;
         module.on_module_init(&module_ref)?;
 
         let mut module_pipeline = PipelineComponents::default();

@@ -294,6 +294,7 @@ impl BootApplication {
     /// Run async startup hooks before serving, when the host needs them.
     pub async fn bootstrap(&self) -> Result<()> {
         for instance in &self.module_instances {
+            instance.module_ref.bootstrap_local_providers().await?;
             instance
                 .module
                 .on_application_bootstrap(instance.module_ref.clone())
@@ -309,6 +310,7 @@ impl BootApplication {
                 .module
                 .on_application_shutdown(instance.module_ref.clone())
                 .await?;
+            instance.module_ref.shutdown_local_providers().await?;
         }
         Ok(())
     }

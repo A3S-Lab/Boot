@@ -132,6 +132,33 @@ impl ProviderEntry {
         Ok(())
     }
 
+    fn on_module_init(&self, module_ref: &ModuleRef) -> Result<()> {
+        let Some(hook) = self.definition.lifecycle().on_module_init() else {
+            return Ok(());
+        };
+
+        let value = self.resolve_singleton(module_ref)?;
+        hook(value, module_ref)
+    }
+
+    async fn on_application_bootstrap(&self, module_ref: ModuleRef) -> Result<()> {
+        let Some(hook) = self.definition.lifecycle().on_application_bootstrap() else {
+            return Ok(());
+        };
+
+        let value = self.resolve_singleton(&module_ref)?;
+        hook(value, module_ref).await
+    }
+
+    async fn on_application_shutdown(&self, module_ref: ModuleRef) -> Result<()> {
+        let Some(hook) = self.definition.lifecycle().on_application_shutdown() else {
+            return Ok(());
+        };
+
+        let value = self.resolve_singleton(&module_ref)?;
+        hook(value, module_ref).await
+    }
+
     fn read_cache<'a>(
         &self,
         cache: &'a ProviderCache,
@@ -191,6 +218,11 @@ impl ModuleRef {
         let token = definition.token().clone();
         if self.contains_local(&token)? {
             return Err(BootError::DuplicateProvider(token.to_string()));
+        }
+        if definition.lifecycle().has_hooks() && definition.scope() != ProviderScope::Singleton {
+            return Err(BootError::Internal(format!(
+                "provider lifecycle hooks require singleton scope: {token}"
+            )));
         }
         let entry = ProviderEntry::new(definition);
         if entry.scope() == ProviderScope::Singleton {
@@ -290,6 +322,29 @@ impl ModuleRef {
         Ok(self.read_providers()?.keys().cloned().collect())
     }
 
+    pub(crate) fn initialize_local_providers(&self) -> Result<()> {
+        for entry in self.local_entries()? {
+            entry.on_module_init(self)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn bootstrap_local_providers(&self) -> Result<()> {
+        for entry in self.local_entries()? {
+            entry.on_application_bootstrap(self.clone()).await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn shutdown_local_providers(&self) -> Result<()> {
+        let mut entries = self.local_entries()?;
+        entries.reverse();
+        for entry in entries {
+            entry.on_application_shutdown(self.clone()).await?;
+        }
+        Ok(())
+    }
+
     fn get_token<T>(&self, token: &ProviderToken) -> Result<Arc<T>>
     where
         T: Send + Sync + 'static,
@@ -362,6 +417,10 @@ impl ModuleRef {
             scope.collect_tokens(tokens)?;
         }
         Ok(())
+    }
+
+    fn local_entries(&self) -> Result<Vec<ProviderEntry>> {
+        Ok(self.read_providers()?.values().cloned().collect())
     }
 
     fn visible_scopes(&self) -> Result<Vec<ModuleRef>> {

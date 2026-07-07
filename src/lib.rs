@@ -100,7 +100,10 @@ pub use openapi::{
 pub use pipeline::{
     ExceptionFilter, ExecutionContext, Guard, Interceptor, Middleware, MiddlewareOutcome, Pipe,
 };
-pub use provider::{ModuleRef, ProviderDefinition, ProviderScope, ProviderToken};
+pub use provider::{
+    ModuleRef, ProviderDefinition, ProviderOnApplicationBootstrap, ProviderOnApplicationShutdown,
+    ProviderOnModuleInit, ProviderScope, ProviderToken,
+};
 #[cfg(feature = "queue")]
 pub use queue::{
     InProcessQueueBackend, Queue, QueueBackend, QueueContext, QueueJob, QueueJobFailure,

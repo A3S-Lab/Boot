@@ -29,7 +29,8 @@ Implemented today:
 
 - `Module` with imports, providers, controllers, direct routes, and lifecycle hooks.
 - `ProviderDefinition` and `ModuleRef` for typed provider registration,
-  singleton/request/transient lifecycle scopes, and lookup.
+  singleton/request/transient lifecycle scopes, singleton provider lifecycle
+  hooks, and lookup.
 - `ControllerDefinition` and `RouteDefinition` for HTTP route groups.
 - Nest-style attribute macros: `#[injectable]`, `#[controller]`, `#[get]`,
   `#[post]`, `#[put]`, `#[patch]`, `#[delete]`, `#[sse]`, raw route mode, and
@@ -56,7 +57,8 @@ Implemented today:
   provider modules.
 - Provider lifecycle scopes with default singleton providers, request-scoped
   providers cached per in-process request context, transient providers built per
-  resolution, and request-time lookup through `BootRequest`.
+  resolution, request-time lookup through `BootRequest`, and singleton provider
+  startup/shutdown hooks.
 - Middleware with request mutation, short-circuit responses, global/module/
   controller/route scopes, filter integration for errors, and adapter
   validation before middleware execution.
@@ -286,6 +288,7 @@ Nest equivalent:
 - global modules
 - dynamic modules
 - provider scopes: singleton, request, transient
+- singleton provider lifecycle hooks
 
 Status: implemented.
 
@@ -296,7 +299,8 @@ container. Boot now creates module-scoped provider registries. A module can see
 its own providers plus exported providers from imports and global modules.
 Dynamic modules can produce imports, providers, exports, controllers, and routes
 from runtime configuration. Provider definitions can also choose singleton,
-request-scoped, or transient lifecycle behavior.
+request-scoped, or transient lifecycle behavior. Singleton providers can opt
+into module init, application bootstrap, and application shutdown hooks.
 
 Tasks:
 
@@ -316,6 +320,8 @@ Tasks:
 - Make request-scoped providers reuse one instance per request context,
   including dependencies resolved inside request-scoped provider factories.
   (Implemented)
+- Add singleton provider lifecycle hooks for init, bootstrap, and shutdown.
+  (Implemented)
 
 Acceptance:
 
@@ -329,6 +335,8 @@ Acceptance:
 - Transient providers are rebuilt for every resolution. (Covered)
 - Request-scoped providers are cached per request and are isolated from other
   requests. (Covered)
+- Singleton provider lifecycle hooks run with module lifecycle hooks and reject
+  request/transient provider scopes. (Covered)
 
 ## Milestone 5: Middleware
 

@@ -1,9 +1,33 @@
 use super::{AnyProvider, ModuleRef, ProviderToken};
-use crate::Result;
+use crate::{BootError, BoxFuture, Result};
 use std::fmt;
 use std::sync::Arc;
 
 type ProviderFactory = dyn Fn(&ModuleRef) -> Result<Arc<AnyProvider>> + Send + Sync;
+type ProviderModuleInitHook = dyn Fn(Arc<AnyProvider>, &ModuleRef) -> Result<()> + Send + Sync;
+type ProviderApplicationHook =
+    dyn Fn(Arc<AnyProvider>, ModuleRef) -> BoxFuture<'static, Result<()>> + Send + Sync;
+
+/// Lifecycle hook for singleton providers that need synchronous module init work.
+pub trait ProviderOnModuleInit: Send + Sync + 'static {
+    fn on_module_init(&self, _module_ref: &ModuleRef) -> Result<()> {
+        Ok(())
+    }
+}
+
+/// Lifecycle hook for singleton providers that need async startup work.
+pub trait ProviderOnApplicationBootstrap: Send + Sync + 'static {
+    fn on_application_bootstrap(&self, _module_ref: ModuleRef) -> BoxFuture<'static, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// Lifecycle hook for singleton providers that need async shutdown cleanup.
+pub trait ProviderOnApplicationShutdown: Send + Sync + 'static {
+    fn on_application_shutdown(&self, _module_ref: ModuleRef) -> BoxFuture<'static, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+}
 
 /// Lifetime strategy for provider resolution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,6 +43,34 @@ pub struct ProviderDefinition {
     token: ProviderToken,
     factory: Arc<ProviderFactory>,
     scope: ProviderScope,
+    lifecycle: ProviderLifecycleHooks,
+}
+
+#[derive(Clone, Default)]
+pub(super) struct ProviderLifecycleHooks {
+    on_module_init: Option<Arc<ProviderModuleInitHook>>,
+    on_application_bootstrap: Option<Arc<ProviderApplicationHook>>,
+    on_application_shutdown: Option<Arc<ProviderApplicationHook>>,
+}
+
+impl ProviderLifecycleHooks {
+    pub(super) fn has_hooks(&self) -> bool {
+        self.on_module_init.is_some()
+            || self.on_application_bootstrap.is_some()
+            || self.on_application_shutdown.is_some()
+    }
+
+    pub(super) fn on_module_init(&self) -> Option<&Arc<ProviderModuleInitHook>> {
+        self.on_module_init.as_ref()
+    }
+
+    pub(super) fn on_application_bootstrap(&self) -> Option<&Arc<ProviderApplicationHook>> {
+        self.on_application_bootstrap.as_ref()
+    }
+
+    pub(super) fn on_application_shutdown(&self) -> Option<&Arc<ProviderApplicationHook>> {
+        self.on_application_shutdown.as_ref()
+    }
 }
 
 impl fmt::Debug for ProviderDefinition {
@@ -63,6 +115,7 @@ impl ProviderDefinition {
             token,
             factory: Arc::new(move |_| Ok(Arc::clone(&factory_value) as Arc<AnyProvider>)),
             scope: ProviderScope::Singleton,
+            lifecycle: ProviderLifecycleHooks::default(),
         }
     }
 
@@ -93,6 +146,7 @@ impl ProviderDefinition {
                 Ok(Arc::new(factory(module_ref)?) as Arc<AnyProvider>)
             }),
             scope: ProviderScope::Singleton,
+            lifecycle: ProviderLifecycleHooks::default(),
         }
     }
 
@@ -105,6 +159,7 @@ impl ProviderDefinition {
             token: ProviderToken::named(token),
             factory: Arc::new(move |module_ref| Ok(factory(module_ref)? as Arc<AnyProvider>)),
             scope: ProviderScope::Singleton,
+            lifecycle: ProviderLifecycleHooks::default(),
         }
     }
 
@@ -177,6 +232,45 @@ impl ProviderDefinition {
         self
     }
 
+    pub fn with_on_module_init<T>(mut self) -> Self
+    where
+        T: ProviderOnModuleInit,
+    {
+        self.lifecycle.on_module_init = Some(Arc::new(|provider, module_ref| {
+            let provider = downcast_lifecycle_provider::<T>(provider)?;
+            provider.on_module_init(module_ref)
+        }));
+        self
+    }
+
+    pub fn with_on_application_bootstrap<T>(mut self) -> Self
+    where
+        T: ProviderOnApplicationBootstrap,
+    {
+        self.lifecycle.on_application_bootstrap =
+            Some(Arc::new(
+                |provider, module_ref| match downcast_lifecycle_provider::<T>(provider) {
+                    Ok(provider) => provider.on_application_bootstrap(module_ref),
+                    Err(error) => Box::pin(async move { Err(error) }),
+                },
+            ));
+        self
+    }
+
+    pub fn with_on_application_shutdown<T>(mut self) -> Self
+    where
+        T: ProviderOnApplicationShutdown,
+    {
+        self.lifecycle.on_application_shutdown =
+            Some(Arc::new(
+                |provider, module_ref| match downcast_lifecycle_provider::<T>(provider) {
+                    Ok(provider) => provider.on_application_shutdown(module_ref),
+                    Err(error) => Box::pin(async move { Err(error) }),
+                },
+            ));
+        self
+    }
+
     pub fn token(&self) -> &ProviderToken {
         &self.token
     }
@@ -185,7 +279,19 @@ impl ProviderDefinition {
         self.scope
     }
 
+    pub(super) fn lifecycle(&self) -> &ProviderLifecycleHooks {
+        &self.lifecycle
+    }
+
     pub(super) fn build(&self, module_ref: &ModuleRef) -> Result<Arc<AnyProvider>> {
         (self.factory)(module_ref)
     }
+}
+
+fn downcast_lifecycle_provider<T>(provider: Arc<AnyProvider>) -> Result<Arc<T>>
+where
+    T: Send + Sync + 'static,
+{
+    Arc::downcast::<T>(provider)
+        .map_err(|_| BootError::ProviderTypeMismatch(std::any::type_name::<T>().to_string()))
 }
