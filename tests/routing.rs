@@ -770,6 +770,37 @@ async fn route_handle_converts_path_param_decode_errors_to_responses() {
 }
 
 #[tokio::test]
+async fn route_response_headers_apply_to_successful_responses() {
+    let route = RouteDefinition::get("/cached", |_| async { Ok(BootResponse::text("ok")) })
+        .unwrap()
+        .with_response_header("cache-control", "max-age=60");
+
+    let response = route
+        .call(BootRequest::new(HttpMethod::Get, "/cached"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.body, b"ok");
+    assert_eq!(response.header("cache-control"), Some("max-age=60"));
+}
+
+#[tokio::test]
+async fn route_redirect_replaces_successful_responses() {
+    let route = RouteDefinition::get("/old", |_| async { Ok(BootResponse::text("unreachable")) })
+        .unwrap()
+        .with_redirect_status(301, "/new");
+
+    let response = route
+        .call(BootRequest::new(HttpMethod::Get, "/old"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 301);
+    assert_eq!(response.location(), Some("/new"));
+    assert!(response.body().is_empty());
+}
+
+#[tokio::test]
 async fn route_call_distinguishes_trailing_slash_paths() {
     let route =
         RouteDefinition::get("/items", |_| async { Ok(BootResponse::text("items")) }).unwrap();

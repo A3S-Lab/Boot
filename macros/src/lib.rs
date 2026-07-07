@@ -219,6 +219,11 @@ pub fn hide_from_openapi(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
+pub fn redirect(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    response_attribute_outside_controller("redirect", item)
+}
+
+#[proc_macro_attribute]
 pub fn http_code(_attr: TokenStream, item: TokenStream) -> TokenStream {
     http_code_attribute_outside_controller("http_code", item)
 }
@@ -322,6 +327,8 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
         let (clean_attrs, metadata_specs, metadata_errors) =
             take_route_metadata_attrs(&clean_attrs);
         let (clean_attrs, http_code, http_code_errors) = take_route_http_code_attrs(&clean_attrs);
+        let (clean_attrs, response_specs, response_errors) =
+            take_route_response_attrs(&clean_attrs);
         method.attrs = clean_attrs;
         for error in route_errors {
             push_error(&mut errors, error);
@@ -338,12 +345,24 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
         for error in http_code_errors {
             push_error(&mut errors, error);
         }
+        for error in response_errors {
+            push_error(&mut errors, error);
+        }
         if method_routes.is_empty() && !openapi_specs.is_empty() {
             push_error(
                 &mut errors,
                 syn::Error::new_spanned(
                     &method.sig.ident,
                     "OpenAPI route attributes must be used on route methods",
+                ),
+            );
+        }
+        if method_routes.is_empty() && !response_specs.is_empty() {
+            push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &method.sig.ident,
+                    "response route attributes must be used on route methods",
                 ),
             );
         }
@@ -401,6 +420,7 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
                 validation_skipped,
                 &metadata_specs,
                 http_code.as_ref(),
+                &response_specs,
                 &openapi_specs,
             ) {
                 Ok(registration) => routes.push(registration),
@@ -912,6 +932,7 @@ fn route_registration(
     validation_skipped: bool,
     metadata_specs: &[MetadataSpec],
     http_code: Option<&LitInt>,
+    response_specs: &[RouteResponseSpec],
     openapi_specs: &[RouteOpenApiSpec],
 ) -> Result<proc_macro2::TokenStream> {
     if method.sig.asyncness.is_none() {
@@ -1037,6 +1058,8 @@ fn route_registration(
 
     let route_definition = metadata_route_definition(route_definition, metadata_specs);
 
+    let route_definition = response_route_definition(route_definition, response_specs)?;
+
     let route_definition = openapi_route_definition(
         route_definition,
         &metadata_input,
@@ -1062,6 +1085,19 @@ fn metadata_route_definition(
         };
     }
     route_definition
+}
+
+fn response_route_definition(
+    mut route_definition: proc_macro2::TokenStream,
+    response_specs: &[RouteResponseSpec],
+) -> Result<proc_macro2::TokenStream> {
+    for spec in response_specs {
+        let token = spec.token()?;
+        route_definition = quote! {
+            (#route_definition).#token
+        };
+    }
+    Ok(route_definition)
 }
 
 fn validation_route_definition(
@@ -1661,6 +1697,42 @@ fn take_route_http_code_attrs(
     (clean_attrs, status, errors)
 }
 
+fn take_route_response_attrs(
+    attrs: &[Attribute],
+) -> (Vec<Attribute>, Vec<RouteResponseSpec>, Vec<syn::Error>) {
+    let mut clean_attrs = Vec::new();
+    let mut specs = Vec::new();
+    let mut errors = Vec::new();
+    let mut redirect_seen = false;
+
+    for attr in attrs {
+        let Some(kind) = ResponseAttrKind::from_attribute(attr) else {
+            clean_attrs.push(attr.clone());
+            continue;
+        };
+
+        match kind {
+            ResponseAttrKind::Header => match attr.parse_args::<ResponseHeaderArgs>() {
+                Ok(args) => specs.push(RouteResponseSpec::Header(args)),
+                Err(error) => errors.push(error),
+            },
+            ResponseAttrKind::Redirect => match attr.parse_args::<RedirectArgs>() {
+                Ok(args) if !redirect_seen => {
+                    redirect_seen = true;
+                    specs.push(RouteResponseSpec::Redirect(args));
+                }
+                Ok(args) => errors.push(syn::Error::new_spanned(
+                    args.location,
+                    "route methods can use at most one #[redirect(...)] attribute",
+                )),
+                Err(error) => errors.push(error),
+            },
+        }
+    }
+
+    (clean_attrs, specs, errors)
+}
+
 fn is_metadata_attribute(attr: &Attribute) -> bool {
     attr.path()
         .segments
@@ -1717,6 +1789,92 @@ impl Parse for MetadataSpec {
         let value = input.parse::<Expr>()?;
         parse_optional_comma(input)?;
         Ok(Self { key, value })
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ResponseAttrKind {
+    Header,
+    Redirect,
+}
+
+impl ResponseAttrKind {
+    fn from_attribute(attr: &Attribute) -> Option<Self> {
+        let ident = attr.path().segments.last()?.ident.to_string();
+        match ident.as_str() {
+            "header" => Some(Self::Header),
+            "redirect" => Some(Self::Redirect),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone)]
+enum RouteResponseSpec {
+    Header(ResponseHeaderArgs),
+    Redirect(RedirectArgs),
+}
+
+impl RouteResponseSpec {
+    fn token(&self) -> Result<proc_macro2::TokenStream> {
+        match self {
+            Self::Header(args) => {
+                let name = &args.name;
+                let value = &args.value;
+                Ok(quote!(with_response_header(#name, #value)))
+            }
+            Self::Redirect(args) => {
+                let location = &args.location;
+                let status = status_value(args.status.as_ref())?;
+                Ok(quote!(with_redirect_status(#status, #location)))
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ResponseHeaderArgs {
+    name: LitStr,
+    value: LitStr,
+}
+
+impl Parse for ResponseHeaderArgs {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let name = input.parse::<LitStr>()?;
+        input.parse::<Token![,]>()?;
+        let value = input.parse::<LitStr>()?;
+        parse_optional_comma(input)?;
+        Ok(Self { name, value })
+    }
+}
+
+#[derive(Clone)]
+struct RedirectArgs {
+    location: LitStr,
+    status: Option<LitInt>,
+}
+
+impl Parse for RedirectArgs {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let location = input.parse::<LitStr>()?;
+        let mut status = None;
+
+        if !input.is_empty() {
+            input.parse::<Token![,]>()?;
+            if input.peek(LitInt) {
+                status = Some(input.parse::<LitInt>()?);
+            } else {
+                let name = input.parse::<Ident>()?;
+                if name != "status" {
+                    return Err(syn::Error::new_spanned(name, "expected `status`"));
+                }
+                input.parse::<Token![=]>()?;
+                status = Some(input.parse::<LitInt>()?);
+            }
+            parse_optional_comma(input)?;
+        }
+
+        Ok(Self { location, status })
     }
 }
 
@@ -2114,6 +2272,17 @@ fn extractor_attribute_outside_controller(name: &str, item: TokenStream) -> Toke
 }
 
 fn openapi_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
+    let item = proc_macro2::TokenStream::from(item);
+    let message =
+        format!("#[{name}] must be used inside an impl block annotated with #[controller]");
+    quote! {
+        compile_error!(#message);
+        #item
+    }
+    .into()
+}
+
+fn response_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
     let item = proc_macro2::TokenStream::from(item);
     let message =
         format!("#[{name}] must be used inside an impl block annotated with #[controller]");

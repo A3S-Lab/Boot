@@ -57,8 +57,10 @@ This repository contains the first framework slice:
   `#[sse("/events")]`, plus parameter extractors such as `#[param("id")]`,
   `#[query]`, `#[query("name")]`, `#[body]`, `#[header("name")]`, and
   `#[request]`, route metadata such as `#[metadata("roles", ["admin"])]`,
-  response status metadata such as `#[http_code(202)]`, and WebSocket macros
-  such as `#[websocket_gateway]` and
+  response decorators such as `#[http_code(202)]`,
+  `#[header("cache-control", "max-age=60")]`, and
+  `#[redirect("/new", status = 301)]`, and WebSocket macros such as
+  `#[websocket_gateway]` and
   `#[subscribe_message]`, plus microservice macros such as
   `#[message_controller]`, `#[message_pattern]`, and `#[event_pattern]`
 - `Middleware`, `Pipe`, `Guard`, `Interceptor`, and `ExceptionFilter` pipeline traits
@@ -317,6 +319,8 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@UsePipes(new ValidationPipe())` | `#[validate]` on a controller impl or route method |
 | `@SetMetadata("roles", ["admin"])` | `#[metadata("roles", ["admin"])]` below `#[controller]` or on a route method |
 | `@HttpCode(202)` | `#[http_code(202)]` on a JSON route method |
+| `@Header("cache-control", "max-age=60")` | `#[header("cache-control", "max-age=60")]` on a route method |
+| `@Redirect("/new", 301)` | `#[redirect("/new", status = 301)]` on a route method |
 | `@ApiTags("cats")` | `#[tag("cats")]` below `#[controller]` |
 | `@ApiOperation(...)` | `#[operation(summary = "...", operation_id = "...")]` on a route method |
 | `@ApiResponse(...)` | `#[response(status = 200, description = "...", schema = CatDto)]` |
@@ -2121,11 +2125,14 @@ with `body_text()` and `body_json()`, or check status classes with helpers like
 `validate()` runs status-code, `Content-Length`, no-body status, and response
 header name/value checks in adapter order; the individual `validate_status()`,
 `validate_content_length()`, `validate_body_allowed()`, and `validate_headers()`
-helpers remain available for focused checks. Error responses can reuse the framework's standard HTTP error
-mapping:
+helpers remain available for focused checks. Error responses can reuse the
+framework's standard HTTP error mapping. Routes can also attach static response
+headers or redirect successful handler results declaratively, mirroring Nest's
+`@Header()` and `@Redirect()` decorators while keeping the behavior
+adapter-neutral:
 
 ```rust
-use a3s_boot::{BootResponse, Result};
+use a3s_boot::{BootResponse, Result, RouteDefinition};
 
 fn deleted() -> BootResponse {
     BootResponse::no_content()
@@ -2146,6 +2153,16 @@ fn moved() -> BootResponse {
     BootResponse::temporary_redirect("/cats/milo")
 }
 
+fn cached_route() -> Result<RouteDefinition> {
+    RouteDefinition::get("/cached", |_| async { Ok(BootResponse::text("ok")) })
+        .map(|route| route.with_response_header("cache-control", "max-age=60"))
+}
+
+fn moved_route() -> Result<RouteDefinition> {
+    RouteDefinition::get("/old", |_| async { Ok(BootResponse::text("ignored")) })
+        .map(|route| route.with_redirect_status(301, "/new"))
+}
+
 fn read_response(response: &BootResponse) -> Result<CatDto> {
     assert!(response.is_success());
     assert!(response.allows_body());
@@ -2156,6 +2173,29 @@ fn read_response(response: &BootResponse) -> Result<CatDto> {
 
 fn from_error(error: &a3s_boot::BootError) -> BootResponse {
     BootResponse::from_error(error)
+}
+```
+
+The macro form is available on controller route methods:
+
+```rust
+# use a3s_boot::Result;
+#[derive(Debug)]
+struct CatsController;
+
+#[a3s_boot::controller("/cats")]
+impl CatsController {
+    #[a3s_boot::get("/cached")]
+    #[a3s_boot::header("cache-control", "max-age=60")]
+    async fn cached(&self) -> Result<String> {
+        Ok("cat".to_string())
+    }
+
+    #[a3s_boot::get("/old")]
+    #[a3s_boot::redirect("/cats/new", status = 301)]
+    async fn moved(&self) -> Result<String> {
+        Ok("ignored".to_string())
+    }
 }
 ```
 

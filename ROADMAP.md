@@ -38,7 +38,8 @@ Implemented today:
   `#[param("name")]`, `#[params]`, `#[query]`, `#[query("name")]`,
   `#[header("name")]`, and `#[headers]`, plus `#[metadata]` for
   Nest-style custom route/controller metadata and `#[http_code]` for
-  Nest-style response status metadata.
+  Nest-style response status metadata, `#[header]` for response headers, and
+  `#[redirect]` for redirect responses.
 - JSON body and JSON response helpers.
 - SSE responses with `SseEvent`, `SseStream`, `BootResponse::sse(...)`,
   `RouteDefinition::sse(...)`, `ControllerDefinition::sse(...)`, and Axum

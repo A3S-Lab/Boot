@@ -187,6 +187,24 @@ impl MacroCatsController {
         })
     }
 
+    #[get("/cache")]
+    #[header("cache-control", "max-age=60")]
+    async fn cached(&self) -> Result<MacroCatDto> {
+        Ok(MacroCatDto {
+            id: "cache".to_string(),
+            name: "Cached".to_string(),
+        })
+    }
+
+    #[get("/legacy")]
+    #[redirect("/macro-cats/42", status = 301)]
+    async fn legacy(&self) -> Result<MacroCatDto> {
+        Ok(MacroCatDto {
+            id: "legacy".to_string(),
+            name: "Legacy".to_string(),
+        })
+    }
+
     #[sse("/events")]
     #[hide_from_openapi]
     async fn events(&self) -> Result<impl futures_core::Stream<Item = Result<SseEvent>>> {
@@ -367,7 +385,7 @@ async fn macros_register_injectable_services_and_controller_routes() {
         .build()
         .unwrap();
 
-    assert_eq!(app.routes().len(), 10);
+    assert_eq!(app.routes().len(), 12);
     assert_eq!(app.gateways().len(), 1);
     assert_eq!(app.message_patterns().len(), 3);
     assert_eq!(
@@ -491,6 +509,33 @@ async fn macros_register_injectable_services_and_controller_routes() {
             name: "Touched".to_string(),
         }
     );
+
+    let cached = app
+        .call(
+            BootRequest::new(a3s_boot::HttpMethod::Get, "/macro-cats/cache")
+                .with_header("accept", "application/json"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(cached.header("cache-control"), Some("max-age=60"));
+    assert_eq!(
+        cached.body_json::<MacroCatDto>().unwrap(),
+        MacroCatDto {
+            id: "cache".to_string(),
+            name: "Cached".to_string(),
+        }
+    );
+
+    let legacy = app
+        .call(
+            BootRequest::new(a3s_boot::HttpMethod::Get, "/macro-cats/legacy")
+                .with_header("accept", "application/json"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(legacy.status(), 301);
+    assert_eq!(legacy.location(), Some("/macro-cats/42"));
+    assert!(legacy.body().is_empty());
 
     let adopt = BootRequest::new(a3s_boot::HttpMethod::Post, "/macro-cats/42/adoptions")
         .with_json(&MacroCreateCatDto {
