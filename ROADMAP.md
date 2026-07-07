@@ -59,6 +59,8 @@ Implemented today:
   providers cached per in-process request context, transient providers built per
   resolution, request-time lookup through `BootRequest`, and singleton provider
   startup/shutdown hooks.
+- Provider aliases that mirror Nest custom provider `useExisting` semantics and
+  preserve target provider scope.
 - Request-scoped route/controller handler factories through `*_scoped` helpers.
 - Middleware with request mutation, short-circuit responses, global/module/
   controller/route scopes, filter integration for errors, and adapter
@@ -291,6 +293,7 @@ Nest equivalent:
 - provider scopes: singleton, request, transient
 - singleton provider lifecycle hooks
 - request-scoped controllers
+- provider aliases / `useExisting`
 
 Status: implemented.
 
@@ -304,7 +307,8 @@ from runtime configuration. Provider definitions can also choose singleton,
 request-scoped, or transient lifecycle behavior. Singleton providers can opt
 into module init, application bootstrap, and application shutdown hooks.
 Request-scoped handler factories rebuild route/controller state from the current
-request's module context.
+request's module context. Provider aliases let one token delegate to an existing
+provider token without changing the target provider's lifecycle scope.
 
 Tasks:
 
@@ -327,6 +331,7 @@ Tasks:
 - Add singleton provider lifecycle hooks for init, bootstrap, and shutdown.
   (Implemented)
 - Add request-scoped route/controller handler factories. (Implemented)
+- Add provider aliases comparable to Nest `useExisting`. (Implemented)
 
 Acceptance:
 
@@ -344,6 +349,8 @@ Acceptance:
   request/transient provider scopes. (Covered)
 - Request-scoped controller handlers are rebuilt for each request and share the
   same request-scoped provider cache as `BootRequest::get(...)`. (Covered)
+- Provider aliases resolve the same singleton instance, preserve request-scoped
+  resolution, and reject alias cycles with contextual errors. (Covered)
 
 ## Milestone 5: Middleware
 

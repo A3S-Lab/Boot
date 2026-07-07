@@ -44,6 +44,7 @@ pub struct ProviderDefinition {
     factory: Arc<ProviderFactory>,
     scope: ProviderScope,
     lifecycle: ProviderLifecycleHooks,
+    alias_target: Option<ProviderToken>,
 }
 
 #[derive(Clone, Default)]
@@ -78,6 +79,7 @@ impl fmt::Debug for ProviderDefinition {
         f.debug_struct("ProviderDefinition")
             .field("token", &self.token)
             .field("scope", &self.scope)
+            .field("alias_target", &self.alias_target)
             .finish_non_exhaustive()
     }
 }
@@ -116,6 +118,7 @@ impl ProviderDefinition {
             factory: Arc::new(move |_| Ok(Arc::clone(&factory_value) as Arc<AnyProvider>)),
             scope: ProviderScope::Singleton,
             lifecycle: ProviderLifecycleHooks::default(),
+            alias_target: None,
         }
     }
 
@@ -147,6 +150,7 @@ impl ProviderDefinition {
             }),
             scope: ProviderScope::Singleton,
             lifecycle: ProviderLifecycleHooks::default(),
+            alias_target: None,
         }
     }
 
@@ -160,6 +164,28 @@ impl ProviderDefinition {
             factory: Arc::new(move |module_ref| Ok(factory(module_ref)? as Arc<AnyProvider>)),
             scope: ProviderScope::Singleton,
             lifecycle: ProviderLifecycleHooks::default(),
+            alias_target: None,
+        }
+    }
+
+    pub fn alias<T>(target: ProviderToken) -> Self
+    where
+        T: Send + Sync + 'static,
+    {
+        Self::named_alias(ProviderToken::of::<T>().as_str(), target)
+    }
+
+    pub fn named_alias(token: impl Into<String>, target: ProviderToken) -> Self {
+        Self {
+            token: ProviderToken::named(token),
+            factory: Arc::new(|_| {
+                Err(BootError::Internal(
+                    "provider aliases must be resolved through ModuleRef".to_string(),
+                ))
+            }),
+            scope: ProviderScope::Singleton,
+            lifecycle: ProviderLifecycleHooks::default(),
+            alias_target: Some(target),
         }
     }
 
@@ -277,6 +303,14 @@ impl ProviderDefinition {
 
     pub fn scope(&self) -> ProviderScope {
         self.scope
+    }
+
+    pub(super) fn is_alias(&self) -> bool {
+        self.alias_target.is_some()
+    }
+
+    pub(super) fn alias_target(&self) -> Option<&ProviderToken> {
+        self.alias_target.as_ref()
     }
 
     pub(super) fn lifecycle(&self) -> &ProviderLifecycleHooks {

@@ -275,6 +275,60 @@ impl Module for RequestScopedControllerModule {
 }
 
 #[derive(Debug)]
+struct AliasModule;
+
+impl Module for AliasModule {
+    fn name(&self) -> &'static str {
+        "alias"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![
+            ProviderDefinition::singleton(SharedConfig { value: "primary" }),
+            ProviderDefinition::named_alias("config-alias", ProviderToken::of::<SharedConfig>()),
+            ProviderDefinition::named_alias(
+                "config-second-alias",
+                ProviderToken::named("config-alias"),
+            ),
+        ])
+    }
+}
+
+#[derive(Debug)]
+struct RequestScopedAliasModule {
+    calls: Arc<AtomicUsize>,
+}
+
+impl Module for RequestScopedAliasModule {
+    fn name(&self) -> &'static str {
+        "request-scoped-alias"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        let calls = Arc::clone(&self.calls);
+        Ok(vec![
+            ProviderDefinition::request_scoped::<ScopedCounter, _>(move |_| {
+                Ok(ScopedCounter {
+                    id: calls.fetch_add(1, Ordering::SeqCst) + 1,
+                })
+            }),
+            ProviderDefinition::named_alias("counter-alias", ProviderToken::of::<ScopedCounter>()),
+        ])
+    }
+
+    fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
+        Ok(vec![ControllerDefinition::new("/alias-scope")?.get(
+            "/",
+            |request: BootRequest| async move {
+                let direct = request.get::<ScopedCounter>()?;
+                let alias = request.get_named::<ScopedCounter>("counter-alias")?;
+                Ok(BootResponse::text(format!("{}:{}", direct.id, alias.id)))
+            },
+        )?])
+    }
+}
+
+#[derive(Debug)]
 struct DuplicateProviderParentModule {
     init_calls: Arc<AtomicUsize>,
 }
@@ -511,6 +565,73 @@ fn module_ref_exposes_optional_lookup_and_presence_checks() {
     assert!(module_ref.contains_named("named-config").unwrap());
     assert!(tokens.contains(&items_token));
     assert!(tokens.contains(&ProviderToken::named("named-config")));
+}
+
+#[test]
+fn provider_aliases_resolve_existing_singletons() {
+    let app = BootApplication::builder()
+        .import(AliasModule)
+        .build()
+        .unwrap();
+
+    let original = app.get::<SharedConfig>().unwrap();
+    let alias = app.get_named::<SharedConfig>("config-alias").unwrap();
+    let second_alias = app
+        .get_named::<SharedConfig>("config-second-alias")
+        .unwrap();
+
+    assert_eq!(alias.value, "primary");
+    assert!(Arc::ptr_eq(&original, &alias));
+    assert!(Arc::ptr_eq(&original, &second_alias));
+}
+
+#[tokio::test]
+async fn provider_aliases_preserve_request_scoped_resolution() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let app = BootApplication::builder()
+        .import(RequestScopedAliasModule {
+            calls: Arc::clone(&calls),
+        })
+        .build()
+        .unwrap();
+
+    let first = app
+        .call(BootRequest::new(HttpMethod::Get, "/alias-scope"))
+        .await
+        .unwrap();
+    let second = app
+        .call(BootRequest::new(HttpMethod::Get, "/alias-scope"))
+        .await
+        .unwrap();
+
+    assert_eq!(first.body_text().unwrap(), "1:1");
+    assert_eq!(second.body_text().unwrap(), "2:2");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn provider_alias_cycles_return_contextual_errors() {
+    let module_ref = ModuleRef::new();
+    module_ref
+        .register(ProviderDefinition::named_alias(
+            "alias-a",
+            ProviderToken::named("alias-b"),
+        ))
+        .unwrap();
+    module_ref
+        .register(ProviderDefinition::named_alias(
+            "alias-b",
+            ProviderToken::named("alias-a"),
+        ))
+        .unwrap();
+
+    let error = module_ref.get_named::<SharedConfig>("alias-a").unwrap_err();
+
+    assert!(matches!(
+        error,
+        BootError::Internal(message)
+            if message == "cyclic provider alias detected: alias-a -> alias-b -> alias-a"
+    ));
 }
 
 #[test]

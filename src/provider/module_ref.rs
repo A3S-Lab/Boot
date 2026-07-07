@@ -59,8 +59,13 @@ impl ProviderEntry {
         &self,
         module_ref: &ModuleRef,
         request_cache: Option<ProviderCache>,
+        alias_path: &mut Vec<ProviderToken>,
     ) -> Result<Arc<AnyProvider>> {
         let base_ref = self.owner.as_ref().unwrap_or(module_ref);
+        if let Some(target) = self.definition.alias_target() {
+            return self.resolve_alias(base_ref, target, request_cache, alias_path);
+        }
+
         match self.scope() {
             ProviderScope::Singleton => self.resolve_singleton(base_ref),
             ProviderScope::Transient => {
@@ -86,6 +91,33 @@ impl ProviderEntry {
                 self.resolve_request(factory_ref, request_cache)
             }
         }
+    }
+
+    fn resolve_alias(
+        &self,
+        module_ref: &ModuleRef,
+        target: &ProviderToken,
+        request_cache: Option<ProviderCache>,
+        alias_path: &mut Vec<ProviderToken>,
+    ) -> Result<Arc<AnyProvider>> {
+        if alias_path.contains(self.definition.token()) {
+            alias_path.push(self.definition.token().clone());
+            let chain = alias_path
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            return Err(BootError::Internal(format!(
+                "cyclic provider alias detected: {chain}"
+            )));
+        }
+
+        alias_path.push(self.definition.token().clone());
+        let value =
+            module_ref.get_any_with_request_cache_inner(target, request_cache, alias_path)?;
+        alias_path.pop();
+
+        value.ok_or_else(|| BootError::MissingProvider(target.to_string()))
     }
 
     fn resolve_singleton(&self, module_ref: &ModuleRef) -> Result<Arc<AnyProvider>> {
@@ -224,8 +256,13 @@ impl ModuleRef {
                 "provider lifecycle hooks require singleton scope: {token}"
             )));
         }
+        if definition.lifecycle().has_hooks() && definition.is_alias() {
+            return Err(BootError::Internal(format!(
+                "provider aliases cannot define lifecycle hooks: {token}"
+            )));
+        }
         let entry = ProviderEntry::new(definition);
-        if entry.scope() == ProviderScope::Singleton {
+        if entry.scope() == ProviderScope::Singleton && !entry.definition.is_alias() {
             let value = entry.definition.build(self)?;
             entry.seed_singleton(value)?;
         }
@@ -370,20 +407,24 @@ impl ModuleRef {
     }
 
     fn get_any(&self, token: &ProviderToken) -> Result<Option<Arc<AnyProvider>>> {
-        self.get_any_with_request_cache(token, self.request_cache.clone())
+        let mut alias_path = Vec::new();
+        self.get_any_with_request_cache_inner(token, self.request_cache.clone(), &mut alias_path)
     }
 
-    fn get_any_with_request_cache(
+    fn get_any_with_request_cache_inner(
         &self,
         token: &ProviderToken,
         request_cache: Option<ProviderCache>,
+        alias_path: &mut Vec<ProviderToken>,
     ) -> Result<Option<Arc<AnyProvider>>> {
         if let Some(entry) = self.read_providers()?.get(token).cloned() {
-            return entry.resolve(self, request_cache).map(Some);
+            return entry.resolve(self, request_cache, alias_path).map(Some);
         }
 
         for scope in self.visible_scopes()? {
-            if let Some(value) = scope.get_any_with_request_cache(token, request_cache.clone())? {
+            if let Some(value) =
+                scope.get_any_with_request_cache_inner(token, request_cache.clone(), alias_path)?
+            {
                 return Ok(Some(value));
             }
         }

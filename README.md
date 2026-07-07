@@ -46,7 +46,8 @@ This repository contains the first framework slice:
 - `ModuleRef` for typed provider lookup, optional lookup, presence checks, token listing,
   and request-context lookup through `BootRequest`
 - `ProviderDefinition` for singleton, request-scoped, transient, factory, and
-  shared `Arc` factory providers, plus singleton provider lifecycle hooks
+  shared `Arc` factory providers, provider aliases, plus singleton provider
+  lifecycle hooks
 - request-scoped route/controller handler factories through `*_scoped` helpers
 - module-scoped provider visibility with explicit `exports()`, transitive
   re-exports, global modules, and `DynamicModule` for runtime-built modules
@@ -1072,23 +1073,26 @@ or shared readiness checks.
 ## Providers
 
 Providers can be registered as owned singletons, factories, shared `Arc<T>`
-values, factories that return `Arc<T>`, request-scoped providers, or transient
-providers. Provider tokens are unique inside a module scope; different modules
-can declare the same token without colliding. Importing modules can only see
-providers that imported modules explicitly export.
+values, factories that return `Arc<T>`, request-scoped providers, transient
+providers, or aliases to existing providers. Provider tokens are unique inside a
+module scope; different modules can declare the same token without colliding.
+Importing modules can only see providers that imported modules explicitly
+export.
 
 Singleton providers are the default and are built once per module. Transient
 providers are built for every resolution. Request-scoped providers are built
 once per in-process request scope and are cached for that request, including
 dependencies resolved inside another request-scoped provider factory. Outside a
-request scope, request-scoped providers behave like a fresh resolution.
+request scope, request-scoped providers behave like a fresh resolution. Provider
+aliases mirror Nest's `useExisting`: the alias token delegates to the target
+token and preserves the target provider's scope.
 
 ```rust
 use std::sync::Arc;
 
 use a3s_boot::{
     BootApplication, BootRequest, BootResponse, ControllerDefinition, Module, ModuleRef,
-    ProviderDefinition, Result,
+    ProviderDefinition, ProviderToken, Result,
 };
 
 #[derive(Debug)]
@@ -1127,6 +1131,10 @@ let providers = vec![
     ProviderDefinition::named_factory_arc::<Client, _>("readonly-client", |_| {
         Ok(Arc::new(Client))
     }),
+    ProviderDefinition::named_alias(
+        "primary-client",
+        ProviderToken::of::<Client>(),
+    ),
     ProviderDefinition::request_scoped::<RequestContext, _>(|_module_ref| {
         Ok(RequestContext {
             request_id: "generated-per-request".to_string(),
@@ -1151,9 +1159,10 @@ fn inspect(module_ref: &ModuleRef) -> Result<()> {
 fn inspect_app(app: &BootApplication) -> Result<()> {
     let repository = app.get::<Repository>()?;
     let readonly = app.get_named::<Client>("readonly-client")?;
+    let primary = app.get_named::<Client>("primary-client")?;
     let missing = app.get_optional_named::<Client>("missing-client")?;
 
-    let _ = (repository, readonly, missing);
+    let _ = (repository, readonly, primary, missing);
     Ok(())
 }
 ```
