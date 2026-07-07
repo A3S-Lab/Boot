@@ -1,9 +1,10 @@
 use super::builder::BootApplicationBuilder;
 use crate::versioning::ApiVersionCandidate;
 use crate::{
-    ApiVersioning, BootError, BootRequest, BootResponse, HttpAdapter, HttpMethod,
+    ApiVersioning, BootError, BootRequest, BootResponse, DiscoveryService, HttpAdapter, HttpMethod,
     MessagePatternDefinition, MessageTransport, Module, ModuleRef, OpenApiDocument, OpenApiInfo,
-    Result, RouteDefinition, TransportMessage, TransportReply, WebSocketGatewayDefinition,
+    Reflector, Result, RouteDefinition, TransportMessage, TransportReply,
+    WebSocketGatewayDefinition,
 };
 use std::collections::BTreeMap;
 use std::fmt;
@@ -91,6 +92,16 @@ impl BootApplication {
     /// Microservice message patterns exposed by the application.
     pub fn message_patterns(&self) -> &[MessagePatternDefinition] {
         &self.message_patterns
+    }
+
+    /// Build a discovery snapshot for modules, routes, gateways, and message patterns.
+    pub fn discovery(&self) -> Result<DiscoveryService> {
+        DiscoveryService::from_app(self)
+    }
+
+    /// Build a discovery snapshot and metadata reflector.
+    pub fn reflector(&self) -> Result<Reflector> {
+        Reflector::from_app(self)
     }
 
     /// Generate an OpenAPI 3 document from the resolved route table.

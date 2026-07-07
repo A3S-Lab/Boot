@@ -159,6 +159,9 @@ This repository contains the first framework slice:
 - `TestingModule` and `TestingModuleBuilder` for Nest-style test module
   compilation, provider overrides, in-process request calls, and provider
   lookup
+- `DiscoveryService` and `Reflector` for Nest-style runtime discovery of
+  modules, providers, HTTP route metadata, WebSocket gateways, and microservice
+  message patterns
 
 ## Quick Start
 
@@ -1174,6 +1177,60 @@ let response = module
 assert_eq!(response.body_json::<String>()?, "test-cat");
 # Ok(())
 # }
+```
+
+## Discovery And Reflector
+
+`DiscoveryService` creates a read-only snapshot of a built application. It can
+inspect modules, local provider tokens, resolved HTTP routes, WebSocket
+gateways, and microservice message patterns. `Reflector` provides convenient
+route metadata lookups over the same snapshot, similar to Nest's reflector
+pattern.
+
+```rust
+use a3s_boot::{
+    BootApplication, BootResponse, ControllerDefinition, DiscoveryService,
+    HttpMethod, Module, ModuleRef, ProviderDefinition, Result, RouteDefinition,
+};
+
+#[derive(Debug)]
+struct CatsService;
+
+#[derive(Debug)]
+struct CatsModule;
+
+impl Module for CatsModule {
+    fn name(&self) -> &'static str {
+        "CatsModule"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::singleton(CatsService)])
+    }
+
+    fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
+        Ok(vec![ControllerDefinition::new("/cats")?.route(
+            RouteDefinition::get("/{id}", |_| async { Ok(BootResponse::text("cat")) })?
+                .with_tag("cats")
+                .with_operation_id("getCat"),
+        )?])
+    }
+}
+
+let app = BootApplication::builder().import(CatsModule).build()?;
+let discovery = DiscoveryService::from_app(&app)?;
+let reflector = discovery.reflector();
+
+assert!(discovery.module("CatsModule").is_some());
+assert_eq!(
+    discovery.routes_for_module("CatsModule")[0].path,
+    "/cats/{id}"
+);
+assert_eq!(
+    reflector.operation_id(HttpMethod::Get, "/cats/{id}"),
+    Some("getCat")
+);
+assert_eq!(reflector.routes_with_tag("cats").len(), 1);
 ```
 
 ## Module Encapsulation
@@ -2454,6 +2511,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | Module | A named feature boundary with imports, providers, and routes |
 | ModuleRef | Typed provider container used by controllers and hosts |
 | Testing module | Test-only module compilation with provider overrides and in-process calls |
+| Discovery/Reflector | Runtime snapshots and metadata lookup for modules, routes, gateways, and message patterns |
 | HTTP adapter | Replaceable backend adapter; Axum is the first implementation |
 | Controller | Typed request handlers grouped by route prefix |
 | Provider | Injectable service or repository dependency |
@@ -2497,6 +2555,7 @@ src/
 ├── cache.rs      # Optional typed cache module and in-memory store
 ├── compression.rs # Optional gzip response compression interceptor
 ├── config.rs     # Optional ACL-backed typed configuration module
+├── discovery.rs  # Runtime discovery snapshots and metadata reflector
 ├── events.rs     # Optional in-process application event emitter module
 ├── health.rs     # Optional provider-backed health check module
 ├── http/         # Adapter-neutral request, response, methods, and query parsing

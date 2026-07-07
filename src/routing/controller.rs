@@ -108,8 +108,13 @@ impl ControllerDefinition {
     pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
         let tag = tag.into();
         if !self.openapi_tags.contains(&tag) {
-            self.openapi_tags.push(tag);
+            self.openapi_tags.push(tag.clone());
         }
+        self.routes = self
+            .routes
+            .into_iter()
+            .map(|route| route.with_tag(tag.clone()))
+            .collect();
         self
     }
 

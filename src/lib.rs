@@ -17,6 +17,7 @@ mod cache;
 mod compression;
 #[cfg(feature = "config")]
 mod config;
+mod discovery;
 mod error;
 #[cfg(feature = "events")]
 mod events;
@@ -66,6 +67,10 @@ pub use compression::{CompressionInterceptor, CompressionOptions};
 #[cfg(feature = "config")]
 pub use config::{
     acl_document_to_json, parse_acl_config, parse_validated_acl_config, ConfigModule,
+};
+pub use discovery::{
+    DiscoveredGateway, DiscoveredMessagePattern, DiscoveredModule, DiscoveredRoute,
+    DiscoveryService, Reflector,
 };
 pub use error::BootError;
 #[cfg(feature = "events")]

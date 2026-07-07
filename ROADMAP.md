@@ -482,6 +482,9 @@ Acceptance:
 - Testing utilities can compile Nest-style testing modules, override providers
   before controllers are built, resolve providers, and dispatch in-process
   requests. (Covered)
+- Discovery and reflector utilities can snapshot modules, provider tokens,
+  HTTP route metadata, WebSocket gateways, and message patterns from a built
+  application. (Covered)
 
 ## Immediate Next Task
 
