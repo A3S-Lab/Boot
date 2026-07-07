@@ -7,12 +7,13 @@ use super::header::{
 use super::method::HttpMethod;
 use super::query::{parse_query, parse_query_pairs, split_path_query};
 use crate::percent::validate_percent_encoding;
-use crate::{validate_value, BootError, Result, Validate};
+use crate::{validate_value, BootError, ModuleRef, ProviderToken, Result, Validate};
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// Framework-neutral HTTP request passed to Boot route handlers.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct BootRequest {
     pub method: HttpMethod,
     pub path: String,
@@ -22,7 +23,23 @@ pub struct BootRequest {
     pub headers: BTreeMap<String, String>,
     pub appended_headers: Vec<(String, String)>,
     pub body: Vec<u8>,
+    module_ref: Option<ModuleRef>,
 }
+
+impl PartialEq for BootRequest {
+    fn eq(&self, other: &Self) -> bool {
+        self.method == other.method
+            && self.path == other.path
+            && self.query_string == other.query_string
+            && self.query == other.query
+            && self.params == other.params
+            && self.headers == other.headers
+            && self.appended_headers == other.appended_headers
+            && self.body == other.body
+    }
+}
+
+impl Eq for BootRequest {}
 
 impl BootRequest {
     pub fn new(method: HttpMethod, path: impl Into<String>) -> Self {
@@ -36,6 +53,7 @@ impl BootRequest {
             headers: BTreeMap::new(),
             appended_headers: Vec::new(),
             body: Vec::new(),
+            module_ref: None,
         }
     }
 
@@ -61,6 +79,55 @@ impl BootRequest {
     pub(crate) fn with_matched_path(mut self, path: impl Into<String>) -> Self {
         self.path = path.into();
         self
+    }
+
+    pub(crate) fn with_module_ref(mut self, module_ref: ModuleRef) -> Self {
+        self.module_ref = Some(module_ref);
+        self
+    }
+
+    pub fn module_ref(&self) -> Option<&ModuleRef> {
+        self.module_ref.as_ref()
+    }
+
+    pub fn get<T>(&self) -> Result<Arc<T>>
+    where
+        T: Send + Sync + 'static,
+    {
+        self.module_ref
+            .as_ref()
+            .ok_or_else(|| BootError::MissingProvider(ProviderToken::of::<T>().to_string()))?
+            .get::<T>()
+    }
+
+    pub fn get_named<T>(&self, token: &str) -> Result<Arc<T>>
+    where
+        T: Send + Sync + 'static,
+    {
+        self.module_ref
+            .as_ref()
+            .ok_or_else(|| BootError::MissingProvider(ProviderToken::named(token).to_string()))?
+            .get_named::<T>(token)
+    }
+
+    pub fn get_optional<T>(&self) -> Result<Option<Arc<T>>>
+    where
+        T: Send + Sync + 'static,
+    {
+        match &self.module_ref {
+            Some(module_ref) => module_ref.get_optional::<T>(),
+            None => Ok(None),
+        }
+    }
+
+    pub fn get_optional_named<T>(&self, token: &str) -> Result<Option<Arc<T>>>
+    where
+        T: Send + Sync + 'static,
+    {
+        match &self.module_ref {
+            Some(module_ref) => module_ref.get_optional_named::<T>(token),
+            None => Ok(None),
+        }
     }
 
     pub fn with_path_params(mut self, params: BTreeMap<String, String>) -> Self {

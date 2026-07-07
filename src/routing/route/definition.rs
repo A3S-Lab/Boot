@@ -9,6 +9,7 @@ use crate::routing::handler::RouteHandler;
 use crate::routing::path::{
     match_path_params, match_path_shape, route_param_names, route_shape_key, validate_route_path,
 };
+use crate::ModuleRef;
 
 /// A framework-neutral route definition.
 #[derive(Clone)]
@@ -26,6 +27,7 @@ pub struct RouteDefinition {
     pub(super) validation_disabled: bool,
     pub(super) module_name: Option<String>,
     pub(super) controller_prefix: Option<String>,
+    pub(super) module_ref: Option<ModuleRef>,
     pub(super) openapi: OpenApiRouteMetadata,
     pub(super) versioning: RouteVersioning,
     pub(super) serialization: SerializationOptions,
@@ -52,6 +54,7 @@ impl RouteDefinition {
             validation_disabled: false,
             module_name: None,
             controller_prefix: None,
+            module_ref: None,
             openapi: OpenApiRouteMetadata::default(),
             versioning: RouteVersioning::default(),
             serialization: SerializationOptions::default(),

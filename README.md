@@ -43,8 +43,10 @@ This repository contains the first framework slice:
 
 - `Module` for declaring imports, providers, exports, controllers, direct
   routes, global visibility, and lifecycle hooks
-- `ModuleRef` for typed provider lookup, optional lookup, presence checks, and token listing
-- `ProviderDefinition` for singleton, factory, and shared `Arc` factory providers
+- `ModuleRef` for typed provider lookup, optional lookup, presence checks, token listing,
+  and request-context lookup through `BootRequest`
+- `ProviderDefinition` for singleton, request-scoped, transient, factory, and
+  shared `Arc` factory providers
 - module-scoped provider visibility with explicit `exports()`, transitive
   re-exports, global modules, and `DynamicModule` for runtime-built modules
 - `ControllerDefinition` for prefix-based route groups
@@ -1069,25 +1071,45 @@ or shared readiness checks.
 ## Providers
 
 Providers can be registered as owned singletons, factories, shared `Arc<T>`
-values, or factories that return `Arc<T>`. Provider tokens are unique inside a
-module scope; different modules can declare the same token without colliding.
-Importing modules can only see providers that imported modules explicitly
-export:
+values, factories that return `Arc<T>`, request-scoped providers, or transient
+providers. Provider tokens are unique inside a module scope; different modules
+can declare the same token without colliding. Importing modules can only see
+providers that imported modules explicitly export.
+
+Singleton providers are the default and are built once per module. Transient
+providers are built for every resolution. Request-scoped providers are built
+once per in-process request scope and are cached for that request, including
+dependencies resolved inside another request-scoped provider factory. Outside a
+request scope, request-scoped providers behave like a fresh resolution.
 
 ```rust
 use std::sync::Arc;
 
-use a3s_boot::{BootApplication, ModuleRef, ProviderDefinition, Result};
+use a3s_boot::{
+    BootApplication, BootRequest, BootResponse, ControllerDefinition, Module, ModuleRef,
+    ProviderDefinition, Result,
+};
 
 #[derive(Debug)]
 struct Client;
+
+#[derive(Debug)]
+struct AppConfig {
+    name: &'static str,
+}
 
 #[derive(Debug)]
 struct Repository {
     client: Arc<Client>,
 }
 
+#[derive(Debug)]
+struct RequestContext {
+    request_id: String,
+}
+
 let providers = vec![
+    ProviderDefinition::singleton(AppConfig { name: "cats" }),
     ProviderDefinition::factory_arc::<Client, _>(|_module_ref: &ModuleRef| {
         Ok(Arc::new(Client))
     }),
@@ -1098,6 +1120,16 @@ let providers = vec![
     }),
     ProviderDefinition::named_factory_arc::<Client, _>("readonly-client", |_| {
         Ok(Arc::new(Client))
+    }),
+    ProviderDefinition::request_scoped::<RequestContext, _>(|_module_ref| {
+        Ok(RequestContext {
+            request_id: "generated-per-request".to_string(),
+        })
+    }),
+    ProviderDefinition::transient::<Repository, _>(|module_ref| {
+        Ok(Repository {
+            client: module_ref.get::<Client>()?,
+        })
     }),
 ];
 
@@ -1117,6 +1149,42 @@ fn inspect_app(app: &BootApplication) -> Result<()> {
 
     let _ = (repository, readonly, missing);
     Ok(())
+}
+```
+
+Request-scoped providers are available from handlers through the request's
+module context:
+
+```rust
+#[derive(Debug)]
+struct CatsModule;
+
+impl Module for CatsModule {
+    fn name(&self) -> &'static str {
+        "cats"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::request_scoped::<RequestContext, _>(
+            |_module_ref| {
+                Ok(RequestContext {
+                    request_id: "generated-per-request".to_string(),
+                })
+            },
+        )])
+    }
+
+    fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
+        Ok(vec![ControllerDefinition::new("/cats")?.get(
+            "/",
+            |request: BootRequest| async move {
+                let context = request.get::<RequestContext>()?;
+                Ok(BootResponse::json(&serde_json::json!({
+                    "requestId": context.request_id,
+                }))?)
+            },
+        )?])
+    }
 }
 ```
 

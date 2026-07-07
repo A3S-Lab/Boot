@@ -277,6 +277,11 @@ impl BootApplicationBuilder {
             add_cors_preflight_routes(&mut routes, cors_preflight, &self.global_pipeline)?;
         }
 
+        routes = routes
+            .into_iter()
+            .map(|route| route.with_default_module_ref(module_ref.clone()))
+            .collect();
+
         validate_unique_routes(&routes, self.api_versioning.as_ref())?;
         validate_unique_gateways(&gateways)?;
         validate_unique_message_patterns(&message_patterns)?;

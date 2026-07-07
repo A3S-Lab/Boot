@@ -94,6 +94,7 @@ impl ModuleRegistry {
             register_controller(
                 name,
                 controller,
+                &module_ref,
                 global_pipeline,
                 &module_pipeline,
                 sink.routes,
@@ -106,6 +107,7 @@ impl ModuleRegistry {
                     .with_pipeline_prefix(&module_pipeline)
                     .with_pipeline_prefix(global_pipeline)
                     .with_module_name(name)
+                    .with_module_ref(module_ref.clone())
             }));
         sink.gateways.extend(
             module
@@ -149,6 +151,7 @@ pub(super) struct RegisteredModule {
 fn register_controller(
     module_name: &str,
     controller: ControllerDefinition,
+    module_ref: &ModuleRef,
     global_pipeline: &PipelineComponents,
     module_pipeline: &PipelineComponents,
     routes: &mut Vec<RouteDefinition>,
@@ -158,5 +161,6 @@ fn register_controller(
             .with_pipeline_prefix(module_pipeline)
             .with_pipeline_prefix(global_pipeline)
             .with_module_name(module_name)
+            .with_module_ref(module_ref.clone())
     }));
 }

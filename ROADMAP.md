@@ -28,7 +28,8 @@ Official Nest.js areas used as reference:
 Implemented today:
 
 - `Module` with imports, providers, controllers, direct routes, and lifecycle hooks.
-- `ProviderDefinition` and `ModuleRef` for typed provider registration and lookup.
+- `ProviderDefinition` and `ModuleRef` for typed provider registration,
+  singleton/request/transient lifecycle scopes, and lookup.
 - `ControllerDefinition` and `RouteDefinition` for HTTP route groups.
 - Nest-style attribute macros: `#[injectable]`, `#[controller]`, `#[get]`,
   `#[post]`, `#[put]`, `#[patch]`, `#[delete]`, `#[sse]`, raw route mode, and
@@ -53,6 +54,9 @@ Implemented today:
 - Module-scoped provider registries, explicit provider exports, transitive
   re-exports, global module exports, and `DynamicModule` for runtime-built
   provider modules.
+- Provider lifecycle scopes with default singleton providers, request-scoped
+  providers cached per in-process request context, transient providers built per
+  resolution, and request-time lookup through `BootRequest`.
 - Middleware with request mutation, short-circuit responses, global/module/
   controller/route scopes, filter integration for errors, and adapter
   validation before middleware execution.
@@ -94,7 +98,7 @@ Implemented today:
 1. Parameter extraction macros
 2. OpenAPI metadata and generator
 3. Validation pipeline (implemented)
-4. Module encapsulation and dynamic modules (implemented)
+4. Module encapsulation, dynamic modules, and provider lifecycle scopes (implemented)
 5. Middleware (implemented)
 6. WebSocket gateways (implemented)
 7. Microservice transports (implemented)
@@ -273,7 +277,7 @@ Acceptance:
 - Validation does not run for raw handlers unless explicitly configured.
   (Covered)
 
-## Milestone 4: Module Encapsulation And Dynamic Modules
+## Milestone 4: Module Encapsulation, Dynamic Modules, And Provider Lifecycle Scopes
 
 Nest equivalent:
 
@@ -281,6 +285,7 @@ Nest equivalent:
 - re-exported modules
 - global modules
 - dynamic modules
+- provider scopes: singleton, request, transient
 
 Status: implemented.
 
@@ -290,7 +295,8 @@ Current gap:
 container. Boot now creates module-scoped provider registries. A module can see
 its own providers plus exported providers from imports and global modules.
 Dynamic modules can produce imports, providers, exports, controllers, and routes
-from runtime configuration.
+from runtime configuration. Provider definitions can also choose singleton,
+request-scoped, or transient lifecycle behavior.
 
 Tasks:
 
@@ -305,6 +311,11 @@ Tasks:
 - Preserve direct host access through `BootApplication::get(...)` where it makes
   sense, but avoid accidentally exposing private feature-module providers.
   (Implemented; root scopes and global exports are visible to the host)
+- Add provider lifecycle scopes comparable to Nest singleton, request, and
+  transient providers. (Implemented)
+- Make request-scoped providers reuse one instance per request context,
+  including dependencies resolved inside request-scoped provider factories.
+  (Implemented)
 
 Acceptance:
 
@@ -315,6 +326,9 @@ Acceptance:
 - Duplicate-provider checks respect module scope. (Covered)
 - Existing simple module examples continue to work or have a documented migration.
   (Covered; root module providers remain visible through `BootApplication::get`)
+- Transient providers are rebuilt for every resolution. (Covered)
+- Request-scoped providers are cached per request and are isolated from other
+  requests. (Covered)
 
 ## Milestone 5: Middleware
 

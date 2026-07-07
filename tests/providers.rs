@@ -69,6 +69,17 @@ struct UsesRuntimeConfig {
 }
 
 #[derive(Debug)]
+struct ScopedCounter {
+    id: usize,
+}
+
+#[derive(Debug)]
+struct ScopedConsumer {
+    first: Arc<ScopedCounter>,
+    second: Arc<ScopedCounter>,
+}
+
+#[derive(Debug)]
 struct ArcFactoryModule;
 
 impl Module for ArcFactoryModule {
@@ -125,6 +136,102 @@ impl Module for DuplicateProviderChildModule {
 
     fn providers(&self) -> Result<Vec<ProviderDefinition>> {
         Ok(vec![ProviderDefinition::singleton(ItemsService)])
+    }
+}
+
+#[derive(Debug)]
+struct RequestScopedChildModule {
+    calls: Arc<AtomicUsize>,
+}
+
+impl Module for RequestScopedChildModule {
+    fn name(&self) -> &'static str {
+        "request-scoped-child"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        let calls = Arc::clone(&self.calls);
+        Ok(vec![
+            ProviderDefinition::request_scoped::<ScopedCounter, _>(move |_| {
+                Ok(ScopedCounter {
+                    id: calls.fetch_add(1, Ordering::SeqCst) + 1,
+                })
+            }),
+        ])
+    }
+
+    fn exports(&self) -> Result<Vec<ProviderToken>> {
+        Ok(vec![ProviderToken::of::<ScopedCounter>()])
+    }
+}
+
+#[derive(Debug)]
+struct RequestScopedParentModule {
+    calls: Arc<AtomicUsize>,
+}
+
+impl Module for RequestScopedParentModule {
+    fn name(&self) -> &'static str {
+        "request-scoped-parent"
+    }
+
+    fn imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(RequestScopedChildModule {
+            calls: Arc::clone(&self.calls),
+        })]
+    }
+
+    fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
+        Ok(vec![ControllerDefinition::new("/scope")?.get(
+            "/",
+            |request: BootRequest| async move {
+                let first = request.get::<ScopedCounter>()?;
+                let second = request.get::<ScopedCounter>()?;
+                Ok(BootResponse::text(format!("{}:{}", first.id, second.id)))
+            },
+        )?])
+    }
+}
+
+#[derive(Debug)]
+struct RequestScopedDependencyModule {
+    calls: Arc<AtomicUsize>,
+}
+
+impl Module for RequestScopedDependencyModule {
+    fn name(&self) -> &'static str {
+        "request-scoped-dependency"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        let calls = Arc::clone(&self.calls);
+        Ok(vec![
+            ProviderDefinition::request_scoped::<ScopedCounter, _>(move |_| {
+                Ok(ScopedCounter {
+                    id: calls.fetch_add(1, Ordering::SeqCst) + 1,
+                })
+            }),
+            ProviderDefinition::request_scoped::<ScopedConsumer, _>(|module_ref| {
+                Ok(ScopedConsumer {
+                    first: module_ref.get::<ScopedCounter>()?,
+                    second: module_ref.get::<ScopedCounter>()?,
+                })
+            }),
+        ])
+    }
+
+    fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
+        Ok(vec![ControllerDefinition::new("/dependency-scope")?.get(
+            "/",
+            |request: BootRequest| async move {
+                let consumer = request.get::<ScopedConsumer>()?;
+                let direct = request.get::<ScopedCounter>()?;
+                Ok(BootResponse::text(format!(
+                    "{}:{}:{}",
+                    consumer.first.id, consumer.second.id, direct.id
+                )))
+            },
+        )?])
     }
 }
 
@@ -365,6 +472,78 @@ fn module_ref_exposes_optional_lookup_and_presence_checks() {
     assert!(module_ref.contains_named("named-config").unwrap());
     assert!(tokens.contains(&items_token));
     assert!(tokens.contains(&ProviderToken::named("named-config")));
+}
+
+#[test]
+fn transient_providers_are_built_for_each_resolution() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let module_ref = ModuleRef::new();
+    let provider_calls = Arc::clone(&calls);
+
+    module_ref
+        .register(ProviderDefinition::transient::<ScopedCounter, _>(
+            move |_| {
+                Ok(ScopedCounter {
+                    id: provider_calls.fetch_add(1, Ordering::SeqCst) + 1,
+                })
+            },
+        ))
+        .unwrap();
+
+    let first = module_ref.get::<ScopedCounter>().unwrap();
+    let second = module_ref.get::<ScopedCounter>().unwrap();
+
+    assert_eq!(first.id, 1);
+    assert_eq!(second.id, 2);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn request_scoped_providers_are_cached_per_request_scope() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let app = BootApplication::builder()
+        .import(RequestScopedParentModule {
+            calls: Arc::clone(&calls),
+        })
+        .build()
+        .unwrap();
+
+    let first = app
+        .call(BootRequest::new(HttpMethod::Get, "/scope"))
+        .await
+        .unwrap();
+    let second = app
+        .call(BootRequest::new(HttpMethod::Get, "/scope"))
+        .await
+        .unwrap();
+
+    assert_eq!(first.body_text().unwrap(), "1:1");
+    assert_eq!(second.body_text().unwrap(), "2:2");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn request_scoped_provider_dependencies_share_the_request_scope() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let app = BootApplication::builder()
+        .import(RequestScopedDependencyModule {
+            calls: Arc::clone(&calls),
+        })
+        .build()
+        .unwrap();
+
+    let first = app
+        .call(BootRequest::new(HttpMethod::Get, "/dependency-scope"))
+        .await
+        .unwrap();
+    let second = app
+        .call(BootRequest::new(HttpMethod::Get, "/dependency-scope"))
+        .await
+        .unwrap();
+
+    assert_eq!(first.body_text().unwrap(), "1:1:1");
+    assert_eq!(second.body_text().unwrap(), "2:2:2");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
 #[test]

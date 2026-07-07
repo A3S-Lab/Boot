@@ -1,14 +1,154 @@
-use super::{AnyProvider, ProviderDefinition, ProviderToken};
+use super::{AnyProvider, ProviderDefinition, ProviderScope, ProviderToken};
 use crate::{BootError, Result};
 use std::collections::BTreeMap;
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 /// Runtime provider container. This is Boot's Rust equivalent of Nest's ModuleRef.
 #[derive(Clone, Default)]
 pub struct ModuleRef {
-    providers: Arc<RwLock<BTreeMap<ProviderToken, Arc<AnyProvider>>>>,
+    providers: Arc<RwLock<BTreeMap<ProviderToken, ProviderEntry>>>,
     visible_scopes: Arc<RwLock<Vec<ModuleRef>>>,
+    request_cache: Option<ProviderCache>,
+}
+
+type ProviderCache = Arc<RwLock<BTreeMap<ProviderCacheKey, Arc<AnyProvider>>>>;
+
+static NEXT_PROVIDER_CACHE_KEY: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct ProviderCacheKey(u64);
+
+impl ProviderCacheKey {
+    fn next() -> Self {
+        Self(NEXT_PROVIDER_CACHE_KEY.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+#[derive(Clone)]
+struct ProviderEntry {
+    cache_key: ProviderCacheKey,
+    definition: ProviderDefinition,
+    singleton: ProviderCache,
+    owner: Option<ModuleRef>,
+}
+
+impl ProviderEntry {
+    fn new(definition: ProviderDefinition) -> Self {
+        Self {
+            cache_key: ProviderCacheKey::next(),
+            definition,
+            singleton: Arc::new(RwLock::new(BTreeMap::new())),
+            owner: None,
+        }
+    }
+
+    fn with_owner(mut self, owner: ModuleRef) -> Self {
+        if self.owner.is_none() {
+            self.owner = Some(owner);
+        }
+        self
+    }
+
+    fn scope(&self) -> ProviderScope {
+        self.definition.scope()
+    }
+
+    fn resolve(
+        &self,
+        module_ref: &ModuleRef,
+        request_cache: Option<ProviderCache>,
+    ) -> Result<Arc<AnyProvider>> {
+        let base_ref = self.owner.as_ref().unwrap_or(module_ref);
+        match self.scope() {
+            ProviderScope::Singleton => self.resolve_singleton(base_ref),
+            ProviderScope::Transient => {
+                let scoped_ref;
+                let factory_ref = match request_cache.clone() {
+                    Some(request_cache) => {
+                        scoped_ref = base_ref.with_request_cache(request_cache);
+                        &scoped_ref
+                    }
+                    None => base_ref,
+                };
+                self.definition.build(factory_ref)
+            }
+            ProviderScope::Request => {
+                let scoped_ref;
+                let factory_ref = match request_cache.clone() {
+                    Some(request_cache) => {
+                        scoped_ref = base_ref.with_request_cache(request_cache);
+                        &scoped_ref
+                    }
+                    None => base_ref,
+                };
+                self.resolve_request(factory_ref, request_cache)
+            }
+        }
+    }
+
+    fn resolve_singleton(&self, module_ref: &ModuleRef) -> Result<Arc<AnyProvider>> {
+        if let Some(value) = self
+            .read_cache(&self.singleton)?
+            .get(&self.cache_key)
+            .cloned()
+        {
+            return Ok(value);
+        }
+
+        let value = self.definition.build(module_ref)?;
+        self.write_cache(&self.singleton)?
+            .insert(self.cache_key, Arc::clone(&value));
+        Ok(value)
+    }
+
+    fn resolve_request(
+        &self,
+        module_ref: &ModuleRef,
+        request_cache: Option<ProviderCache>,
+    ) -> Result<Arc<AnyProvider>> {
+        let Some(request_cache) = request_cache else {
+            return self.definition.build(module_ref);
+        };
+
+        if let Some(value) = self
+            .read_cache(&request_cache)?
+            .get(&self.cache_key)
+            .cloned()
+        {
+            return Ok(value);
+        }
+
+        let value = self.definition.build(module_ref)?;
+        self.write_cache(&request_cache)?
+            .insert(self.cache_key, Arc::clone(&value));
+        Ok(value)
+    }
+
+    fn seed_singleton(&self, value: Arc<AnyProvider>) -> Result<()> {
+        self.write_cache(&self.singleton)?
+            .insert(self.cache_key, value);
+        Ok(())
+    }
+
+    fn read_cache<'a>(
+        &self,
+        cache: &'a ProviderCache,
+    ) -> Result<std::sync::RwLockReadGuard<'a, BTreeMap<ProviderCacheKey, Arc<AnyProvider>>>> {
+        cache
+            .read()
+            .map_err(|_| BootError::Internal("provider cache lock is poisoned".to_string()))
+    }
+
+    fn write_cache<'a>(
+        &self,
+        cache: &'a ProviderCache,
+    ) -> Result<std::sync::RwLockWriteGuard<'a, BTreeMap<ProviderCacheKey, Arc<AnyProvider>>>> {
+        cache
+            .write()
+            .map_err(|_| BootError::Internal("provider cache lock is poisoned".to_string()))
+    }
 }
 
 impl fmt::Debug for ModuleRef {
@@ -35,13 +175,29 @@ impl ModuleRef {
         Self::default()
     }
 
+    pub fn request_scope(&self) -> Self {
+        self.with_request_cache(Arc::new(RwLock::new(BTreeMap::new())))
+    }
+
+    fn with_request_cache(&self, request_cache: ProviderCache) -> Self {
+        Self {
+            providers: Arc::clone(&self.providers),
+            visible_scopes: Arc::clone(&self.visible_scopes),
+            request_cache: Some(request_cache),
+        }
+    }
+
     pub fn register(&self, definition: ProviderDefinition) -> Result<()> {
         let token = definition.token().clone();
         if self.contains_local(&token)? {
             return Err(BootError::DuplicateProvider(token.to_string()));
         }
-        let value = definition.build(self)?;
-        self.insert_any(token, value)
+        let entry = ProviderEntry::new(definition);
+        if entry.scope() == ProviderScope::Singleton {
+            let value = entry.definition.build(self)?;
+            entry.seed_singleton(value)?;
+        }
+        self.insert_entry(token, entry)
     }
 
     pub fn insert<T>(&self, value: T) -> Result<()>
@@ -55,7 +211,9 @@ impl ModuleRef {
     where
         T: Send + Sync + 'static,
     {
-        self.insert_any(ProviderToken::of::<T>(), value as Arc<AnyProvider>)
+        let token = ProviderToken::of::<T>();
+        let entry = ProviderEntry::new(ProviderDefinition::from_arc(value));
+        self.insert_entry(token, entry)
     }
 
     pub fn get<T>(&self) -> Result<Arc<T>>
@@ -87,7 +245,7 @@ impl ModuleRef {
     }
 
     pub fn contains(&self, token: &ProviderToken) -> Result<bool> {
-        Ok(self.get_any(token)?.is_some())
+        Ok(self.get_entry(token)?.is_some())
     }
 
     pub fn contains_provider<T>(&self) -> Result<bool>
@@ -107,12 +265,12 @@ impl ModuleRef {
         Ok(tokens.into_keys().collect())
     }
 
-    fn insert_any(&self, token: ProviderToken, value: Arc<AnyProvider>) -> Result<()> {
+    fn insert_entry(&self, token: ProviderToken, entry: ProviderEntry) -> Result<()> {
         let mut providers = self.write_providers()?;
         if providers.contains_key(&token) {
             return Err(BootError::DuplicateProvider(token.to_string()));
         }
-        providers.insert(token, value);
+        providers.insert(token, entry);
         Ok(())
     }
 
@@ -122,10 +280,10 @@ impl ModuleRef {
     }
 
     pub(crate) fn export_from(&self, module_ref: &ModuleRef, token: &ProviderToken) -> Result<()> {
-        let value = module_ref
-            .get_any(token)?
+        let entry = module_ref
+            .get_entry(token)?
             .ok_or_else(|| BootError::MissingProvider(token.to_string()))?;
-        self.insert_any(token.clone(), value)
+        self.insert_entry(token.clone(), entry.with_owner(module_ref.clone()))
     }
 
     pub(crate) fn local_tokens(&self) -> Result<Vec<ProviderToken>> {
@@ -157,13 +315,35 @@ impl ModuleRef {
     }
 
     fn get_any(&self, token: &ProviderToken) -> Result<Option<Arc<AnyProvider>>> {
-        if let Some(value) = self.read_providers()?.get(token).cloned() {
-            return Ok(Some(value));
+        self.get_any_with_request_cache(token, self.request_cache.clone())
+    }
+
+    fn get_any_with_request_cache(
+        &self,
+        token: &ProviderToken,
+        request_cache: Option<ProviderCache>,
+    ) -> Result<Option<Arc<AnyProvider>>> {
+        if let Some(entry) = self.read_providers()?.get(token).cloned() {
+            return entry.resolve(self, request_cache).map(Some);
         }
 
         for scope in self.visible_scopes()? {
-            if let Some(value) = scope.get_any(token)? {
+            if let Some(value) = scope.get_any_with_request_cache(token, request_cache.clone())? {
                 return Ok(Some(value));
+            }
+        }
+
+        Ok(None)
+    }
+
+    fn get_entry(&self, token: &ProviderToken) -> Result<Option<ProviderEntry>> {
+        if let Some(entry) = self.read_providers()?.get(token).cloned() {
+            return Ok(Some(entry));
+        }
+
+        for scope in self.visible_scopes()? {
+            if let Some(entry) = scope.get_entry(token)? {
+                return Ok(Some(entry));
             }
         }
 
@@ -190,7 +370,7 @@ impl ModuleRef {
 
     fn read_providers(
         &self,
-    ) -> Result<std::sync::RwLockReadGuard<'_, BTreeMap<ProviderToken, Arc<AnyProvider>>>> {
+    ) -> Result<std::sync::RwLockReadGuard<'_, BTreeMap<ProviderToken, ProviderEntry>>> {
         self.providers
             .read()
             .map_err(|_| BootError::Internal("provider registry lock is poisoned".to_string()))
@@ -198,7 +378,7 @@ impl ModuleRef {
 
     fn write_providers(
         &self,
-    ) -> Result<std::sync::RwLockWriteGuard<'_, BTreeMap<ProviderToken, Arc<AnyProvider>>>> {
+    ) -> Result<std::sync::RwLockWriteGuard<'_, BTreeMap<ProviderToken, ProviderEntry>>> {
         self.providers
             .write()
             .map_err(|_| BootError::Internal("provider registry lock is poisoned".to_string()))

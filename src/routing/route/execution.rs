@@ -32,6 +32,9 @@ impl RouteDefinition {
             }
         };
         request = request.with_path_params(params);
+        if let Some(module_ref) = &self.module_ref {
+            request = request.with_module_ref(module_ref.request_scope());
+        }
 
         for middleware in &self.middleware {
             let context_request = request.clone();
@@ -148,6 +151,18 @@ impl RouteDefinition {
 
     pub(crate) fn with_module_name(mut self, module_name: &str) -> Self {
         self.module_name = Some(module_name.to_string());
+        self
+    }
+
+    pub(crate) fn with_module_ref(mut self, module_ref: crate::ModuleRef) -> Self {
+        self.module_ref = Some(module_ref);
+        self
+    }
+
+    pub(crate) fn with_default_module_ref(mut self, module_ref: crate::ModuleRef) -> Self {
+        if self.module_ref.is_none() {
+            self.module_ref = Some(module_ref);
+        }
         self
     }
 

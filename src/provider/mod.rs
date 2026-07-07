@@ -4,7 +4,7 @@ mod token;
 
 use std::any::Any;
 
-pub use definition::ProviderDefinition;
+pub use definition::{ProviderDefinition, ProviderScope};
 pub use module_ref::ModuleRef;
 pub use token::ProviderToken;
 
