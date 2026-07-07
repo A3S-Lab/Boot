@@ -5,7 +5,7 @@ use crate::{
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::routing::handler::RouteHandler;
+use crate::routing::handler::{RequestScopedRouteHandler, RouteHandler};
 use crate::routing::path::{
     match_path_params, match_path_shape, route_param_names, route_shape_key, validate_route_path,
 };
@@ -59,6 +59,14 @@ impl RouteDefinition {
             versioning: RouteVersioning::default(),
             serialization: SerializationOptions::default(),
         })
+    }
+
+    pub fn new_scoped<F, H>(method: HttpMethod, path: impl Into<String>, factory: F) -> Result<Self>
+    where
+        F: Fn(&ModuleRef) -> Result<H> + Send + Sync + 'static,
+        H: RouteHandler,
+    {
+        Self::new(method, path, RequestScopedRouteHandler::new(factory))
     }
 
     pub fn method(&self) -> HttpMethod {

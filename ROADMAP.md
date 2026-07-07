@@ -59,6 +59,7 @@ Implemented today:
   providers cached per in-process request context, transient providers built per
   resolution, request-time lookup through `BootRequest`, and singleton provider
   startup/shutdown hooks.
+- Request-scoped route/controller handler factories through `*_scoped` helpers.
 - Middleware with request mutation, short-circuit responses, global/module/
   controller/route scopes, filter integration for errors, and adapter
   validation before middleware execution.
@@ -289,6 +290,7 @@ Nest equivalent:
 - dynamic modules
 - provider scopes: singleton, request, transient
 - singleton provider lifecycle hooks
+- request-scoped controllers
 
 Status: implemented.
 
@@ -301,6 +303,8 @@ Dynamic modules can produce imports, providers, exports, controllers, and routes
 from runtime configuration. Provider definitions can also choose singleton,
 request-scoped, or transient lifecycle behavior. Singleton providers can opt
 into module init, application bootstrap, and application shutdown hooks.
+Request-scoped handler factories rebuild route/controller state from the current
+request's module context.
 
 Tasks:
 
@@ -322,6 +326,7 @@ Tasks:
   (Implemented)
 - Add singleton provider lifecycle hooks for init, bootstrap, and shutdown.
   (Implemented)
+- Add request-scoped route/controller handler factories. (Implemented)
 
 Acceptance:
 
@@ -337,6 +342,8 @@ Acceptance:
   requests. (Covered)
 - Singleton provider lifecycle hooks run with module lifecycle hooks and reject
   request/transient provider scopes. (Covered)
+- Request-scoped controller handlers are rebuilt for each request and share the
+  same request-scoped provider cache as `BootRequest::get(...)`. (Covered)
 
 ## Milestone 5: Middleware
 

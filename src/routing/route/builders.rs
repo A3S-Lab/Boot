@@ -1,6 +1,8 @@
 use super::definition::RouteDefinition;
 use crate::routing::handler::RouteHandler;
-use crate::{BootRequest, BootResponse, HttpMethod, OpenApiResponse, Result, SseEvent, Validate};
+use crate::{
+    BootRequest, BootResponse, HttpMethod, ModuleRef, OpenApiResponse, Result, SseEvent, Validate,
+};
 use futures_core::Stream;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -12,6 +14,14 @@ impl RouteDefinition {
         H: RouteHandler,
     {
         Self::new(HttpMethod::Get, path, handler)
+    }
+
+    pub fn get_scoped<F, H>(path: impl Into<String>, factory: F) -> Result<Self>
+    where
+        F: Fn(&ModuleRef) -> Result<H> + Send + Sync + 'static,
+        H: RouteHandler,
+    {
+        Self::new_scoped(HttpMethod::Get, path, factory)
     }
 
     pub fn get_json<H, Fut, R>(path: impl Into<String>, handler: H) -> Result<Self>
@@ -58,6 +68,14 @@ impl RouteDefinition {
         H: RouteHandler,
     {
         Self::new(HttpMethod::Post, path, handler)
+    }
+
+    pub fn post_scoped<F, H>(path: impl Into<String>, factory: F) -> Result<Self>
+    where
+        F: Fn(&ModuleRef) -> Result<H> + Send + Sync + 'static,
+        H: RouteHandler,
+    {
+        Self::new_scoped(HttpMethod::Post, path, factory)
     }
 
     pub fn post_json<T, H, Fut, R>(path: impl Into<String>, handler: H) -> Result<Self>
@@ -115,6 +133,14 @@ impl RouteDefinition {
         Self::new(HttpMethod::Put, path, handler)
     }
 
+    pub fn put_scoped<F, H>(path: impl Into<String>, factory: F) -> Result<Self>
+    where
+        F: Fn(&ModuleRef) -> Result<H> + Send + Sync + 'static,
+        H: RouteHandler,
+    {
+        Self::new_scoped(HttpMethod::Put, path, factory)
+    }
+
     pub fn put_json<T, H, Fut, R>(path: impl Into<String>, handler: H) -> Result<Self>
     where
         T: DeserializeOwned + Send + 'static,
@@ -168,6 +194,14 @@ impl RouteDefinition {
         H: RouteHandler,
     {
         Self::new(HttpMethod::Patch, path, handler)
+    }
+
+    pub fn patch_scoped<F, H>(path: impl Into<String>, factory: F) -> Result<Self>
+    where
+        F: Fn(&ModuleRef) -> Result<H> + Send + Sync + 'static,
+        H: RouteHandler,
+    {
+        Self::new_scoped(HttpMethod::Patch, path, factory)
     }
 
     pub fn patch_json<T, H, Fut, R>(path: impl Into<String>, handler: H) -> Result<Self>
@@ -225,6 +259,14 @@ impl RouteDefinition {
         Self::new(HttpMethod::Delete, path, handler)
     }
 
+    pub fn delete_scoped<F, H>(path: impl Into<String>, factory: F) -> Result<Self>
+    where
+        F: Fn(&ModuleRef) -> Result<H> + Send + Sync + 'static,
+        H: RouteHandler,
+    {
+        Self::new_scoped(HttpMethod::Delete, path, factory)
+    }
+
     pub fn delete_json<H, Fut, R>(path: impl Into<String>, handler: H) -> Result<Self>
     where
         H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
@@ -254,11 +296,27 @@ impl RouteDefinition {
         Self::new(HttpMethod::Options, path, handler)
     }
 
+    pub fn options_scoped<F, H>(path: impl Into<String>, factory: F) -> Result<Self>
+    where
+        F: Fn(&ModuleRef) -> Result<H> + Send + Sync + 'static,
+        H: RouteHandler,
+    {
+        Self::new_scoped(HttpMethod::Options, path, factory)
+    }
+
     pub fn head<H>(path: impl Into<String>, handler: H) -> Result<Self>
     where
         H: RouteHandler,
     {
         Self::new(HttpMethod::Head, path, handler)
+    }
+
+    pub fn head_scoped<F, H>(path: impl Into<String>, factory: F) -> Result<Self>
+    where
+        F: Fn(&ModuleRef) -> Result<H> + Send + Sync + 'static,
+        H: RouteHandler,
+    {
+        Self::new_scoped(HttpMethod::Head, path, factory)
     }
 
     fn json_with_status<T, H, Fut, R>(

@@ -236,6 +236,45 @@ impl Module for RequestScopedDependencyModule {
 }
 
 #[derive(Debug)]
+struct RequestScopedControllerModule {
+    calls: Arc<AtomicUsize>,
+}
+
+impl Module for RequestScopedControllerModule {
+    fn name(&self) -> &'static str {
+        "request-scoped-controller"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        let calls = Arc::clone(&self.calls);
+        Ok(vec![
+            ProviderDefinition::request_scoped::<ScopedCounter, _>(move |_| {
+                Ok(ScopedCounter {
+                    id: calls.fetch_add(1, Ordering::SeqCst) + 1,
+                })
+            }),
+        ])
+    }
+
+    fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
+        Ok(vec![ControllerDefinition::new("/scoped-controller")?
+            .get_scoped("/", |module_ref| {
+                let controller_counter = module_ref.get::<ScopedCounter>()?;
+                Ok(move |request: BootRequest| {
+                    let controller_counter = Arc::clone(&controller_counter);
+                    async move {
+                        let request_counter = request.get::<ScopedCounter>()?;
+                        Ok(BootResponse::text(format!(
+                            "{}:{}",
+                            controller_counter.id, request_counter.id
+                        )))
+                    }
+                })
+            })?])
+    }
+}
+
+#[derive(Debug)]
 struct DuplicateProviderParentModule {
     init_calls: Arc<AtomicUsize>,
 }
@@ -543,6 +582,30 @@ async fn request_scoped_provider_dependencies_share_the_request_scope() {
 
     assert_eq!(first.body_text().unwrap(), "1:1:1");
     assert_eq!(second.body_text().unwrap(), "2:2:2");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn scoped_controller_handlers_are_built_for_each_request_scope() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let app = BootApplication::builder()
+        .import(RequestScopedControllerModule {
+            calls: Arc::clone(&calls),
+        })
+        .build()
+        .unwrap();
+
+    let first = app
+        .call(BootRequest::new(HttpMethod::Get, "/scoped-controller"))
+        .await
+        .unwrap();
+    let second = app
+        .call(BootRequest::new(HttpMethod::Get, "/scoped-controller"))
+        .await
+        .unwrap();
+
+    assert_eq!(first.body_text().unwrap(), "1:1");
+    assert_eq!(second.body_text().unwrap(), "2:2");
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 

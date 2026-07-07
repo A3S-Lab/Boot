@@ -47,6 +47,7 @@ This repository contains the first framework slice:
   and request-context lookup through `BootRequest`
 - `ProviderDefinition` for singleton, request-scoped, transient, factory, and
   shared `Arc` factory providers, plus singleton provider lifecycle hooks
+- request-scoped route/controller handler factories through `*_scoped` helpers
 - module-scoped provider visibility with explicit `exports()`, transitive
   re-exports, global modules, and `DynamicModule` for runtime-built modules
 - `ControllerDefinition` for prefix-based route groups
@@ -1190,6 +1191,38 @@ impl Module for CatsModule {
             },
         )?])
     }
+}
+```
+
+Use `*_scoped` route helpers when the handler itself should be rebuilt for each
+request scope, similar to request-scoped Nest controllers:
+
+```rust
+#[derive(Debug)]
+struct CatsController {
+    context: Arc<RequestContext>,
+}
+
+impl CatsController {
+    async fn find_all(&self, request: BootRequest) -> Result<BootResponse> {
+        let same_context = request.get::<RequestContext>()?;
+        Ok(BootResponse::json(&serde_json::json!({
+            "controllerRequestId": self.context.request_id,
+            "handlerRequestId": same_context.request_id,
+        }))?)
+    }
+}
+
+fn cats_controller() -> Result<ControllerDefinition> {
+    ControllerDefinition::new("/cats")?.get_scoped("/", |module_ref| {
+        let controller = Arc::new(CatsController {
+            context: module_ref.get::<RequestContext>()?,
+        });
+        Ok(move |request: BootRequest| {
+            let controller = Arc::clone(&controller);
+            async move { controller.find_all(request).await }
+        })
+    })
 }
 ```
 
