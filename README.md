@@ -85,6 +85,9 @@ This repository contains the first framework slice:
 - `ScheduleModule` behind the `schedule` feature for provider-backed
   `Scheduler` injection, in-process timeout/interval/cron jobs, named exports,
   global exports, and lifecycle-managed shutdown
+- `QueueModule` behind the `queue` feature for provider-backed `Queue`
+  injection, in-process background processors, JSON job payloads, named
+  exports, global exports, and lifecycle-managed workers
 - OpenAPI route metadata, schema-crate-neutral document generation, and
   optional `/openapi.json` serving through `serve_openapi(...)`, with
   Nest-style metadata macros such as `#[tag]`, `#[operation]`, `#[response]`,
@@ -162,6 +165,16 @@ scheduled jobs:
 ```toml
 [dependencies]
 a3s-boot = { version = "0.1", features = ["schedule"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+Enable the optional in-process queue module when the application needs
+provider-backed background job processing:
+
+```toml
+[dependencies]
+a3s-boot = { version = "0.1", features = ["queue"] }
+serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -1269,6 +1282,101 @@ providers from the importing module. Add `.named("token")` when a module needs
 multiple scheduler providers, or `.global()` to make one scheduler visible to
 every module scope after registration.
 
+## Queues
+
+Enable the `queue` feature to register `QueueModule` and inject a
+provider-backed `Queue`. The in-process backend is intended for tests,
+embedded single-process workers, and adapter development; durable or distributed
+backends can implement `QueueBackend` without changing service code.
+
+```rust
+use std::sync::Arc;
+
+use a3s_boot::{
+    BootApplication, BoxFuture, Module, ModuleRef, ProviderDefinition, Queue, QueueJob,
+    QueueModule, Result,
+};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+struct EmailJob {
+    to: String,
+    subject: String,
+}
+
+#[derive(Debug)]
+struct Mailer;
+
+impl Mailer {
+    async fn send(&self, job: EmailJob) -> Result<()> {
+        let _ = job;
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct MailModule {
+    queue: QueueModule,
+}
+
+impl Module for MailModule {
+    fn name(&self) -> &'static str {
+        "mail"
+    }
+
+    fn imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(self.queue.clone())]
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::singleton(Mailer)])
+    }
+
+    fn on_application_bootstrap(&self, module_ref: ModuleRef) -> BoxFuture<'static, Result<()>> {
+        Box::pin(async move {
+            let queue = module_ref.get::<Queue>()?;
+            let mailer = module_ref.get::<Mailer>()?;
+
+            // Nest queue processor equivalent for a named job.
+            queue.process("email.send", move |job: QueueJob, _context| {
+                let mailer = Arc::clone(&mailer);
+                async move { mailer.send(job.data_as::<EmailJob>()?).await }
+            })?;
+
+            Ok(())
+        })
+    }
+}
+
+let app = BootApplication::builder()
+    .import(MailModule {
+        queue: QueueModule::in_process("mail-queue"),
+    })
+    .build()?;
+let queue = app.get::<Queue>()?;
+
+app.bootstrap().await?;
+queue
+    .enqueue(
+        "email.send",
+        &EmailJob {
+            to: "milo@example.com".to_string(),
+            subject: "Welcome".to_string(),
+        },
+    )
+    .await?;
+app.shutdown().await?;
+```
+
+Use `QueueModule::in_process("name").processor(...)` for processors that can
+be declared directly on the queue module. Use injected `Queue::process(...)`
+when a processor needs providers from the importing module. `Queue::enqueue(...)`
+serializes payloads through serde JSON; processors can call
+`QueueJob::data_as::<T>()` to decode typed payloads. Use `Queue::jobs()`,
+`stats()`, and `failures()` for test assertions and local diagnostics. Add
+`.named("token")` when a module needs multiple queue providers, or `.global()`
+to make one queue visible to every module scope after registration.
+
 ## Middleware
 
 Middleware runs after route matching and path parameter decoding, but before
@@ -1733,6 +1841,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | Configuration | Optional ACL-backed typed providers through `ConfigModule` |
 | Cache | Optional typed cache provider through `CacheModule` |
 | Scheduler | Optional provider-backed task scheduling through `ScheduleModule` |
+| Queue | Optional provider-backed background jobs through `QueueModule` |
 | Filter | Error mapping into HTTP responses |
 | Lifecycle hook | Startup and shutdown behavior for modules and providers |
 
@@ -1756,6 +1865,7 @@ src/
 ├── module/       # Module trait, dynamic modules, exports, and lifecycle hooks
 ├── pipeline/     # Middleware, pipes, guards, interceptors, filters, and execution context
 ├── provider/     # Provider tokens, definitions, and ModuleRef container
+├── queue.rs      # Optional provider-backed queue and in-process backend
 ├── routing/      # Route handlers, controllers, route execution, and path matching
 ├── schedule.rs   # Optional provider-backed scheduler and in-process backend
 ├── transport/    # Adapter-neutral microservice message patterns and transports

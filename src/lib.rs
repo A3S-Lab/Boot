@@ -22,6 +22,8 @@ mod openapi;
 mod percent;
 mod pipeline;
 mod provider;
+#[cfg(feature = "queue")]
+mod queue;
 mod routing;
 #[cfg(feature = "schedule")]
 mod schedule;
@@ -59,6 +61,12 @@ pub use pipeline::{
     ExceptionFilter, ExecutionContext, Guard, Interceptor, Middleware, MiddlewareOutcome, Pipe,
 };
 pub use provider::{ModuleRef, ProviderDefinition, ProviderToken};
+#[cfg(feature = "queue")]
+pub use queue::{
+    InProcessQueueBackend, Queue, QueueBackend, QueueContext, QueueJob, QueueJobFailure,
+    QueueJobInfo, QueueJobReceipt, QueueJobState, QueueModule, QueueOptions, QueueProcessor,
+    QueueStats,
+};
 pub use routing::{ControllerDefinition, RouteDefinition, RouteHandler};
 #[cfg(feature = "schedule")]
 pub use schedule::{

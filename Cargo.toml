@@ -22,6 +22,7 @@ cache = []
 config = ["dep:a3s-acl"]
 macros = ["dep:a3s-boot-macros"]
 openapi-schemas = ["dep:schemars"]
+queue = ["dep:tokio"]
 schedule = ["dep:chrono", "dep:cron", "dep:tokio"]
 
 [dependencies]
@@ -39,10 +40,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_urlencoded = "0.7"
 thiserror = "2"
-tokio = { version = "1", features = ["net", "rt", "time"], optional = true }
+tokio = { version = "1", features = ["net", "rt", "sync", "time"], optional = true }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt", "time"] }
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 tower = { version = "0.5", features = ["util"] }
 
 [[example]]
