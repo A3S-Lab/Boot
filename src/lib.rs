@@ -22,6 +22,8 @@ mod error;
 mod events;
 #[cfg(feature = "file-upload")]
 mod file_upload;
+#[cfg(feature = "health")]
+mod health;
 mod http;
 #[cfg(feature = "logging")]
 mod logging;
@@ -67,6 +69,11 @@ pub use error::BootError;
 pub use events::{EventContext, EventEmitter, EventEnvelope, EventListener, EventModule};
 #[cfg(feature = "file-upload")]
 pub use file_upload::{MultipartField, MultipartForm, MultipartOptions, UploadedFile};
+#[cfg(feature = "health")]
+pub use health::{
+    HealthCheckService, HealthIndicator, HealthIndicatorResult, HealthModule, HealthReport,
+    HealthStatus,
+};
 pub use http::{BootRequest, BootResponse, HttpMethod, SseEvent, SseStream};
 #[cfg(feature = "logging")]
 pub use logging::{

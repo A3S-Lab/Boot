@@ -80,6 +80,9 @@ This repository contains the first framework slice:
 - `EventModule` behind the `events` feature for provider-backed in-process
   async event dispatch through `EventEmitter`, exact event names, and simple
   wildcard listener patterns such as `cat.*` and `*`
+- `HealthModule` behind the `health` feature for provider-backed health
+  indicators, aggregate JSON reports, and optional `/health` routes that return
+  HTTP 503 when any indicator is down
 - `ConfigModule` behind the `config` feature for ACL-backed typed
   configuration providers, including `env(...)`, `concat(...)`, named exports,
   global exports, and `Validate` integration
@@ -1020,6 +1023,39 @@ async fn app() -> Result<()> {
 `EventModule::global()` exports the emitter across module boundaries, and
 `EventModule::named(...)` can register a named emitter provider when a service
 needs separate event channels.
+
+## Health Checks
+
+Enable the `health` feature to expose Terminus-style health checks through a
+provider-backed `HealthCheckService`. `HealthModule::new(...)` registers the
+service, registers async indicators, and contributes a JSON `GET /health` route
+by default. The route returns HTTP 200 when every indicator is up and HTTP 503
+when any indicator is down or returns an error.
+
+```rust
+use a3s_boot::{
+    BootApplication, HealthIndicatorResult, HealthModule, Result,
+};
+
+fn app() -> Result<BootApplication> {
+    BootApplication::builder()
+        .import(
+            HealthModule::new("health")
+                .indicator("database", || async {
+                    Ok(HealthIndicatorResult::up().with_detail_value("latency_ms", 2))
+                })
+                .indicator("cache", || async {
+                    Ok(HealthIndicatorResult::up())
+                }),
+        )
+        .build()
+}
+```
+
+Use `without_route()` when the service should only be consumed by another
+controller or host, `with_route("/ready")` for a custom endpoint, and
+`named(...)` or `global()` when multiple modules need distinct health services
+or shared readiness checks.
 
 ## Providers
 
@@ -2296,6 +2332,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | WebSocket gateway | Event-based bidirectional message handlers |
 | Message transport | Adapter-neutral request-response and event-only message patterns |
 | Event emitter | Optional provider-backed in-process application events |
+| Health check | Optional provider-backed readiness/liveness reports |
 | Configuration | Optional ACL-backed typed providers through `ConfigModule` |
 | Cache | Optional typed cache provider through `CacheModule` |
 | Scheduler | Optional provider-backed task scheduling through `ScheduleModule` |
@@ -2327,6 +2364,7 @@ src/
 ├── compression.rs # Optional gzip response compression interceptor
 ├── config.rs     # Optional ACL-backed typed configuration module
 ├── events.rs     # Optional in-process application event emitter module
+├── health.rs     # Optional provider-backed health check module
 ├── http/         # Adapter-neutral request, response, methods, and query parsing
 ├── logging.rs    # Optional provider-backed structured logging module
 ├── module/       # Module trait, dynamic modules, exports, and lifecycle hooks

@@ -417,6 +417,7 @@ Nest equivalent areas:
 - task scheduling (implemented)
 - queues (implemented)
 - application events (implemented)
+- health checks (implemented)
 - logging (implemented)
 - API versioning (implemented)
 - serialization (implemented)
@@ -450,6 +451,9 @@ Acceptance:
 - Application events can register an in-process `EventEmitter` provider,
   dispatch typed JSON payloads to exact or wildcard listeners, and participate
   in module imports/exports. (Covered)
+- Health checks can register provider-backed async indicators, expose a typed
+  `HealthCheckService`, return JSON readiness reports, and map unhealthy
+  reports to HTTP 503. (Covered)
 - Logging can register typed providers, write structured records through
   pluggable sinks, capture records in tests, and expose request/worker logging
   integration points without forcing a concrete backend. (Covered)
