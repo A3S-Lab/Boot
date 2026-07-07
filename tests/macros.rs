@@ -87,6 +87,7 @@ impl MacroCatsMessages {
 
 #[controller("/macro-cats")]
 #[tag("macro-cats")]
+#[metadata("resource", "cats")]
 impl MacroCatsController {
     #[get("/{id}", raw)]
     async fn find_one_text(&self, request: BootRequest) -> Result<BootResponse> {
@@ -102,6 +103,7 @@ impl MacroCatsController {
     }
 
     #[get("/{id}/details")]
+    #[metadata("roles", ["admin"])]
     #[operation(
         summary = "Find macro cat details",
         description = "Returns a macro cat with query and header metadata.",
@@ -359,6 +361,22 @@ async fn macros_register_injectable_services_and_controller_routes() {
     assert_eq!(app.routes().len(), 9);
     assert_eq!(app.gateways().len(), 1);
     assert_eq!(app.message_patterns().len(), 3);
+    assert_eq!(
+        app.reflector().unwrap().metadata_value(
+            a3s_boot::HttpMethod::Get,
+            "/macro-cats/{id}/details",
+            "roles"
+        ),
+        Some(&json!(["admin"]))
+    );
+    assert_eq!(
+        app.reflector().unwrap().metadata_value(
+            a3s_boot::HttpMethod::Get,
+            "/macro-cats/{id}/details",
+            "resource"
+        ),
+        Some(&json!("cats"))
+    );
 
     let text = app
         .call(BootRequest::new(

@@ -4,6 +4,7 @@ use a3s_boot::{
     ProviderToken, Result, RouteDefinition, TransportReply, WebSocketGatewayDefinition,
     WebSocketMessage,
 };
+use serde_json::json;
 
 #[derive(Debug)]
 struct CatsService;
@@ -22,10 +23,14 @@ impl Module for DiscoveryModuleFixture {
 
     fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
         Ok(vec![ControllerDefinition::new("/cats")?
+            .with_metadata_value("resource", json!("cats"))
+            .with_metadata_value("roles", json!(["reader"]))
             .route(
                 RouteDefinition::get("/{id}", |_| async { Ok(BootResponse::text("cat")) })?
                     .with_tag("cats")
                     .with_operation_id("getCat")
+                    .with_metadata_value("roles", json!(["admin"]))
+                    .with_metadata_value("policy", json!("cat:read"))
                     .with_version("1"),
             )?
             .with_tag("animals")])
@@ -35,7 +40,8 @@ impl Module for DiscoveryModuleFixture {
         Ok(vec![RouteDefinition::get("/health", |_| async {
             Ok(BootResponse::text("ok"))
         })?
-        .with_tag("ops")])
+        .with_tag("ops")
+        .with_metadata_value("public", json!(true))])
     }
 
     fn gateways(&self, _module_ref: &ModuleRef) -> Result<Vec<WebSocketGatewayDefinition>> {
@@ -81,10 +87,13 @@ fn discovery_service_snapshots_modules_routes_gateways_and_message_patterns() {
             && route.path_params == ["id"]
             && route.controller_prefix.as_deref() == Some("/cats")
             && route.openapi.tags == ["cats", "animals"]
+            && route.metadata.get("resource") == Some(&json!("cats"))
+            && route.metadata.get("roles") == Some(&json!(["admin"]))
+            && route.metadata.get("policy") == Some(&json!("cat:read"))
             && route.versioning.to_string() == "1"));
-    assert!(module_routes
-        .iter()
-        .any(|route| route.path == "/api/health" && route.openapi.tags == ["ops"]));
+    assert!(module_routes.iter().any(|route| route.path == "/api/health"
+        && route.openapi.tags == ["ops"]
+        && route.metadata.get("public") == Some(&json!(true))));
 
     let gateways = discovery.gateways_for_module("discovery");
     assert_eq!(gateways.len(), 1);
@@ -119,6 +128,32 @@ fn reflector_queries_route_metadata_from_discovery_snapshot() {
             .unwrap()
             .tags,
         ["cats", "animals"]
+    );
+    assert_eq!(
+        reflector.metadata_value(HttpMethod::Get, "/cats/{id}", "roles"),
+        Some(&json!(["admin"]))
+    );
+    assert_eq!(
+        reflector
+            .metadata_as::<Vec<String>>(HttpMethod::Get, "/cats/{id}", "roles")
+            .unwrap(),
+        Some(vec!["admin".to_string()])
+    );
+    assert_eq!(
+        reflector
+            .routes_with_metadata("resource")
+            .into_iter()
+            .map(|route| route.path.as_str())
+            .collect::<Vec<_>>(),
+        ["/cats/{id}"]
+    );
+    assert_eq!(
+        reflector
+            .routes_with_metadata_value("public", &json!(true))
+            .into_iter()
+            .map(|route| route.path.as_str())
+            .collect::<Vec<_>>(),
+        ["/health"]
     );
     assert_eq!(
         reflector

@@ -52,9 +52,9 @@ mod websocket;
 #[cfg(feature = "macros")]
 pub use a3s_boot_macros::{
     bearer_auth, body, controller, delete, delete_json, event_pattern, get, get_json, head, header,
-    headers, hide_from_openapi, injectable, message_controller, message_pattern, operation,
-    options, param, params, patch, patch_json, post, post_json, put, put_json, query, request,
-    request_body, response, skip_validation, sse, subscribe_message, tag, validate,
+    headers, hide_from_openapi, injectable, message_controller, message_pattern, metadata,
+    operation, options, param, params, patch, patch_json, post, post_json, put, put_json, query,
+    request, request_body, response, skip_validation, sse, subscribe_message, tag, validate,
     websocket_gateway,
 };
 #[cfg(feature = "axum")]

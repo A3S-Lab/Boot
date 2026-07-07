@@ -2,7 +2,7 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::{
-    parse_macro_input, Attribute, FnArg, GenericArgument, Ident, ImplItem, ImplItemFn, Item,
+    parse_macro_input, Attribute, Expr, FnArg, GenericArgument, Ident, ImplItem, ImplItemFn, Item,
     ItemImpl, LitBool, LitInt, LitStr, Pat, PatType, PathArguments, Result, Token, Type,
 };
 
@@ -219,6 +219,11 @@ pub fn hide_from_openapi(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
+pub fn metadata(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    metadata_attribute_outside_controller("metadata", item)
+}
+
+#[proc_macro_attribute]
 pub fn validate(_attr: TokenStream, item: TokenStream) -> TokenStream {
     validation_attribute_outside_controller("validate", item)
 }
@@ -285,6 +290,8 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
         take_controller_validation_attrs(&item_impl.attrs);
     let (clean_impl_attrs, controller_openapi, controller_openapi_errors) =
         take_controller_openapi_attrs(&clean_impl_attrs);
+    let (clean_impl_attrs, controller_metadata, controller_metadata_errors) =
+        take_controller_metadata_attrs(&clean_impl_attrs);
     item_impl.attrs = clean_impl_attrs;
     for error in controller_validation_errors {
         push_error(&mut errors, error);
@@ -292,7 +299,11 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
     for error in controller_openapi_errors {
         push_error(&mut errors, error);
     }
+    for error in controller_metadata_errors {
+        push_error(&mut errors, error);
+    }
     let controller_openapi = controller_openapi.tokens();
+    let controller_metadata = controller_metadata.tokens();
 
     for item in &mut item_impl.items {
         let ImplItem::Fn(method) = item else {
@@ -303,6 +314,8 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
         let (clean_attrs, route_validation, validation_errors) =
             take_route_validation_attrs(&clean_attrs);
         let (clean_attrs, openapi_specs, openapi_errors) = take_route_openapi_attrs(&clean_attrs);
+        let (clean_attrs, metadata_specs, metadata_errors) =
+            take_route_metadata_attrs(&clean_attrs);
         method.attrs = clean_attrs;
         for error in route_errors {
             push_error(&mut errors, error);
@@ -313,12 +326,24 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
         for error in openapi_errors {
             push_error(&mut errors, error);
         }
+        for error in metadata_errors {
+            push_error(&mut errors, error);
+        }
         if method_routes.is_empty() && !openapi_specs.is_empty() {
             push_error(
                 &mut errors,
                 syn::Error::new_spanned(
                     &method.sig.ident,
                     "OpenAPI route attributes must be used on route methods",
+                ),
+            );
+        }
+        if method_routes.is_empty() && !metadata_specs.is_empty() {
+            push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &method.sig.ident,
+                    "metadata route attributes must be used on route methods",
                 ),
             );
         }
@@ -356,6 +381,7 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
                 input,
                 validation_enabled,
                 validation_skipped,
+                &metadata_specs,
                 &openapi_specs,
             ) {
                 Ok(registration) => routes.push(registration),
@@ -379,6 +405,9 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
                     ::a3s_boot::ControllerDefinition::new(#prefix)?;
                 #(
                     __a3s_boot_controller = __a3s_boot_controller.#controller_openapi;
+                )*
+                #(
+                    __a3s_boot_controller = __a3s_boot_controller.#controller_metadata?;
                 )*
                 #(
                     __a3s_boot_controller = #routes;
@@ -862,6 +891,7 @@ fn route_registration(
     input: RouteMethodInput,
     validation_enabled: bool,
     validation_skipped: bool,
+    metadata_specs: &[MetadataSpec],
     openapi_specs: &[RouteOpenApiSpec],
 ) -> Result<proc_macro2::TokenStream> {
     if method.sig.asyncness.is_none() {
@@ -984,6 +1014,8 @@ fn route_registration(
         validation_skipped,
     )?;
 
+    let route_definition = metadata_route_definition(route_definition, metadata_specs);
+
     let route_definition = openapi_route_definition(
         route_definition,
         &metadata_input,
@@ -995,6 +1027,20 @@ fn route_registration(
     Ok(quote! {
         __a3s_boot_controller.route(#route_definition)?
     })
+}
+
+fn metadata_route_definition(
+    mut route_definition: proc_macro2::TokenStream,
+    metadata_specs: &[MetadataSpec],
+) -> proc_macro2::TokenStream {
+    for spec in metadata_specs {
+        let key = &spec.key;
+        let value = &spec.value;
+        route_definition = quote! {
+            (#route_definition).with_metadata(#key, #value)?
+        };
+    }
+    route_definition
 }
 
 fn validation_route_definition(
@@ -1524,6 +1570,57 @@ fn take_route_openapi_attrs(
     (clean_attrs, specs, errors)
 }
 
+fn take_controller_metadata_attrs(
+    attrs: &[Attribute],
+) -> (Vec<Attribute>, ControllerMetadataAttrs, Vec<syn::Error>) {
+    let mut clean_attrs = Vec::new();
+    let mut metadata = ControllerMetadataAttrs::default();
+    let mut errors = Vec::new();
+
+    for attr in attrs {
+        if !is_metadata_attribute(attr) {
+            clean_attrs.push(attr.clone());
+            continue;
+        }
+
+        match attr.parse_args::<MetadataSpec>() {
+            Ok(spec) => metadata.specs.push(spec),
+            Err(error) => errors.push(error),
+        }
+    }
+
+    (clean_attrs, metadata, errors)
+}
+
+fn take_route_metadata_attrs(
+    attrs: &[Attribute],
+) -> (Vec<Attribute>, Vec<MetadataSpec>, Vec<syn::Error>) {
+    let mut clean_attrs = Vec::new();
+    let mut specs = Vec::new();
+    let mut errors = Vec::new();
+
+    for attr in attrs {
+        if !is_metadata_attribute(attr) {
+            clean_attrs.push(attr.clone());
+            continue;
+        }
+
+        match attr.parse_args::<MetadataSpec>() {
+            Ok(spec) => specs.push(spec),
+            Err(error) => errors.push(error),
+        }
+    }
+
+    (clean_attrs, specs, errors)
+}
+
+fn is_metadata_attribute(attr: &Attribute) -> bool {
+    attr.path()
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == "metadata")
+}
+
 #[derive(Default)]
 struct ControllerOpenApiAttrs {
     tags: Vec<LitStr>,
@@ -1532,6 +1629,40 @@ struct ControllerOpenApiAttrs {
 impl ControllerOpenApiAttrs {
     fn tokens(&self) -> Vec<proc_macro2::TokenStream> {
         self.tags.iter().map(|tag| quote!(with_tag(#tag))).collect()
+    }
+}
+
+#[derive(Default)]
+struct ControllerMetadataAttrs {
+    specs: Vec<MetadataSpec>,
+}
+
+impl ControllerMetadataAttrs {
+    fn tokens(&self) -> Vec<proc_macro2::TokenStream> {
+        self.specs
+            .iter()
+            .map(|spec| {
+                let key = &spec.key;
+                let value = &spec.value;
+                quote!(with_metadata(#key, #value))
+            })
+            .collect()
+    }
+}
+
+#[derive(Clone)]
+struct MetadataSpec {
+    key: LitStr,
+    value: Expr,
+}
+
+impl Parse for MetadataSpec {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let key = input.parse::<LitStr>()?;
+        input.parse::<Token![,]>()?;
+        let value = input.parse::<Expr>()?;
+        parse_optional_comma(input)?;
+        Ok(Self { key, value })
     }
 }
 
@@ -1929,6 +2060,17 @@ fn extractor_attribute_outside_controller(name: &str, item: TokenStream) -> Toke
 }
 
 fn openapi_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
+    let item = proc_macro2::TokenStream::from(item);
+    let message =
+        format!("#[{name}] must be used inside an impl block annotated with #[controller]");
+    quote! {
+        compile_error!(#message);
+        #item
+    }
+    .into()
+}
+
+fn metadata_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
     let item = proc_macro2::TokenStream::from(item);
     let message =
         format!("#[{name}] must be used inside an impl block annotated with #[controller]");

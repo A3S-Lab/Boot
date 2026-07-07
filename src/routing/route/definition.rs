@@ -1,7 +1,10 @@
 use crate::{
-    ExceptionFilter, Guard, HttpMethod, Interceptor, Middleware, OpenApiRouteMetadata, Pipe,
-    RequestValidator, Result, RouteVersioning, SerializationOptions,
+    BootError, ExceptionFilter, Guard, HttpMethod, Interceptor, Middleware, OpenApiRouteMetadata,
+    Pipe, RequestValidator, Result, RouteVersioning, SerializationOptions,
 };
+use serde::de::DeserializeOwned;
+use serde::Serialize;
+use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -31,6 +34,7 @@ pub struct RouteDefinition {
     pub(super) openapi: OpenApiRouteMetadata,
     pub(super) versioning: RouteVersioning,
     pub(super) serialization: SerializationOptions,
+    pub(super) metadata: BTreeMap<String, Value>,
 }
 
 impl RouteDefinition {
@@ -58,6 +62,7 @@ impl RouteDefinition {
             openapi: OpenApiRouteMetadata::default(),
             versioning: RouteVersioning::default(),
             serialization: SerializationOptions::default(),
+            metadata: BTreeMap::new(),
         })
     }
 
@@ -117,6 +122,31 @@ impl RouteDefinition {
         &self.serialization
     }
 
+    pub fn metadata(&self) -> &BTreeMap<String, Value> {
+        &self.metadata
+    }
+
+    pub fn metadata_value(&self, key: &str) -> Option<&Value> {
+        self.metadata.get(key)
+    }
+
+    pub fn metadata_as<T>(&self, key: &str) -> Result<Option<T>>
+    where
+        T: DeserializeOwned,
+    {
+        let Some(value) = self.metadata.get(key) else {
+            return Ok(None);
+        };
+
+        serde_json::from_value(value.clone())
+            .map(Some)
+            .map_err(|error| {
+                BootError::Internal(format!(
+                    "failed to deserialize route metadata `{key}`: {error}"
+                ))
+            })
+    }
+
     pub fn validation_enabled(&self) -> bool {
         self.validation_enabled
     }
@@ -142,6 +172,42 @@ impl RouteDefinition {
 
     pub fn with_serialization(mut self, options: SerializationOptions) -> Self {
         self.serialization = options;
+        self
+    }
+
+    pub fn with_metadata<V>(self, key: impl Into<String>, value: V) -> Result<Self>
+    where
+        V: Serialize,
+    {
+        let key = key.into();
+        let value = serde_json::to_value(value).map_err(|error| {
+            BootError::Internal(format!(
+                "failed to serialize route metadata `{key}`: {error}"
+            ))
+        })?;
+        Ok(self.with_metadata_value(key, value))
+    }
+
+    pub fn with_metadata_value(mut self, key: impl Into<String>, value: Value) -> Self {
+        self.metadata.insert(key.into(), value);
+        self
+    }
+
+    pub(crate) fn with_metadata_defaults(mut self, metadata: &BTreeMap<String, Value>) -> Self {
+        for (key, value) in metadata {
+            self.metadata
+                .entry(key.clone())
+                .or_insert_with(|| value.clone());
+        }
+        self
+    }
+
+    pub(crate) fn with_metadata_default_value(
+        mut self,
+        key: impl Into<String>,
+        value: Value,
+    ) -> Self {
+        self.metadata.entry(key.into()).or_insert(value);
         self
     }
 }

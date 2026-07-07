@@ -36,7 +36,8 @@ Implemented today:
   `#[post]`, `#[put]`, `#[patch]`, `#[delete]`, `#[sse]`, raw route mode, and
   method argument extractors including `#[body]`, `#[request]`,
   `#[param("name")]`, `#[params]`, `#[query]`, `#[query("name")]`,
-  `#[header("name")]`, and `#[headers]`.
+  `#[header("name")]`, and `#[headers]`, plus `#[metadata]` for
+  Nest-style custom route/controller metadata.
 - JSON body and JSON response helpers.
 - SSE responses with `SseEvent`, `SseStream`, `BootResponse::sse(...)`,
   `RouteDefinition::sse(...)`, `ControllerDefinition::sse(...)`, and Axum
@@ -49,6 +50,9 @@ Implemented today:
 - OpenAPI route metadata, schema-crate-neutral document generation from resolved
   routes, automatic path-parameter documentation, and optional
   `serve_openapi(...)` JSON route registration.
+- Custom route/controller metadata through builders and `#[metadata]`,
+  route-level override semantics, `ExecutionContext` access for guards and
+  interceptors, and typed `Reflector` lookup from discovery snapshots.
 - DTO validation with `Validate`, body/query/params validation hooks, global,
   controller-level, route-level validation switches, and `#[validate]` /
   `#[skip_validation]` macros.

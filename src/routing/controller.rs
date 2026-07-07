@@ -9,6 +9,8 @@ use crate::{
 use futures_core::Stream;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde_json::Value;
+use std::collections::BTreeMap;
 use std::future::Future;
 
 /// Group routes under a common HTTP prefix, similar to a Nest controller.
@@ -20,6 +22,7 @@ pub struct ControllerDefinition {
     openapi_tags: Vec<String>,
     versioning: RouteVersioning,
     serialization: Option<SerializationOptions>,
+    metadata: BTreeMap<String, Value>,
 }
 
 impl ControllerDefinition {
@@ -32,6 +35,7 @@ impl ControllerDefinition {
             openapi_tags: Vec::new(),
             versioning: RouteVersioning::default(),
             serialization: None,
+            metadata: BTreeMap::new(),
         })
     }
 
@@ -52,6 +56,7 @@ impl ControllerDefinition {
         for tag in &self.openapi_tags {
             route = route.with_tag(tag.clone());
         }
+        route = route.with_metadata_defaults(&self.metadata);
         self.routes.push(
             route
                 .with_prefix(&self.prefix)?
@@ -140,6 +145,38 @@ impl ControllerDefinition {
     pub fn with_serialization(mut self, options: SerializationOptions) -> Self {
         self.serialization = Some(options);
         self
+    }
+
+    pub fn with_metadata<V>(self, key: impl Into<String>, value: V) -> Result<Self>
+    where
+        V: Serialize,
+    {
+        let key = key.into();
+        let value = serde_json::to_value(value).map_err(|error| {
+            crate::BootError::Internal(format!(
+                "failed to serialize controller metadata `{key}`: {error}"
+            ))
+        })?;
+        Ok(self.with_metadata_value(key, value))
+    }
+
+    pub fn with_metadata_value(mut self, key: impl Into<String>, value: Value) -> Self {
+        let key = key.into();
+        self.metadata.insert(key.clone(), value.clone());
+        self.routes = self
+            .routes
+            .into_iter()
+            .map(|route| route.with_metadata_default_value(key.clone(), value.clone()))
+            .collect();
+        self
+    }
+
+    pub fn metadata(&self) -> &BTreeMap<String, Value> {
+        &self.metadata
+    }
+
+    pub fn metadata_value(&self, key: &str) -> Option<&Value> {
+        self.metadata.get(key)
     }
 
     pub fn get<H>(self, path: impl Into<String>, handler: H) -> Result<Self>

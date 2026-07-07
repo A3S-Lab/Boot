@@ -1,7 +1,10 @@
 use crate::{
-    BootApplication, HttpMethod, MessagePatternKind, OpenApiRouteMetadata, ProviderToken, Result,
-    RouteVersioning, SerializationOptions,
+    BootApplication, BootError, HttpMethod, MessagePatternKind, OpenApiRouteMetadata,
+    ProviderToken, Result, RouteVersioning, SerializationOptions,
 };
+use serde::de::DeserializeOwned;
+use serde_json::Value;
+use std::collections::BTreeMap;
 
 /// Snapshot of a registered module and its local providers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,6 +25,7 @@ pub struct DiscoveredRoute {
     pub openapi: OpenApiRouteMetadata,
     pub versioning: RouteVersioning,
     pub serialization: SerializationOptions,
+    pub metadata: BTreeMap<String, Value>,
     pub validation_enabled: bool,
 }
 
@@ -151,6 +155,32 @@ impl Reflector {
         self.route(method, path).map(|route| &route.openapi)
     }
 
+    pub fn metadata(&self, method: HttpMethod, path: &str) -> Option<&BTreeMap<String, Value>> {
+        self.route(method, path).map(|route| &route.metadata)
+    }
+
+    pub fn metadata_value(&self, method: HttpMethod, path: &str, key: &str) -> Option<&Value> {
+        self.metadata(method, path)
+            .and_then(|metadata| metadata.get(key))
+    }
+
+    pub fn metadata_as<T>(&self, method: HttpMethod, path: &str, key: &str) -> Result<Option<T>>
+    where
+        T: DeserializeOwned,
+    {
+        let Some(value) = self.metadata_value(method, path, key) else {
+            return Ok(None);
+        };
+
+        serde_json::from_value(value.clone())
+            .map(Some)
+            .map_err(|error| {
+                BootError::Internal(format!(
+                    "failed to deserialize route metadata `{key}`: {error}"
+                ))
+            })
+    }
+
     pub fn operation_id(&self, method: HttpMethod, path: &str) -> Option<&str> {
         self.openapi(method, path)
             .and_then(|metadata| metadata.operation_id.as_deref())
@@ -161,6 +191,22 @@ impl Reflector {
             .routes
             .iter()
             .filter(|route| route.openapi.tags.iter().any(|value| value == tag))
+            .collect()
+    }
+
+    pub fn routes_with_metadata(&self, key: &str) -> Vec<&DiscoveredRoute> {
+        self.discovery
+            .routes
+            .iter()
+            .filter(|route| route.metadata.contains_key(key))
+            .collect()
+    }
+
+    pub fn routes_with_metadata_value(&self, key: &str, value: &Value) -> Vec<&DiscoveredRoute> {
+        self.discovery
+            .routes
+            .iter()
+            .filter(|route| route.metadata.get(key) == Some(value))
             .collect()
     }
 
@@ -202,6 +248,7 @@ fn discover_routes(app: &BootApplication) -> Vec<DiscoveredRoute> {
             openapi: route.openapi().clone(),
             versioning: route.versioning().clone(),
             serialization: route.serialization().clone(),
+            metadata: route.metadata().clone(),
             validation_enabled: route.validation_enabled(),
         })
         .collect()

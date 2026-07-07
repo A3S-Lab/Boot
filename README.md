@@ -56,7 +56,8 @@ This repository contains the first framework slice:
   such as `#[get("/{id}")]`, `#[post("/", status = 201)]`, and
   `#[sse("/events")]`, plus parameter extractors such as `#[param("id")]`,
   `#[query]`, `#[query("name")]`, `#[body]`, `#[header("name")]`, and
-  `#[request]`, and WebSocket macros such as `#[websocket_gateway]` and
+  `#[request]`, route metadata such as `#[metadata("roles", ["admin"])]`,
+  and WebSocket macros such as `#[websocket_gateway]` and
   `#[subscribe_message]`, plus microservice macros such as
   `#[message_controller]`, `#[message_pattern]`, and `#[event_pattern]`
 - `Middleware`, `Pipe`, `Guard`, `Interceptor`, and `ExceptionFilter` pipeline traits
@@ -121,6 +122,9 @@ This repository contains the first framework slice:
   Nest-style metadata macros such as `#[tag]`, `#[operation]`, `#[response]`,
   `#[request_body]`, and `#[bearer_auth]`, plus optional `schemars`-backed
   schema components behind the `openapi-schemas` feature
+- custom route/controller metadata through builder methods and `#[metadata]`,
+  exposed to guards, interceptors, filters, discovery snapshots, and
+  `Reflector`
 - JSON request content-type and response accept helpers with HTTP 415/406 mapping
 - request authorization/cookie helpers, HTTP 401 unauthorized mapping, and
   opt-in `WWW-Authenticate` response challenges
@@ -310,6 +314,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@EventPattern("cat.created")` | `#[event_pattern("cat.created")]` on an async event method |
 | `@Payload()` | A typed message method argument deserialized from `TransportMessage::data` |
 | `@UsePipes(new ValidationPipe())` | `#[validate]` on a controller impl or route method |
+| `@SetMetadata("roles", ["admin"])` | `#[metadata("roles", ["admin"])]` below `#[controller]` or on a route method |
 | `@ApiTags("cats")` | `#[tag("cats")]` below `#[controller]` |
 | `@ApiOperation(...)` | `#[operation(summary = "...", operation_id = "...")]` on a route method |
 | `@ApiResponse(...)` | `#[response(status = 200, description = "...", schema = CatDto)]` |
@@ -1339,6 +1344,7 @@ use a3s_boot::{
     BootApplication, BootResponse, ControllerDefinition, DiscoveryService,
     HttpMethod, Module, ModuleRef, ProviderDefinition, Result, RouteDefinition,
 };
+use serde_json::json;
 
 #[derive(Debug)]
 struct CatsService;
@@ -1356,11 +1362,14 @@ impl Module for CatsModule {
     }
 
     fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
-        Ok(vec![ControllerDefinition::new("/cats")?.route(
-            RouteDefinition::get("/{id}", |_| async { Ok(BootResponse::text("cat")) })?
-                .with_tag("cats")
-                .with_operation_id("getCat"),
-        )?])
+        Ok(vec![ControllerDefinition::new("/cats")?
+            .with_metadata_value("resource", json!("cats"))
+            .route(
+                RouteDefinition::get("/{id}", |_| async { Ok(BootResponse::text("cat")) })?
+                    .with_tag("cats")
+                    .with_operation_id("getCat")
+                    .with_metadata_value("roles", json!(["admin"])),
+            )?])
     }
 }
 
@@ -1377,7 +1386,48 @@ assert_eq!(
     reflector.operation_id(HttpMethod::Get, "/cats/{id}"),
     Some("getCat")
 );
+assert_eq!(
+    reflector.metadata_value(HttpMethod::Get, "/cats/{id}", "roles"),
+    Some(&json!(["admin"]))
+);
 assert_eq!(reflector.routes_with_tag("cats").len(), 1);
+```
+
+Route metadata is also copied into `ExecutionContext`, so guards and
+interceptors can enforce policy without coupling to a concrete router:
+
+```rust
+use a3s_boot::{BootResponse, ExecutionContext, RouteDefinition};
+use serde_json::json;
+
+let route = RouteDefinition::get("/admin", |_| async {
+    Ok(BootResponse::text("admin"))
+})?
+.with_metadata_value("roles", json!(["admin"]))
+.with_guard(|context: ExecutionContext| async move {
+    let roles = context
+        .metadata_as::<Vec<String>>("roles")?
+        .unwrap_or_default();
+    Ok(roles.iter().any(|role| role == "admin"))
+});
+```
+
+The macro form mirrors Nest's `@SetMetadata()` usage:
+
+```rust
+# use a3s_boot::Result;
+#[derive(Debug)]
+struct CatsController;
+
+#[a3s_boot::controller("/cats")]
+#[a3s_boot::metadata("resource", "cats")]
+impl CatsController {
+    #[a3s_boot::get("/{id}")]
+    #[a3s_boot::metadata("roles", ["admin"])]
+    async fn find_one(&self) -> Result<String> {
+        Ok("cat".to_string())
+    }
+}
 ```
 
 ## Module Encapsulation

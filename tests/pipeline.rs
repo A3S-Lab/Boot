@@ -3,6 +3,7 @@ use a3s_boot::{
     ExecutionContext, HttpMethod, Interceptor, Middleware, MiddlewareOutcome, Module, ModuleRef,
     Result, RouteDefinition,
 };
+use serde_json::json;
 use std::sync::Arc;
 
 #[tokio::test]
@@ -600,6 +601,26 @@ async fn guard_unauthorized_errors_use_route_filters() {
         "/private: request was unauthorized: missing bearer token"
     );
     assert_eq!(ok.body, b"unreachable");
+}
+
+#[tokio::test]
+async fn guards_can_read_route_metadata_from_execution_context() {
+    let route = RouteDefinition::get("/admin", |_| async { Ok(BootResponse::text("admin")) })
+        .unwrap()
+        .with_metadata_value("roles", json!(["admin"]))
+        .with_guard(|context: ExecutionContext| async move {
+            let roles = context
+                .metadata_as::<Vec<String>>("roles")?
+                .unwrap_or_default();
+            Ok(roles.iter().any(|role| role == "admin"))
+        });
+
+    let response = route
+        .call(BootRequest::new(HttpMethod::Get, "/admin"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.body, b"admin");
 }
 
 #[tokio::test]
