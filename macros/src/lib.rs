@@ -219,6 +219,11 @@ pub fn hide_from_openapi(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
+pub fn http_code(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    http_code_attribute_outside_controller("http_code", item)
+}
+
+#[proc_macro_attribute]
 pub fn metadata(_attr: TokenStream, item: TokenStream) -> TokenStream {
     metadata_attribute_outside_controller("metadata", item)
 }
@@ -316,6 +321,7 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
         let (clean_attrs, openapi_specs, openapi_errors) = take_route_openapi_attrs(&clean_attrs);
         let (clean_attrs, metadata_specs, metadata_errors) =
             take_route_metadata_attrs(&clean_attrs);
+        let (clean_attrs, http_code, http_code_errors) = take_route_http_code_attrs(&clean_attrs);
         method.attrs = clean_attrs;
         for error in route_errors {
             push_error(&mut errors, error);
@@ -329,12 +335,24 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
         for error in metadata_errors {
             push_error(&mut errors, error);
         }
+        for error in http_code_errors {
+            push_error(&mut errors, error);
+        }
         if method_routes.is_empty() && !openapi_specs.is_empty() {
             push_error(
                 &mut errors,
                 syn::Error::new_spanned(
                     &method.sig.ident,
                     "OpenAPI route attributes must be used on route methods",
+                ),
+            );
+        }
+        if method_routes.is_empty() && http_code.is_some() {
+            push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &method.sig.ident,
+                    "http_code route attributes must be used on route methods",
                 ),
             );
         }
@@ -382,6 +400,7 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
                 validation_enabled,
                 validation_skipped,
                 &metadata_specs,
+                http_code.as_ref(),
                 &openapi_specs,
             ) {
                 Ok(registration) => routes.push(registration),
@@ -892,6 +911,7 @@ fn route_registration(
     validation_enabled: bool,
     validation_skipped: bool,
     metadata_specs: &[MetadataSpec],
+    http_code: Option<&LitInt>,
     openapi_specs: &[RouteOpenApiSpec],
 ) -> Result<proc_macro2::TokenStream> {
     if method.sig.asyncness.is_none() {
@@ -902,8 +922,9 @@ fn route_registration(
     }
 
     let method_ident = &method.sig.ident;
-    let status = route.args.status_value()?;
-    let path = route.args.path;
+    let explicit_status = route.args.explicit_status(http_code)?;
+    let status = status_value(explicit_status)?;
+    let path = route.args.path.clone();
     let metadata_input = input.clone();
 
     let raw = route.args.raw.is_some();
@@ -918,9 +939,9 @@ fn route_registration(
     let mut json_success_status = None;
     let route_definition = match flavor {
         RouteFlavor::Sse => {
-            if route.args.status.is_some() {
+            if let Some(status) = explicit_status {
                 return Err(syn::Error::new_spanned(
-                    route.args.status.unwrap(),
+                    status,
                     "status is not supported on SSE route attributes",
                 ));
             }
@@ -940,9 +961,9 @@ fn route_registration(
             }
         }
         RouteFlavor::Raw => {
-            if route.args.status.is_some() {
+            if let Some(status) = explicit_status {
                 return Err(syn::Error::new_spanned(
-                    route.args.status.unwrap(),
+                    status,
                     "status is only supported on JSON route attributes",
                 ));
             }
@@ -1614,11 +1635,44 @@ fn take_route_metadata_attrs(
     (clean_attrs, specs, errors)
 }
 
+fn take_route_http_code_attrs(
+    attrs: &[Attribute],
+) -> (Vec<Attribute>, Option<LitInt>, Vec<syn::Error>) {
+    let mut clean_attrs = Vec::new();
+    let mut status = None;
+    let mut errors = Vec::new();
+
+    for attr in attrs {
+        if !is_http_code_attribute(attr) {
+            clean_attrs.push(attr.clone());
+            continue;
+        }
+
+        match attr.parse_args::<LitInt>() {
+            Ok(value) if status.is_none() => status = Some(value),
+            Ok(value) => errors.push(syn::Error::new_spanned(
+                value,
+                "route methods can use at most one #[http_code(...)] attribute",
+            )),
+            Err(error) => errors.push(error),
+        }
+    }
+
+    (clean_attrs, status, errors)
+}
+
 fn is_metadata_attribute(attr: &Attribute) -> bool {
     attr.path()
         .segments
         .last()
         .is_some_and(|segment| segment.ident == "metadata")
+}
+
+fn is_http_code_attribute(attr: &Attribute) -> bool {
+    attr.path()
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == "http_code")
 }
 
 #[derive(Default)]
@@ -2070,6 +2124,17 @@ fn openapi_attribute_outside_controller(name: &str, item: TokenStream) -> TokenS
     .into()
 }
 
+fn http_code_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
+    let item = proc_macro2::TokenStream::from(item);
+    let message =
+        format!("#[{name}] must be used inside an impl block annotated with #[controller]");
+    quote! {
+        compile_error!(#message);
+        #item
+    }
+    .into()
+}
+
 fn metadata_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
     let item = proc_macro2::TokenStream::from(item);
     let message =
@@ -2140,13 +2205,25 @@ struct RouteArgs {
 }
 
 impl RouteArgs {
-    fn status_value(&self) -> Result<proc_macro2::TokenStream> {
-        let Some(status) = &self.status else {
-            return Ok(quote!(200));
-        };
-        let value = status.base10_parse::<u16>()?;
-        Ok(quote!(#value))
+    fn explicit_status<'a>(&'a self, http_code: Option<&'a LitInt>) -> Result<Option<&'a LitInt>> {
+        match (&self.status, http_code) {
+            (Some(_), Some(http_code)) => Err(syn::Error::new_spanned(
+                http_code,
+                "route status cannot be set with both `status = ...` and #[http_code(...)]",
+            )),
+            (Some(status), None) => Ok(Some(status)),
+            (None, Some(http_code)) => Ok(Some(http_code)),
+            (None, None) => Ok(None),
+        }
     }
+}
+
+fn status_value(status: Option<&LitInt>) -> Result<proc_macro2::TokenStream> {
+    let Some(status) = status else {
+        return Ok(quote!(200));
+    };
+    let value = status.base10_parse::<u16>()?;
+    Ok(quote!(#value))
 }
 
 impl Parse for RouteArgs {

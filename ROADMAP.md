@@ -37,7 +37,8 @@ Implemented today:
   method argument extractors including `#[body]`, `#[request]`,
   `#[param("name")]`, `#[params]`, `#[query]`, `#[query("name")]`,
   `#[header("name")]`, and `#[headers]`, plus `#[metadata]` for
-  Nest-style custom route/controller metadata.
+  Nest-style custom route/controller metadata and `#[http_code]` for
+  Nest-style response status metadata.
 - JSON body and JSON response helpers.
 - SSE responses with `SseEvent`, `SseStream`, `BootResponse::sse(...)`,
   `RouteDefinition::sse(...)`, `ControllerDefinition::sse(...)`, and Axum

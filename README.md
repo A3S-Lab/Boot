@@ -57,7 +57,8 @@ This repository contains the first framework slice:
   `#[sse("/events")]`, plus parameter extractors such as `#[param("id")]`,
   `#[query]`, `#[query("name")]`, `#[body]`, `#[header("name")]`, and
   `#[request]`, route metadata such as `#[metadata("roles", ["admin"])]`,
-  and WebSocket macros such as `#[websocket_gateway]` and
+  response status metadata such as `#[http_code(202)]`, and WebSocket macros
+  such as `#[websocket_gateway]` and
   `#[subscribe_message]`, plus microservice macros such as
   `#[message_controller]`, `#[message_pattern]`, and `#[event_pattern]`
 - `Middleware`, `Pipe`, `Guard`, `Interceptor`, and `ExceptionFilter` pipeline traits
@@ -315,6 +316,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@Payload()` | A typed message method argument deserialized from `TransportMessage::data` |
 | `@UsePipes(new ValidationPipe())` | `#[validate]` on a controller impl or route method |
 | `@SetMetadata("roles", ["admin"])` | `#[metadata("roles", ["admin"])]` below `#[controller]` or on a route method |
+| `@HttpCode(202)` | `#[http_code(202)]` on a JSON route method |
 | `@ApiTags("cats")` | `#[tag("cats")]` below `#[controller]` |
 | `@ApiOperation(...)` | `#[operation(summary = "...", operation_id = "...")]` on a route method |
 | `@ApiResponse(...)` | `#[response(status = 200, description = "...", schema = CatDto)]` |

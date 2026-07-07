@@ -178,6 +178,15 @@ impl MacroCatsController {
         Ok(MacroCatDto { id, name: dto.name })
     }
 
+    #[post("/{id}/touch")]
+    #[http_code(202)]
+    async fn touch(&self, #[param("id")] id: String) -> Result<MacroCatDto> {
+        Ok(MacroCatDto {
+            id,
+            name: "Touched".to_string(),
+        })
+    }
+
     #[sse("/events")]
     #[hide_from_openapi]
     async fn events(&self) -> Result<impl futures_core::Stream<Item = Result<SseEvent>>> {
@@ -358,7 +367,7 @@ async fn macros_register_injectable_services_and_controller_routes() {
         .build()
         .unwrap();
 
-    assert_eq!(app.routes().len(), 9);
+    assert_eq!(app.routes().len(), 10);
     assert_eq!(app.gateways().len(), 1);
     assert_eq!(app.message_patterns().len(), 3);
     assert_eq!(
@@ -464,6 +473,22 @@ async fn macros_register_injectable_services_and_controller_routes() {
         MacroCatDto {
             id: "generated".to_string(),
             name: "Luna".to_string(),
+        }
+    );
+
+    let touched = app
+        .call(
+            BootRequest::new(a3s_boot::HttpMethod::Post, "/macro-cats/42/touch")
+                .with_header("accept", "application/json"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(touched.status(), 202);
+    assert_eq!(
+        touched.body_json::<MacroCatDto>().unwrap(),
+        MacroCatDto {
+            id: "42".to_string(),
+            name: "Touched".to_string(),
         }
     );
 
