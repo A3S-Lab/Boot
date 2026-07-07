@@ -73,6 +73,9 @@ Implemented today:
 - Provider-backed queues with `QueueModule`, `Queue`, in-process background
   processors, typed serde JSON payloads, named/global provider exports, and
   lifecycle-managed workers.
+- Provider-backed structured logging with `LoggingModule`, `Logger`, pluggable
+  sinks, in-memory test capture, request middleware/interceptor helpers, and
+  worker-friendly injection through the same provider graph.
 
 ## Priority Order
 
@@ -401,7 +404,7 @@ Nest equivalent areas:
 - cache (implemented)
 - task scheduling (implemented)
 - queues (implemented)
-- logging
+- logging (implemented)
 - API versioning
 - serialization
 - compression
@@ -430,6 +433,9 @@ Acceptance:
 - Queue can register typed providers, enqueue serde JSON jobs, run named
   processors through lifecycle-managed in-process workers, and participate in
   module imports/exports. (Covered)
+- Logging can register typed providers, write structured records through
+  pluggable sinks, capture records in tests, and expose request/worker logging
+  integration points without forcing a concrete backend. (Covered)
 
 ## Immediate Next Task
 
@@ -437,8 +443,7 @@ Start with Milestone 8 technique modules. Keep GraphQL out of scope.
 
 Suggested implementation sequence:
 
-1. Start logging with provider-backed logger abstractions and request/worker
-   integration points that do not force a concrete logging backend.
+1. Start API versioning with route metadata and adapter-neutral matching rules.
 2. Define integration through providers, middleware, guards, interceptors, or
    adapters instead of adding one-off framework hooks.
 3. Add crate-local tests and README examples for the chosen technique module.

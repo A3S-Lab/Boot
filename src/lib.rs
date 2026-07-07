@@ -17,6 +17,8 @@ mod cache;
 mod config;
 mod error;
 mod http;
+#[cfg(feature = "logging")]
+mod logging;
 mod module;
 mod openapi;
 mod percent;
@@ -50,6 +52,11 @@ pub use config::{
 };
 pub use error::BootError;
 pub use http::{BootRequest, BootResponse, HttpMethod, SseEvent, SseStream};
+#[cfg(feature = "logging")]
+pub use logging::{
+    InMemoryLogSink, LogFields, LogLevel, LogRecord, LogSink, Logger, LoggingModule, NoopLogSink,
+    RequestLoggingInterceptor, RequestLoggingMiddleware,
+};
 pub use module::{DynamicModule, Module};
 pub use openapi::{
     openapi_schema_name, OpenApiComponents, OpenApiDocument, OpenApiInfo, OpenApiMediaType,

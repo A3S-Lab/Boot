@@ -88,6 +88,9 @@ This repository contains the first framework slice:
 - `QueueModule` behind the `queue` feature for provider-backed `Queue`
   injection, in-process background processors, JSON job payloads, named
   exports, global exports, and lifecycle-managed workers
+- `LoggingModule` behind the `logging` feature for provider-backed structured
+  `Logger` injection, pluggable `LogSink` backends, in-memory test capture, and
+  request logging middleware/interceptor helpers
 - OpenAPI route metadata, schema-crate-neutral document generation, and
   optional `/openapi.json` serving through `serve_openapi(...)`, with
   Nest-style metadata macros such as `#[tag]`, `#[operation]`, `#[response]`,
@@ -176,6 +179,14 @@ provider-backed background job processing:
 a3s-boot = { version = "0.1", features = ["queue"] }
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+Enable the optional structured logger module when the application needs
+provider-backed logging without forcing a concrete backend:
+
+```toml
+[dependencies]
+a3s-boot = { version = "0.1", features = ["logging"] }
 ```
 
 ```rust
@@ -1377,6 +1388,86 @@ serializes payloads through serde JSON; processors can call
 `.named("token")` when a module needs multiple queue providers, or `.global()`
 to make one queue visible to every module scope after registration.
 
+## Logging
+
+Enable the `logging` feature to register `LoggingModule` and inject a
+provider-backed structured `Logger`. Boot ships a `NoopLogSink` and an
+`InMemoryLogSink` for tests; production adapters can implement `LogSink` for
+their preferred backend.
+
+```rust
+use std::sync::Arc;
+
+use a3s_boot::{
+    BootApplication, BootRequest, BootResponse, HttpMethod, InMemoryLogSink, LogFields, LogLevel,
+    Logger, LoggingModule, Module, ModuleRef, ProviderDefinition, RequestLoggingInterceptor,
+    Result, RouteDefinition,
+};
+
+#[derive(Debug)]
+struct CatsService {
+    logger: Arc<Logger>,
+}
+
+impl CatsService {
+    fn create(&self, id: &str) -> Result<()> {
+        self.logger.log_with_fields(
+            LogLevel::Info,
+            "cat created",
+            LogFields::new().with("cat_id", id)?,
+        )
+    }
+}
+
+#[derive(Debug)]
+struct CatsModule {
+    logging: LoggingModule,
+}
+
+impl Module for CatsModule {
+    fn name(&self) -> &'static str {
+        "cats"
+    }
+
+    fn imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(self.logging.clone())]
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::factory::<CatsService, _>(|module_ref| {
+            let logger = module_ref.get::<Logger>()?;
+            Ok(CatsService {
+                logger: Arc::new(logger.child("cats.service")),
+            })
+        })])
+    }
+}
+
+let sink = InMemoryLogSink::new();
+let logger = Logger::new(sink.clone()).with_target("app");
+let request_logger = Arc::new(logger.clone().child("http"));
+
+let app = BootApplication::builder()
+    .use_global_interceptor(RequestLoggingInterceptor::new(request_logger))
+    .import(CatsModule {
+        logging: LoggingModule::from_logger("logging", logger),
+    })
+    .route(RouteDefinition::post("/cats", |_| async {
+        Ok(BootResponse::text_with_status(201, "ok"))
+    })?)
+    .build()?;
+
+app.call(BootRequest::new(HttpMethod::Post, "/cats")).await?;
+let records = sink.records()?;
+```
+
+`Logger::with_target(...)` and `Logger::child(...)` keep service, request, and
+worker logs separate without changing sinks. Queue processors, scheduled jobs,
+transport handlers, and WebSocket gateways can inject the same `Logger`
+provider through `ModuleRef`. `RequestLoggingMiddleware` logs incoming requests
+before the pipeline; `RequestLoggingInterceptor` logs route start/completion and
+response status after the handler.
+
 ## Middleware
 
 Middleware runs after route matching and path parameter decoding, but before
@@ -1842,6 +1933,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | Cache | Optional typed cache provider through `CacheModule` |
 | Scheduler | Optional provider-backed task scheduling through `ScheduleModule` |
 | Queue | Optional provider-backed background jobs through `QueueModule` |
+| Logger | Optional provider-backed structured logging through `LoggingModule` |
 | Filter | Error mapping into HTTP responses |
 | Lifecycle hook | Startup and shutdown behavior for modules and providers |
 
@@ -1862,6 +1954,7 @@ src/
 ├── cache.rs      # Optional typed cache module and in-memory store
 ├── config.rs     # Optional ACL-backed typed configuration module
 ├── http/         # Adapter-neutral request, response, methods, and query parsing
+├── logging.rs    # Optional provider-backed structured logging module
 ├── module/       # Module trait, dynamic modules, exports, and lifecycle hooks
 ├── pipeline/     # Middleware, pipes, guards, interceptors, filters, and execution context
 ├── provider/     # Provider tokens, definitions, and ModuleRef container
