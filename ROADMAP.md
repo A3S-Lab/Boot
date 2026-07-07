@@ -416,6 +416,7 @@ Nest equivalent areas:
 - cache (implemented)
 - task scheduling (implemented)
 - queues (implemented)
+- application events (implemented)
 - logging (implemented)
 - API versioning (implemented)
 - serialization (implemented)
@@ -446,6 +447,9 @@ Acceptance:
 - Queue can register typed providers, enqueue serde JSON jobs, run named
   processors through lifecycle-managed in-process workers, and participate in
   module imports/exports. (Covered)
+- Application events can register an in-process `EventEmitter` provider,
+  dispatch typed JSON payloads to exact or wildcard listeners, and participate
+  in module imports/exports. (Covered)
 - Logging can register typed providers, write structured records through
   pluggable sinks, capture records in tests, and expose request/worker logging
   integration points without forcing a concrete backend. (Covered)

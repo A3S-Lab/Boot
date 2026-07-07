@@ -77,6 +77,9 @@ This repository contains the first framework slice:
   transport pipes, guards, interceptors, `MessageTransport`, and
   `InProcessTransport` for adapter-neutral microservice request-response and
   event-only message dispatch
+- `EventModule` behind the `events` feature for provider-backed in-process
+  async event dispatch through `EventEmitter`, exact event names, and simple
+  wildcard listener patterns such as `cat.*` and `*`
 - `ConfigModule` behind the `config` feature for ACL-backed typed
   configuration providers, including `env(...)`, `concat(...)`, named exports,
   global exports, and `Validate` integration
@@ -971,6 +974,52 @@ Transport-specific `TransportPipe`, `TransportGuard`, and
 `TransportInterceptor` hooks run in deterministic order: pipes, validation,
 guards, interceptor `before`, handler, then interceptor `after` in reverse
 order.
+
+## Application Events
+
+Enable the `events` feature to use an in-process `EventEmitter` provider,
+similar to Nest's event emitter module. `EventModule` can register exact
+listeners such as `cat.created`, prefix listeners such as `cat.*`, or a global
+`*` listener. Events are dispatched asynchronously and payloads are serialized
+through `serde_json`, so handlers can decode typed DTOs with `data_as::<T>()`.
+
+```rust
+use a3s_boot::{BootApplication, EventEmitter, EventEnvelope, EventModule, Result};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, Serialize)]
+struct CatEvent {
+    name: String,
+}
+
+async fn app() -> Result<()> {
+    let app = BootApplication::builder()
+        .import(EventModule::in_process("events").listener(
+            "cat.created",
+            |event: EventEnvelope, _| async move {
+                let payload = event.data_as::<CatEvent>()?;
+                println!("created cat {}", payload.name);
+                Ok(())
+            },
+        ))
+        .build()?;
+
+    let emitter = app.get::<EventEmitter>()?;
+    emitter
+        .emit(
+            "cat.created",
+            &CatEvent {
+                name: "Milo".to_string(),
+            },
+        )
+        .await?;
+    Ok(())
+}
+```
+
+`EventModule::global()` exports the emitter across module boundaries, and
+`EventModule::named(...)` can register a named emitter provider when a service
+needs separate event channels.
 
 ## Providers
 
@@ -2246,6 +2295,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | Pipe | Request validation and transformation |
 | WebSocket gateway | Event-based bidirectional message handlers |
 | Message transport | Adapter-neutral request-response and event-only message patterns |
+| Event emitter | Optional provider-backed in-process application events |
 | Configuration | Optional ACL-backed typed providers through `ConfigModule` |
 | Cache | Optional typed cache provider through `CacheModule` |
 | Scheduler | Optional provider-backed task scheduling through `ScheduleModule` |
@@ -2276,6 +2326,7 @@ src/
 ├── cache.rs      # Optional typed cache module and in-memory store
 ├── compression.rs # Optional gzip response compression interceptor
 ├── config.rs     # Optional ACL-backed typed configuration module
+├── events.rs     # Optional in-process application event emitter module
 ├── http/         # Adapter-neutral request, response, methods, and query parsing
 ├── logging.rs    # Optional provider-backed structured logging module
 ├── module/       # Module trait, dynamic modules, exports, and lifecycle hooks
