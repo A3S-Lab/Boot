@@ -18,6 +18,8 @@ mod compression;
 #[cfg(feature = "config")]
 mod config;
 mod error;
+#[cfg(feature = "file-upload")]
+mod file_upload;
 mod http;
 #[cfg(feature = "logging")]
 mod logging;
@@ -57,6 +59,8 @@ pub use config::{
     acl_document_to_json, parse_acl_config, parse_validated_acl_config, ConfigModule,
 };
 pub use error::BootError;
+#[cfg(feature = "file-upload")]
+pub use file_upload::{MultipartField, MultipartForm, MultipartOptions, UploadedFile};
 pub use http::{BootRequest, BootResponse, HttpMethod, SseEvent, SseStream};
 #[cfg(feature = "logging")]
 pub use logging::{

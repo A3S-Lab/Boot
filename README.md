@@ -93,6 +93,9 @@ This repository contains the first framework slice:
   request logging middleware/interceptor helpers
 - `CompressionInterceptor` behind the `compression` feature for gzip response
   compression with `Accept-Encoding` negotiation and content-length updates
+- multipart file upload helpers behind the `file-upload` feature for
+  adapter-neutral `multipart/form-data` parsing with field, file, count, and
+  body limits
 - adapter-neutral API versioning through URI segments, request headers, or
   media type parameters, with route-level and controller-level version metadata
 - `SerializationInterceptor` and `SerializationOptions` for Nest-style JSON
@@ -201,6 +204,14 @@ compress eligible responses for clients that send `Accept-Encoding: gzip`:
 ```toml
 [dependencies]
 a3s-boot = { version = "0.1", features = ["compression"] }
+```
+
+Enable optional multipart file upload helpers when handlers need to parse
+`multipart/form-data` requests:
+
+```toml
+[dependencies]
+a3s-boot = { version = "0.1", features = ["file-upload"] }
 ```
 
 ```rust
@@ -1861,6 +1872,50 @@ Clients opt in with `Accept-Encoding: gzip`. Compressed responses include
 `Content-Encoding: gzip` and `Vary: accept-encoding`. If the response had a
 `Content-Length`, Boot rewrites it to the compressed body length.
 
+## File Upload
+
+Enable the `file-upload` feature to parse `multipart/form-data` bodies from
+`BootRequest`. This mirrors Nest's file upload workflow while keeping the core
+adapter-neutral: adapters only need to preserve the request body and headers.
+
+```rust
+use a3s_boot::{
+    BootRequest, BootResponse, ControllerDefinition, MultipartOptions, Result,
+};
+
+fn uploads_controller() -> Result<ControllerDefinition> {
+    ControllerDefinition::new("/uploads")?.post("/", |request: BootRequest| async move {
+        let form = request
+            .multipart_form_with_options(
+                MultipartOptions::new()
+                    .with_max_body_size(2 * 1024 * 1024)
+                    .with_max_file_size(1024 * 1024)
+                    .with_max_files(4),
+            )
+            .await?;
+
+        let title = form.field("title").map(|field| field.value()).unwrap_or("");
+        let avatar = form.file("avatar").ok_or_else(|| {
+            a3s_boot::BootError::BadRequest("avatar is required".to_string())
+        })?;
+
+        Ok(BootResponse::text(format!(
+            "title={title}, file={}, bytes={}",
+            avatar.file_name(),
+            avatar.size()
+        )))
+    })
+}
+```
+
+`MultipartForm` separates text fields from files. Use `field(...)`,
+`field_values(...)`, `file(...)`, and `files_by_name(...)` for lookup.
+`MultipartOptions` can limit total body size, per-field size, per-file size,
+field count, and file count. Non-multipart requests return
+`BootError::UnsupportedMediaType`; malformed multipart bodies and invalid text
+fields return `BootError::BadRequest`; limit failures return
+`BootError::PayloadTooLarge`.
+
 ## Params And Query
 
 Boot keeps route params adapter-neutral. Use whole `{name}` segments in routes
@@ -2141,6 +2196,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | Queue | Optional provider-backed background jobs through `QueueModule` |
 | Logger | Optional provider-backed structured logging through `LoggingModule` |
 | Compression | Optional gzip response compression through `CompressionInterceptor` |
+| File upload | Optional multipart form parsing through `BootRequest` helpers |
 | API versioning | URI, header, or media type version matching through route metadata |
 | Serialization | JSON response shaping through `SerializationInterceptor` metadata |
 | Filter | Error mapping into HTTP responses |
@@ -2177,6 +2233,7 @@ src/
 ├── versioning.rs # Adapter-neutral API versioning strategies and route metadata
 ├── websocket/    # Adapter-neutral WebSocket gateways, messages, and pipeline hooks
 ├── error.rs
+├── file_upload.rs # Optional multipart form and file upload helpers
 └── lib.rs
 ```
 

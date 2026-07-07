@@ -85,6 +85,9 @@ Implemented today:
 - Optional gzip response compression with `CompressionInterceptor`,
   `CompressionOptions`, `Accept-Encoding` negotiation, `Vary` handling, and
   content-length updates.
+- Optional multipart file upload helpers with `BootRequest::multipart_form`,
+  `MultipartOptions`, text field and uploaded-file accessors, and body/count/
+  per-field/per-file limits.
 
 ## Priority Order
 
@@ -417,7 +420,7 @@ Nest equivalent areas:
 - API versioning (implemented)
 - serialization (implemented)
 - compression (implemented)
-- file upload
+- file upload (implemented)
 - security helpers such as CORS, CSRF, helmet-like headers, and rate limiting
 
 Tasks:
@@ -455,16 +458,19 @@ Acceptance:
 - Compression can gzip eligible responses when requested by `Accept-Encoding`,
   skip too-small, streaming, and already-encoded responses, set `Vary`, and keep
   content length valid after rewriting. (Covered)
+- File upload can parse adapter-neutral multipart forms, expose repeated text
+  fields and uploaded files, reject non-multipart or malformed requests, and
+  enforce body, field, file, and count limits. (Covered)
 
 ## Immediate Next Task
 
-Continue Milestone 8 technique modules with file upload. Keep GraphQL out of
+Continue Milestone 8 technique modules with security helpers. Keep GraphQL out of
 scope.
 
 Suggested implementation sequence:
 
-1. Start file upload with adapter-neutral multipart request helpers and size
-   limits.
+1. Start security helpers with CORS middleware, security headers middleware,
+   CSRF guard, and rate limiting primitives.
 2. Define integration through providers, middleware, guards, interceptors, or
    adapters instead of adding one-off framework hooks.
 3. Add crate-local tests and README examples for the chosen technique module.
