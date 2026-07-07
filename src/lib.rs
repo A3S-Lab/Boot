@@ -33,6 +33,8 @@ mod queue;
 mod routing;
 #[cfg(feature = "schedule")]
 mod schedule;
+#[cfg(feature = "security")]
+mod security;
 mod serialization;
 mod transport;
 mod validation;
@@ -89,6 +91,12 @@ pub use routing::{ControllerDefinition, RouteDefinition, RouteHandler};
 pub use schedule::{
     InProcessScheduler, ScheduleContext, ScheduleModule, ScheduleTrigger, ScheduledJob,
     ScheduledJobError, ScheduledJobInfo, ScheduledTask, Scheduler, SchedulerBackend,
+};
+#[cfg(feature = "security")]
+pub use security::{
+    CorsMiddleware, CorsOptions, CorsPreflightRoute, CorsResponseInterceptor, CsrfGuard,
+    CsrfOptions, RateLimitGuard, RateLimitOptions, SecurityHeadersInterceptor,
+    SecurityHeadersOptions,
 };
 pub use serialization::{SerializationInterceptor, SerializationOptions};
 pub use transport::{

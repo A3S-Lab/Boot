@@ -422,6 +422,7 @@ Nest equivalent areas:
 - compression (implemented)
 - file upload (implemented)
 - security helpers such as CORS, CSRF, helmet-like headers, and rate limiting
+  (implemented)
 
 Tasks:
 
@@ -461,21 +462,23 @@ Acceptance:
 - File upload can parse adapter-neutral multipart forms, expose repeated text
   fields and uploaded files, reject non-multipart or malformed requests, and
   enforce body, field, file, and count limits. (Covered)
+- Security helpers can handle CORS preflight and actual response headers, add
+  helmet-like response headers, reject invalid CSRF tokens on unsafe methods,
+  and enforce in-memory fixed-window rate limits. (Covered)
 
 ## Immediate Next Task
 
-Continue Milestone 8 technique modules with security helpers. Keep GraphQL out of
-scope.
+Continue the Nest framework parity audit and pick the next missing framework
+module. Keep GraphQL out of scope.
 
 Suggested implementation sequence:
 
-1. Start security helpers with CORS middleware, security headers middleware,
-   CSRF guard, and rate limiting primitives.
+1. Re-check remaining Nest framework capabilities against implemented Boot
+   modules.
 2. Define integration through providers, middleware, guards, interceptors, or
    adapters instead of adding one-off framework hooks.
-3. Add crate-local tests and README examples for the chosen technique module.
-4. Update README examples to use extractor macros.
-5. Run:
+3. Add crate-local tests and README examples for the chosen framework module.
+4. Run:
 
 ```sh
 cargo fmt --all

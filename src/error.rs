@@ -31,6 +31,8 @@ pub enum BootError {
     UnsupportedMediaType(String),
     #[error("not acceptable: {0}")]
     NotAcceptable(String),
+    #[error("too many requests: {0}")]
+    TooManyRequests(String),
     #[error("adapter error: {0}")]
     Adapter(String),
     #[error("internal error: {0}")]
@@ -51,6 +53,7 @@ impl BootError {
             Self::PayloadTooLarge(_) => 413,
             Self::UnsupportedMediaType(_) => 415,
             Self::NotAcceptable(_) => 406,
+            Self::TooManyRequests(_) => 429,
             _ => 500,
         }
     }
@@ -65,7 +68,8 @@ impl BootError {
             | Self::BadRequest(message)
             | Self::PayloadTooLarge(message)
             | Self::UnsupportedMediaType(message)
-            | Self::NotAcceptable(message) => message.clone(),
+            | Self::NotAcceptable(message)
+            | Self::TooManyRequests(message) => message.clone(),
             error => error.to_string(),
         }
     }
@@ -86,6 +90,7 @@ impl BootError {
             Self::PayloadTooLarge(message) => Self::PayloadTooLarge(message.clone()),
             Self::UnsupportedMediaType(message) => Self::UnsupportedMediaType(message.clone()),
             Self::NotAcceptable(message) => Self::NotAcceptable(message.clone()),
+            Self::TooManyRequests(message) => Self::TooManyRequests(message.clone()),
             Self::Adapter(message) => Self::Adapter(message.clone()),
             Self::Internal(message) => Self::Internal(message.clone()),
             Self::Io(error) => Self::Io(std::io::Error::new(error.kind(), error.to_string())),

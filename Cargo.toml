@@ -27,6 +27,7 @@ macros = ["dep:a3s-boot-macros"]
 openapi-schemas = ["dep:schemars"]
 queue = ["dep:tokio"]
 schedule = ["dep:chrono", "dep:cron", "dep:tokio"]
+security = []
 
 [dependencies]
 a3s-acl = { version = "0.2.1", optional = true }

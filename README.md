@@ -96,6 +96,9 @@ This repository contains the first framework slice:
 - multipart file upload helpers behind the `file-upload` feature for
   adapter-neutral `multipart/form-data` parsing with field, file, count, and
   body limits
+- security helpers behind the `security` feature for CORS preflight and actual
+  response headers, helmet-like security headers, CSRF guards, and in-memory
+  rate limiting
 - adapter-neutral API versioning through URI segments, request headers, or
   media type parameters, with route-level and controller-level version metadata
 - `SerializationInterceptor` and `SerializationOptions` for Nest-style JSON
@@ -1916,6 +1919,59 @@ field count, and file count. Non-multipart requests return
 fields return `BootError::BadRequest`; limit failures return
 `BootError::PayloadTooLarge`.
 
+## Security Helpers
+
+Enable the `security` feature to use Nest-style security hooks through the
+same middleware, guard, and interceptor pipeline as the rest of Boot.
+`use_global_cors(...)` registers CORS response headers and generated hidden
+`OPTIONS` preflight routes for known route shapes. `use_global_security_headers`
+adds helmet-like response headers when handlers have not set them. CSRF and
+rate limiting are ordinary guards, so they can be global, controller-level, or
+route-level.
+
+```rust
+use a3s_boot::{
+    BootApplication, BootResponse, CorsOptions, CsrfOptions, HttpMethod,
+    RateLimitOptions, Result, RouteDefinition, SecurityHeadersOptions,
+};
+use std::time::Duration;
+
+fn app() -> Result<BootApplication> {
+    BootApplication::builder()
+        .use_global_cors(
+            CorsOptions::new()
+                .allow_origin("https://console.example")
+                .allow_methods([HttpMethod::Get, HttpMethod::Post])
+                .allow_headers(["content-type", "x-csrf-token"])
+                .allow_credentials()
+                .with_max_age(600),
+        )
+        .use_global_security_headers(
+            SecurityHeadersOptions::new()
+                .with_content_security_policy("default-src 'self'")
+                .with_strict_transport_security("max-age=31536000"),
+        )
+        .use_global_csrf(CsrfOptions::new())
+        .use_global_rate_limit(
+            RateLimitOptions::new()
+                .with_max_requests(120)
+                .with_window(Duration::from_secs(60))
+                .with_key_header("x-forwarded-for"),
+        )
+        .route(RouteDefinition::get("/cats", |_| async {
+            Ok(BootResponse::text("Milo"))
+        })?)
+        .build()
+}
+```
+
+CSRF checks protect `POST`, `PUT`, `PATCH`, and `DELETE` by default. The guard
+compares the `x-csrf-token` header with the `csrf-token` cookie and returns
+HTTP 403 for missing or mismatched tokens. The rate limit guard uses an
+in-memory fixed window and returns HTTP 429 after the configured request count;
+use it for local services, tests, and adapter-neutral policy wiring before
+plugging in a distributed backend.
+
 ## Params And Query
 
 Boot keeps route params adapter-neutral. Use whole `{name}` segments in routes
@@ -2197,6 +2253,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | Logger | Optional provider-backed structured logging through `LoggingModule` |
 | Compression | Optional gzip response compression through `CompressionInterceptor` |
 | File upload | Optional multipart form parsing through `BootRequest` helpers |
+| Security | Optional CORS, security headers, CSRF, and rate limiting helpers |
 | API versioning | URI, header, or media type version matching through route metadata |
 | Serialization | JSON response shaping through `SerializationInterceptor` metadata |
 | Filter | Error mapping into HTTP responses |
@@ -2227,6 +2284,7 @@ src/
 ├── queue.rs      # Optional provider-backed queue and in-process backend
 ├── routing/      # Route handlers, controllers, route execution, and path matching
 ├── schedule.rs   # Optional provider-backed scheduler and in-process backend
+├── security.rs   # Optional CORS, security headers, CSRF, and rate limiting helpers
 ├── serialization.rs # Adapter-neutral JSON response shaping interceptor
 ├── transport/    # Adapter-neutral microservice message patterns and transports
 ├── validation.rs # DTO validation trait and route validation hooks

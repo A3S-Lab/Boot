@@ -8,6 +8,12 @@ use crate::{
 };
 #[cfg(feature = "compression")]
 use crate::{CompressionInterceptor, CompressionOptions};
+#[cfg(feature = "security")]
+use crate::{
+    CorsMiddleware, CorsOptions, CorsPreflightRoute, CorsResponseInterceptor, CsrfGuard,
+    CsrfOptions, RateLimitGuard, RateLimitOptions, SecurityHeadersInterceptor,
+    SecurityHeadersOptions,
+};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -22,6 +28,8 @@ pub struct BootApplicationBuilder {
     global_prefix: Option<String>,
     api_versioning: Option<ApiVersioning>,
     openapi_routes: Vec<(String, OpenApiInfo)>,
+    #[cfg(feature = "security")]
+    cors_preflight: Option<CorsPreflightRoute>,
 }
 
 impl BootApplicationBuilder {
@@ -131,6 +139,41 @@ impl BootApplicationBuilder {
         self
     }
 
+    /// Add CORS handling for preflight and normal responses.
+    #[cfg(feature = "security")]
+    pub fn use_global_cors(mut self, options: CorsOptions) -> Self {
+        self.global_pipeline
+            .push_middleware(CorsMiddleware::with_options(options.clone()));
+        self.global_pipeline
+            .push_interceptor(CorsResponseInterceptor::with_options(options.clone()));
+        self.cors_preflight = Some(CorsPreflightRoute::with_options(options));
+        self
+    }
+
+    /// Add common security response headers, similar to a small Helmet setup.
+    #[cfg(feature = "security")]
+    pub fn use_global_security_headers(mut self, options: SecurityHeadersOptions) -> Self {
+        self.global_pipeline
+            .push_interceptor(SecurityHeadersInterceptor::with_options(options));
+        self
+    }
+
+    /// Add an application-wide CSRF guard for unsafe HTTP methods.
+    #[cfg(feature = "security")]
+    pub fn use_global_csrf(mut self, options: CsrfOptions) -> Self {
+        self.global_pipeline
+            .push_guard(CsrfGuard::with_options(options));
+        self
+    }
+
+    /// Add an in-memory application-wide rate limit guard.
+    #[cfg(feature = "security")]
+    pub fn use_global_rate_limit(mut self, options: RateLimitOptions) -> Self {
+        self.global_pipeline
+            .push_guard(RateLimitGuard::with_options(options));
+        self
+    }
+
     /// Add an application-wide exception filter, similar to Nest's global filters.
     pub fn use_global_filter<F>(mut self, filter: F) -> Self
     where
@@ -196,6 +239,11 @@ impl BootApplicationBuilder {
             routes.push(route);
         }
 
+        #[cfg(feature = "security")]
+        if let Some(cors_preflight) = &self.cors_preflight {
+            add_cors_preflight_routes(&mut routes, cors_preflight, &self.global_pipeline)?;
+        }
+
         validate_unique_routes(&routes, self.api_versioning.as_ref())?;
         validate_unique_gateways(&gateways)?;
         validate_unique_message_patterns(&message_patterns)?;
@@ -232,6 +280,39 @@ fn openapi_json_route(path: String, document: OpenApiDocument) -> Result<RouteDe
         async move { BootResponse::json(&document) }
     })
     .map(RouteDefinition::hide_from_openapi)
+}
+
+#[cfg(feature = "security")]
+fn add_cors_preflight_routes(
+    routes: &mut Vec<RouteDefinition>,
+    cors_preflight: &CorsPreflightRoute,
+    pipeline: &PipelineComponents,
+) -> Result<()> {
+    let existing_options = routes
+        .iter()
+        .filter(|route| route.method() == crate::HttpMethod::Options)
+        .map(RouteDefinition::path_shape)
+        .collect::<BTreeSet<_>>();
+    let mut generated = BTreeSet::new();
+    let source_routes = routes.clone();
+
+    for route in source_routes {
+        if route.method() == crate::HttpMethod::Options {
+            continue;
+        }
+
+        let path_shape = route.path_shape();
+        if existing_options.contains(&path_shape) || !generated.insert(path_shape) {
+            continue;
+        }
+
+        let preflight = RouteDefinition::options(route.path().to_string(), cors_preflight.clone())?
+            .hide_from_openapi()
+            .with_pipeline_prefix(pipeline);
+        routes.push(preflight);
+    }
+
+    Ok(())
 }
 
 fn apply_global_prefix(
