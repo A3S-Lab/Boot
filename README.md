@@ -105,6 +105,9 @@ This repository contains the first framework slice:
 - security helpers behind the `security` feature for CORS preflight and actual
   response headers, helmet-like security headers, CSRF guards, and in-memory
   rate limiting
+- `SessionModule` behind the `session` feature for provider-backed sessions,
+  in-memory storage, session middleware, and `Set-Cookie` persistence through an
+  interceptor
 - adapter-neutral API versioning through URI segments, request headers, or
   media type parameters, with route-level and controller-level version metadata
 - `SerializationInterceptor` and `SerializationOptions` for Nest-style JSON
@@ -2057,6 +2060,48 @@ in-memory fixed window and returns HTTP 429 after the configured request count;
 use it for local services, tests, and adapter-neutral policy wiring before
 plugging in a distributed backend.
 
+## Sessions
+
+Enable the `session` feature to use provider-backed sessions, similar to Nest's
+session middleware setup. `use_global_session_module(...)` imports the session
+provider, runs `SessionMiddleware` before handlers, and runs
+`SessionCookieInterceptor` after handlers so a session cookie is only written
+when session data exists.
+
+```rust
+use a3s_boot::{
+    BootApplication, BootRequest, BootResponse, Result, RouteDefinition,
+    SessionManager, SessionModule, SessionOptions,
+};
+use std::time::Duration;
+
+fn app() -> Result<BootApplication> {
+    let sessions = SessionManager::in_memory(
+        SessionOptions::new()
+            .with_cookie_name("sid")
+            .with_ttl(Duration::from_secs(60 * 60)),
+    );
+    let login_sessions = sessions.clone();
+
+    BootApplication::builder()
+        .use_global_session_module(SessionModule::from_manager("sessions", sessions))
+        .route(RouteDefinition::post("/login", move |request: BootRequest| {
+            let sessions = login_sessions.clone();
+            async move {
+                let session_id = sessions.require_session_id(&request)?;
+                sessions.set(&session_id, "user_id", &"u1")?;
+                Ok(BootResponse::text("logged in"))
+            }
+        })?)
+        .build()
+}
+```
+
+`SessionOptions` controls the cookie name, TTL, path, domain, `HttpOnly`,
+`Secure`, `SameSite`, and rolling-cookie behavior. The default store is
+in-memory for tests and single-process services; production adapters can provide
+a custom `SessionStore`.
+
 ## Params And Query
 
 Boot keeps route params adapter-neutral. Use whole `{name}` segments in routes
@@ -2341,6 +2386,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | Compression | Optional gzip response compression through `CompressionInterceptor` |
 | File upload | Optional multipart form parsing through `BootRequest` helpers |
 | Security | Optional CORS, security headers, CSRF, and rate limiting helpers |
+| Session | Optional provider-backed session store, middleware, and cookie persistence |
 | API versioning | URI, header, or media type version matching through route metadata |
 | Serialization | JSON response shaping through `SerializationInterceptor` metadata |
 | Filter | Error mapping into HTTP responses |
@@ -2375,6 +2421,7 @@ src/
 ├── schedule.rs   # Optional provider-backed scheduler and in-process backend
 ├── security.rs   # Optional CORS, security headers, CSRF, and rate limiting helpers
 ├── serialization.rs # Adapter-neutral JSON response shaping interceptor
+├── session.rs    # Optional provider-backed session store and cookie pipeline
 ├── transport/    # Adapter-neutral microservice message patterns and transports
 ├── validation.rs # DTO validation trait and route validation hooks
 ├── versioning.rs # Adapter-neutral API versioning strategies and route metadata

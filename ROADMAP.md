@@ -425,6 +425,7 @@ Nest equivalent areas:
 - file upload (implemented)
 - security helpers such as CORS, CSRF, helmet-like headers, and rate limiting
   (implemented)
+- sessions (implemented)
 
 Tasks:
 
@@ -473,6 +474,9 @@ Acceptance:
 - Security helpers can handle CORS preflight and actual response headers, add
   helmet-like response headers, reject invalid CSRF tokens on unsafe methods,
   and enforce in-memory fixed-window rate limits. (Covered)
+- Sessions can register a provider-backed `SessionManager`, bind session ids
+  before handlers, persist session cookies after handlers, and support
+  in-memory or custom stores. (Covered)
 
 ## Immediate Next Task
 

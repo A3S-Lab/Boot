@@ -40,6 +40,8 @@ mod schedule;
 #[cfg(feature = "security")]
 mod security;
 mod serialization;
+#[cfg(feature = "session")]
+mod session;
 mod transport;
 mod validation;
 mod versioning;
@@ -110,6 +112,11 @@ pub use security::{
     SecurityHeadersOptions,
 };
 pub use serialization::{SerializationInterceptor, SerializationOptions};
+#[cfg(feature = "session")]
+pub use session::{
+    InMemorySessionStore, SessionCookieInterceptor, SessionCookieSameSite, SessionManager,
+    SessionMiddleware, SessionModule, SessionOptions, SessionStore,
+};
 pub use transport::{
     InProcessTransport, InProcessTransportClient, IntoTransportReply, MessagePatternDefinition,
     MessagePatternKind, MessageTransport, TransportContext, TransportGuard, TransportInterceptor,

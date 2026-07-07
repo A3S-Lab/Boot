@@ -14,6 +14,8 @@ use crate::{
     CsrfOptions, RateLimitGuard, RateLimitOptions, SecurityHeadersInterceptor,
     SecurityHeadersOptions,
 };
+#[cfg(feature = "session")]
+use crate::{SessionCookieInterceptor, SessionManager, SessionMiddleware, SessionModule};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -171,6 +173,25 @@ impl BootApplicationBuilder {
     pub fn use_global_rate_limit(mut self, options: RateLimitOptions) -> Self {
         self.global_pipeline
             .push_guard(RateLimitGuard::with_options(options));
+        self
+    }
+
+    /// Add global session middleware and cookie persistence.
+    #[cfg(feature = "session")]
+    pub fn use_global_sessions(mut self, manager: SessionManager) -> Self {
+        self.global_pipeline
+            .push_middleware(SessionMiddleware::new(manager.clone()));
+        self.global_pipeline
+            .push_interceptor(SessionCookieInterceptor::new(manager));
+        self
+    }
+
+    /// Import a session module and apply its middleware/interceptor globally.
+    #[cfg(feature = "session")]
+    pub fn use_global_session_module(mut self, module: SessionModule) -> Self {
+        let manager = module.manager();
+        self = self.use_global_sessions(manager);
+        self.modules.push(Arc::new(module));
         self
     }
 
