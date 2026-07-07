@@ -1,6 +1,7 @@
 use a3s_boot::{
     BootApplication, BootError, BootRequest, BootResponse, BoxFuture, ControllerDefinition,
-    ExecutionContext, HttpMethod, Interceptor, Module, ModuleRef, Result, RouteDefinition,
+    ExecutionContext, HttpMethod, Interceptor, Middleware, MiddlewareOutcome, Module, ModuleRef,
+    Result, RouteDefinition,
 };
 use std::sync::Arc;
 
@@ -39,6 +40,85 @@ async fn route_pipeline_runs_pipes_guards_interceptors_and_filters() {
         response.headers.get("x-boot").map(String::as_str),
         Some("ok")
     );
+}
+
+#[tokio::test]
+async fn middleware_runs_before_pipes_and_can_mutate_requests() {
+    let route = RouteDefinition::post("/", |request: BootRequest| async move {
+        Ok(BootResponse::text(format!(
+            "{}:{}",
+            request.header("x-middleware").unwrap_or("missing"),
+            request.text()?
+        )))
+    })
+    .unwrap()
+    .with_middleware(|request: BootRequest| async move {
+        Ok(MiddlewareOutcome::next(
+            request
+                .with_header("x-middleware", "route")
+                .with_body("from-middleware"),
+        ))
+    })
+    .with_pipe(|request: BootRequest| async move {
+        let body = request.text()?;
+        Ok(request.with_body(format!("{body}+pipe")))
+    });
+
+    let response = route
+        .call(BootRequest::new(HttpMethod::Post, "/").with_body("raw"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.body, b"route:from-middleware+pipe");
+}
+
+#[tokio::test]
+async fn middleware_can_short_circuit_before_guards() {
+    let guard_calls = Arc::new(std::sync::Mutex::new(0usize));
+    let guard_log = Arc::clone(&guard_calls);
+    let route = RouteDefinition::get("/", |_| async { Ok(BootResponse::text("unreachable")) })
+        .unwrap()
+        .with_middleware(|_| async {
+            Ok(MiddlewareOutcome::response(
+                BootResponse::text("middleware").with_status(202),
+            ))
+        })
+        .with_guard(move |_| {
+            let guard_log = Arc::clone(&guard_log);
+            async move {
+                *guard_log.lock().unwrap() += 1;
+                Ok(false)
+            }
+        });
+
+    let response = route
+        .call(BootRequest::new(HttpMethod::Get, "/"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 202);
+    assert_eq!(response.body, b"middleware");
+    assert_eq!(*guard_calls.lock().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn route_filters_handle_middleware_errors() {
+    let route = RouteDefinition::get("/", |_| async { Ok(BootResponse::text("unreachable")) })
+        .unwrap()
+        .with_middleware(|_| async { Err(BootError::BadRequest("bad middleware".to_string())) })
+        .with_filter(|context: ExecutionContext, error: BootError| async move {
+            Ok(Some(
+                BootResponse::text(format!("{}: {error}", context.route_path)).with_status(400),
+            ))
+        });
+
+    let response = route
+        .call(BootRequest::new(HttpMethod::Get, "/"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 400);
+    assert_eq!(response.body, b"/: bad request: bad middleware");
 }
 
 #[tokio::test]
@@ -184,6 +264,16 @@ impl Interceptor for TraceInterceptor {
     }
 }
 
+fn trace_middleware(
+    name: &'static str,
+    log: Arc<std::sync::Mutex<Vec<String>>>,
+) -> impl Fn(BootRequest) -> std::future::Ready<Result<MiddlewareOutcome>> + Send + Sync + 'static {
+    move |request| {
+        log.lock().unwrap().push(format!("middleware:{name}"));
+        std::future::ready(Ok(MiddlewareOutcome::next(request)))
+    }
+}
+
 #[derive(Debug)]
 struct PipelineModule {
     log: Arc<std::sync::Mutex<Vec<String>>>,
@@ -235,6 +325,129 @@ async fn global_and_controller_interceptors_wrap_route_in_order() {
             "after:global"
         ]
     );
+}
+
+#[derive(Debug)]
+struct MiddlewareOrderModule {
+    log: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl Module for MiddlewareOrderModule {
+    fn name(&self) -> &'static str {
+        "middleware-order"
+    }
+
+    fn middleware(&self) -> Vec<Arc<dyn Middleware>> {
+        vec![Arc::new(trace_middleware("module", Arc::clone(&self.log)))]
+    }
+
+    fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
+        let log = Arc::clone(&self.log);
+        let pipe_log = Arc::clone(&self.log);
+        let guard_log = Arc::clone(&self.log);
+        let handler_log = Arc::clone(&self.log);
+
+        let route = RouteDefinition::get("/", move |_| {
+            let handler_log = Arc::clone(&handler_log);
+            async move {
+                handler_log.lock().unwrap().push("handler".to_string());
+                Ok(BootResponse::text("ok"))
+            }
+        })?
+        .with_middleware(trace_middleware("route", Arc::clone(&log)))
+        .with_pipe(move |request: BootRequest| {
+            let pipe_log = Arc::clone(&pipe_log);
+            async move {
+                pipe_log.lock().unwrap().push("pipe".to_string());
+                Ok(request)
+            }
+        })
+        .with_guard(move |_| {
+            let guard_log = Arc::clone(&guard_log);
+            async move {
+                guard_log.lock().unwrap().push("guard".to_string());
+                Ok(true)
+            }
+        })
+        .with_interceptor(TraceInterceptor::new("route", Arc::clone(&self.log)));
+
+        Ok(vec![ControllerDefinition::new("/middleware-order")?
+            .with_middleware(trace_middleware("controller", Arc::clone(&self.log)))
+            .route(route)?])
+    }
+}
+
+#[tokio::test]
+async fn middleware_runs_before_pipes_guards_interceptors_and_handlers() {
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let app = BootApplication::builder()
+        .use_global_middleware(trace_middleware("global", Arc::clone(&log)))
+        .import(MiddlewareOrderModule {
+            log: Arc::clone(&log),
+        })
+        .build()
+        .unwrap();
+
+    let response = app
+        .call(BootRequest::new(HttpMethod::Get, "/middleware-order"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.body, b"ok");
+    assert_eq!(
+        log.lock().unwrap().as_slice(),
+        [
+            "middleware:global",
+            "middleware:module",
+            "middleware:controller",
+            "middleware:route",
+            "pipe",
+            "guard",
+            "before:route",
+            "handler",
+            "after:route"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn route_scoped_middleware_only_applies_to_that_route() {
+    let app = BootApplication::builder()
+        .route(
+            RouteDefinition::get("/scoped", |request: BootRequest| async move {
+                Ok(BootResponse::text(
+                    request.header("x-route").unwrap_or("missing"),
+                ))
+            })
+            .unwrap()
+            .with_middleware(|request: BootRequest| async move {
+                Ok(MiddlewareOutcome::next(
+                    request.with_header("x-route", "scoped"),
+                ))
+            }),
+        )
+        .route(
+            RouteDefinition::get("/plain", |request: BootRequest| async move {
+                Ok(BootResponse::text(
+                    request.header("x-route").unwrap_or("missing"),
+                ))
+            })
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+
+    let scoped = app
+        .call(BootRequest::new(HttpMethod::Get, "/scoped"))
+        .await
+        .unwrap();
+    let plain = app
+        .call(BootRequest::new(HttpMethod::Get, "/plain"))
+        .await
+        .unwrap();
+
+    assert_eq!(scoped.body, b"scoped");
+    assert_eq!(plain.body, b"missing");
 }
 
 #[derive(Debug)]

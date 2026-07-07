@@ -1,6 +1,6 @@
 use super::definition::RouteDefinition;
 use crate::routing::handler::RouteHandler;
-use crate::{BootRequest, BootResponse, HttpMethod, Result, SseEvent};
+use crate::{BootRequest, BootResponse, HttpMethod, OpenApiResponse, Result, SseEvent, Validate};
 use futures_core::Stream;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -84,6 +84,30 @@ impl RouteDefinition {
         Self::json_with_status(HttpMethod::Post, path, status, handler)
     }
 
+    pub fn post_validated_json<T, H, Fut, R>(path: impl Into<String>, handler: H) -> Result<Self>
+    where
+        T: DeserializeOwned + Validate + Send + 'static,
+        H: Fn(T) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        Self::post_validated_json_with_status(path, 200, handler)
+    }
+
+    pub fn post_validated_json_with_status<T, H, Fut, R>(
+        path: impl Into<String>,
+        status: u16,
+        handler: H,
+    ) -> Result<Self>
+    where
+        T: DeserializeOwned + Validate + Send + 'static,
+        H: Fn(T) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        Self::validated_json_with_status(HttpMethod::Post, path, status, handler)
+    }
+
     pub fn put<H>(path: impl Into<String>, handler: H) -> Result<Self>
     where
         H: RouteHandler,
@@ -115,6 +139,30 @@ impl RouteDefinition {
         Self::json_with_status(HttpMethod::Put, path, status, handler)
     }
 
+    pub fn put_validated_json<T, H, Fut, R>(path: impl Into<String>, handler: H) -> Result<Self>
+    where
+        T: DeserializeOwned + Validate + Send + 'static,
+        H: Fn(T) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        Self::put_validated_json_with_status(path, 200, handler)
+    }
+
+    pub fn put_validated_json_with_status<T, H, Fut, R>(
+        path: impl Into<String>,
+        status: u16,
+        handler: H,
+    ) -> Result<Self>
+    where
+        T: DeserializeOwned + Validate + Send + 'static,
+        H: Fn(T) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        Self::validated_json_with_status(HttpMethod::Put, path, status, handler)
+    }
+
     pub fn patch<H>(path: impl Into<String>, handler: H) -> Result<Self>
     where
         H: RouteHandler,
@@ -144,6 +192,30 @@ impl RouteDefinition {
         R: Serialize + Send + 'static,
     {
         Self::json_with_status(HttpMethod::Patch, path, status, handler)
+    }
+
+    pub fn patch_validated_json<T, H, Fut, R>(path: impl Into<String>, handler: H) -> Result<Self>
+    where
+        T: DeserializeOwned + Validate + Send + 'static,
+        H: Fn(T) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        Self::patch_validated_json_with_status(path, 200, handler)
+    }
+
+    pub fn patch_validated_json_with_status<T, H, Fut, R>(
+        path: impl Into<String>,
+        status: u16,
+        handler: H,
+    ) -> Result<Self>
+    where
+        T: DeserializeOwned + Validate + Send + 'static,
+        H: Fn(T) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        Self::validated_json_with_status(HttpMethod::Patch, path, status, handler)
     }
 
     pub fn delete<H>(path: impl Into<String>, handler: H) -> Result<Self>
@@ -212,6 +284,7 @@ impl RouteDefinition {
                 BootResponse::json_with_status(status, &body)
             }
         })
+        .map(|route| route.with_response(status, OpenApiResponse::description("Success")))
     }
 
     fn json_response_with_status<H, Fut, R>(
@@ -232,5 +305,22 @@ impl RouteDefinition {
                 BootResponse::json_with_status(status, &body)
             }
         })
+        .map(|route| route.with_response(status, OpenApiResponse::description("Success")))
+    }
+
+    fn validated_json_with_status<T, H, Fut, R>(
+        method: HttpMethod,
+        path: impl Into<String>,
+        status: u16,
+        handler: H,
+    ) -> Result<Self>
+    where
+        T: DeserializeOwned + Validate + Send + 'static,
+        H: Fn(T) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        Self::json_with_status(method, path, status, handler)
+            .map(|route| route.with_body_validation::<T>().with_validation())
     }
 }

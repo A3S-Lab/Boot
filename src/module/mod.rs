@@ -1,7 +1,12 @@
 use crate::{
-    BoxFuture, ControllerDefinition, ModuleRef, ProviderDefinition, Result, RouteDefinition,
+    BoxFuture, ControllerDefinition, MessagePatternDefinition, Middleware, ModuleRef,
+    ProviderDefinition, ProviderToken, Result, RouteDefinition, WebSocketGatewayDefinition,
 };
 use std::sync::Arc;
+
+mod dynamic;
+
+pub use dynamic::DynamicModule;
 
 /// A module contributes imports, providers, controllers, and routes.
 ///
@@ -21,6 +26,21 @@ pub trait Module: Send + Sync + 'static {
         Ok(Vec::new())
     }
 
+    /// Providers this module exposes to importing modules.
+    fn exports(&self) -> Result<Vec<ProviderToken>> {
+        Ok(Vec::new())
+    }
+
+    /// Whether exported providers should be visible to every module scope.
+    fn is_global(&self) -> bool {
+        false
+    }
+
+    /// Middleware applied to controllers and direct routes declared by this module.
+    fn middleware(&self) -> Vec<Arc<dyn Middleware>> {
+        Vec::new()
+    }
+
     /// Controller route groups built with access to the provider container.
     fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
         Ok(Vec::new())
@@ -28,6 +48,16 @@ pub trait Module: Send + Sync + 'static {
 
     /// Framework-neutral routes contributed directly by this module.
     fn routes(&self) -> Result<Vec<RouteDefinition>> {
+        Ok(Vec::new())
+    }
+
+    /// WebSocket gateways contributed by this module.
+    fn gateways(&self, _module_ref: &ModuleRef) -> Result<Vec<WebSocketGatewayDefinition>> {
+        Ok(Vec::new())
+    }
+
+    /// Microservice message patterns contributed by this module.
+    fn message_patterns(&self, _module_ref: &ModuleRef) -> Result<Vec<MessagePatternDefinition>> {
         Ok(Vec::new())
     }
 

@@ -7,7 +7,7 @@ use super::header::{
 use super::method::HttpMethod;
 use super::query::{parse_query, parse_query_pairs, split_path_query};
 use crate::percent::validate_percent_encoding;
-use crate::{BootError, Result};
+use crate::{validate_value, BootError, Result, Validate};
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::BTreeMap;
 
@@ -161,6 +161,14 @@ impl BootRequest {
         let params = serde_urlencoded::to_string(&self.params)
             .map_err(|err| BootError::BadRequest(err.to_string()))?;
         serde_urlencoded::from_str(&params).map_err(|err| BootError::BadRequest(err.to_string()))
+    }
+
+    pub fn validated_params<T>(&self) -> Result<T>
+    where
+        T: DeserializeOwned + Validate,
+    {
+        let value = self.params()?;
+        validate_value(value)
     }
 
     pub fn query_param(&self, name: &str) -> Option<&str> {
@@ -387,12 +395,28 @@ impl BootRequest {
         serde_json::from_slice(&self.body).map_err(|err| BootError::BadRequest(err.to_string()))
     }
 
+    pub fn validated_json<T>(&self) -> Result<T>
+    where
+        T: DeserializeOwned + Validate,
+    {
+        let value = self.json()?;
+        validate_value(value)
+    }
+
     pub fn json_with_content_type<T>(&self) -> Result<T>
     where
         T: DeserializeOwned,
     {
         self.require_json_content_type()?;
         self.json()
+    }
+
+    pub fn validated_json_with_content_type<T>(&self) -> Result<T>
+    where
+        T: DeserializeOwned + Validate,
+    {
+        self.require_json_content_type()?;
+        self.validated_json()
     }
 
     pub fn query<T>(&self) -> Result<T>
@@ -408,6 +432,14 @@ impl BootRequest {
                 .map_err(|err| BootError::BadRequest(err.to_string()))?,
         };
         serde_urlencoded::from_str(&query).map_err(|err| BootError::BadRequest(err.to_string()))
+    }
+
+    pub fn validated_query<T>(&self) -> Result<T>
+    where
+        T: DeserializeOwned + Validate,
+    {
+        let value = self.query()?;
+        validate_value(value)
     }
 }
 

@@ -1,6 +1,6 @@
 use super::definition::RouteDefinition;
 use crate::routing::path::{join_paths, route_shape_key, route_specificity};
-use crate::{BootError, BootRequest, BootResponse, ExecutionContext, Result};
+use crate::{BootError, BootRequest, BootResponse, ExecutionContext, MiddlewareOutcome, Result};
 
 impl RouteDefinition {
     pub async fn call(&self, mut request: BootRequest) -> Result<BootResponse> {
@@ -33,6 +33,19 @@ impl RouteDefinition {
         };
         request = request.with_path_params(params);
 
+        for middleware in &self.middleware {
+            let context_request = request.clone();
+            request = match middleware.handle(request).await {
+                Ok(MiddlewareOutcome::Continue(request)) => request,
+                Ok(MiddlewareOutcome::Respond(response)) => return Ok(response),
+                Err(error) => {
+                    return self
+                        .handle_error(self.execution_context(context_request), error)
+                        .await;
+                }
+            };
+        }
+
         for pipe in &self.pipes {
             let context_request = request.clone();
             request = match pipe.transform(request).await {
@@ -43,6 +56,16 @@ impl RouteDefinition {
                         .await;
                 }
             };
+        }
+
+        if self.validation_enabled {
+            for validator in &self.validators {
+                if let Err(error) = validator(&request) {
+                    return self
+                        .handle_error(self.execution_context(request.clone()), error)
+                        .await;
+                }
+            }
         }
 
         let context = self.execution_context(request.clone());

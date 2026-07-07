@@ -2,8 +2,10 @@
 
 use a3s_boot::{
     AxumAdapter, BootApplication, BootError, BootRequest, BootResponse, ExecutionContext,
-    HttpMethod, RouteDefinition, SseEvent,
+    HttpMethod, MiddlewareOutcome, RouteDefinition, SseEvent, WebSocketGatewayDefinition,
+    WebSocketMessage,
 };
+use std::sync::Arc;
 
 #[test]
 fn axum_method_conversion_rejects_unsupported_methods() {
@@ -529,6 +531,48 @@ async fn axum_adapter_rejects_oversized_content_length_before_reading_body() {
 }
 
 #[tokio::test]
+async fn axum_adapter_validates_requests_before_middleware() {
+    use axum::body::Body;
+    use axum::http::{header::CONTENT_LENGTH, Request, StatusCode};
+    use tower::ServiceExt;
+
+    let calls = Arc::new(std::sync::Mutex::new(0usize));
+    let middleware_calls = Arc::clone(&calls);
+    let app = BootApplication::builder()
+        .use_global_middleware(move |request: BootRequest| {
+            let middleware_calls = Arc::clone(&middleware_calls);
+            async move {
+                *middleware_calls.lock().unwrap() += 1;
+                Ok(MiddlewareOutcome::next(request))
+            }
+        })
+        .route(
+            RouteDefinition::post("/echo", |_| async { Ok(BootResponse::text("unreachable")) })
+                .unwrap(),
+        )
+        .build()
+        .unwrap();
+    let router = app
+        .into_adapter(&AxumAdapter::new().with_body_limit(4))
+        .unwrap();
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/echo")
+                .header(CONTENT_LENGTH, "5")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(*calls.lock().unwrap(), 0);
+}
+
+#[tokio::test]
 async fn axum_adapter_rejects_invalid_content_length_headers() {
     use axum::body::{to_bytes, Body};
     use axum::http::{header::CONTENT_LENGTH, Request, StatusCode};
@@ -934,6 +978,35 @@ async fn axum_adapter_streams_sse_responses() {
         body,
         "event: app.ready\ndata: ready\n\nid: cat-1\ndata: {\"name\":\"Milo\"}\n\n"
     );
+}
+
+#[tokio::test]
+async fn axum_adapter_registers_websocket_gateway_routes() {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    let gateway = WebSocketGatewayDefinition::new("/ws")
+        .unwrap()
+        .subscribe("ping", |message: WebSocketMessage| async move {
+            Ok(WebSocketMessage::new("pong", message.data))
+        })
+        .unwrap();
+    let app = BootApplication::builder().gateway(gateway).build().unwrap();
+    let router = app.into_adapter(&AxumAdapter::new()).unwrap();
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/ws")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 }
 
 #[tokio::test]

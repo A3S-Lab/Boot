@@ -31,25 +31,50 @@ Implemented today:
 - `ProviderDefinition` and `ModuleRef` for typed provider registration and lookup.
 - `ControllerDefinition` and `RouteDefinition` for HTTP route groups.
 - Nest-style attribute macros: `#[injectable]`, `#[controller]`, `#[get]`,
-  `#[post]`, `#[put]`, `#[patch]`, `#[delete]`, `#[sse]`, and raw route mode.
+  `#[post]`, `#[put]`, `#[patch]`, `#[delete]`, `#[sse]`, raw route mode, and
+  method argument extractors including `#[body]`, `#[request]`,
+  `#[param("name")]`, `#[params]`, `#[query]`, `#[query("name")]`,
+  `#[header("name")]`, and `#[headers]`.
 - JSON body and JSON response helpers.
 - SSE responses with `SseEvent`, `SseStream`, `BootResponse::sse(...)`,
   `RouteDefinition::sse(...)`, `ControllerDefinition::sse(...)`, and Axum
   streaming support.
-- Global and controller-level `Pipe`, `Guard`, `Interceptor`, and
-  `ExceptionFilter` support.
+- Global, module, controller-level, and route-level middleware plus global and
+  controller-level `Pipe`, `Guard`, `Interceptor`, and `ExceptionFilter`
+  support.
 - Adapter-neutral request/response types, typed params/query helpers, header
   helpers, route matching, global prefixes, lifecycle hooks, and an Axum adapter.
+- OpenAPI route metadata, schema-crate-neutral document generation from resolved
+  routes, automatic path-parameter documentation, and optional
+  `serve_openapi(...)` JSON route registration.
+- DTO validation with `Validate`, body/query/params validation hooks, global,
+  controller-level, route-level validation switches, and `#[validate]` /
+  `#[skip_validation]` macros.
+- Module-scoped provider registries, explicit provider exports, transitive
+  re-exports, global module exports, and `DynamicModule` for runtime-built
+  provider modules.
+- Middleware with request mutation, short-circuit responses, global/module/
+  controller/route scopes, filter integration for errors, and adapter
+  validation before middleware execution.
+- WebSocket gateways with adapter-neutral messages and connections, gateway
+  pipes/guards/interceptors, provider-backed handlers, Nest-style gateway
+  macros, and Axum WebSocket route registration.
+- Microservice transports with adapter-neutral `TransportMessage` /
+  `TransportReply`, request-response and event-only message patterns,
+  provider-backed handlers, validation helpers, transport pipes/guards/
+  interceptors, Nest-style message macros, and an in-process transport.
+- ACL-backed typed configuration modules with `ConfigModule`, named/global
+  provider exports, environment/default function support, and validation hooks.
 
 ## Priority Order
 
 1. Parameter extraction macros
 2. OpenAPI metadata and generator
-3. Validation pipeline
-4. Module encapsulation and dynamic modules
-5. Middleware
-6. WebSocket gateways
-7. Microservice transports
+3. Validation pipeline (implemented)
+4. Module encapsulation and dynamic modules (implemented)
+5. Middleware (implemented)
+6. WebSocket gateways (implemented)
+7. Microservice transports (implemented)
 8. Technique modules: config, cache, schedule, queues, logging, versioning, file upload
 
 This order maximizes developer-facing Nest familiarity before adding broad
@@ -63,6 +88,8 @@ and controller experience. If GraphQL is ever needed, it should be evaluated as
 a separate companion crate rather than part of the core parity plan.
 
 ## Milestone 1: Parameter Extraction Macros
+
+Status: implemented.
 
 Nest equivalent:
 
@@ -94,7 +121,7 @@ impl CatsController {
 }
 ```
 
-Tasks:
+Completed tasks:
 
 - Extend `a3s-boot-macros` to parse attributes on route method arguments.
 - Support `#[body]`, `#[request]`, `#[param("name")]`, `#[params]`,
@@ -117,6 +144,8 @@ Acceptance:
 - `cargo test --test macros --test controllers` passes.
 
 ## Milestone 2: OpenAPI Metadata And Generator
+
+Status: implemented.
 
 Nest equivalent:
 
@@ -146,15 +175,19 @@ impl CatsController {
 
 Tasks:
 
-- Add route metadata storage to `RouteDefinition`.
+- Add route metadata storage to `RouteDefinition`. (Implemented)
 - Add metadata fields for tags, operation id, summary, description, params,
   query, request body, response bodies, status codes, auth requirements, and
-  deprecation.
+  deprecation. (Core fields implemented)
 - Add a schema abstraction that can use a crate such as `schemars` without
-  coupling the core to it unless a feature is enabled.
-- Add `OpenApiDocument` generation from `BootApplication`.
-- Add optional route to serve JSON, for example `/openapi.json`.
-- Preserve adapter neutrality.
+  coupling the core to it unless a feature is enabled. (Implemented with
+  `OpenApiSchema` and optional `openapi-schemas`)
+- Add `OpenApiDocument` generation from `BootApplication`. (Implemented)
+- Add optional route to serve JSON, for example `/openapi.json`. (Implemented)
+- Preserve adapter neutrality. (Implemented)
+- Add Nest-style OpenAPI macros such as `#[tag]`, `#[operation]`,
+  `#[response]`, and auth metadata attributes. (Implemented)
+- Add optional schema component generation from `schemars`. (Implemented)
 
 Acceptance:
 
@@ -172,6 +205,8 @@ Nest equivalent:
 - transform and whitelist options
 - DTO-level validation
 
+Status: implemented.
+
 Proposed A3S Boot shape:
 
 ```rust
@@ -183,7 +218,9 @@ struct CreateCatDto {
 
 impl Validate for CreateCatDto {
     fn validate(&self) -> Result<()> {
-        ensure!(!self.name.trim().is_empty(), "name is required");
+        if self.name.trim().is_empty() {
+            return Err(BootError::BadRequest("name is required".to_string()));
+        }
         Ok(())
     }
 }
@@ -191,19 +228,27 @@ impl Validate for CreateCatDto {
 
 Tasks:
 
-- Add a small `Validate` trait in core or a `validation` feature.
+- Add a small `Validate` trait in core or a `validation` feature. (Implemented
+  in core)
 - Integrate validation after DTO extraction and before handler invocation.
+  (Implemented with route validation hooks that run after request pipes and
+  before guards/handlers for routes carrying validation metadata)
 - Support explicit validation pipe composition for projects that prefer a third
-  party crate such as `garde` or `validator`.
-- Support request body, params, and query validation.
-- Add consistent validation error response mapping.
+  party crate such as `garde` or `validator`. (Implemented through ordinary
+  `Pipe` composition plus explicit `Validate` implementations)
+- Support request body, params, and query validation. (Implemented)
+- Add consistent validation error response mapping. (Implemented through
+  `BootError::BadRequest` / HTTP 400)
 
 Acceptance:
 
-- Invalid JSON body DTOs return HTTP 400 with contextual messages.
-- Invalid query/param DTOs return HTTP 400.
+- Invalid JSON body DTOs return HTTP 400 with contextual messages. (Covered)
+- Invalid query/param DTOs return HTTP 400. (Covered)
 - Validation can be enabled globally, controller-level, and route-level.
+  (Covered through `use_global_validation`, `ControllerDefinition::with_validation`,
+  `RouteDefinition::with_validation`, and `#[validate]`)
 - Validation does not run for raw handlers unless explicitly configured.
+  (Covered)
 
 ## Milestone 4: Module Encapsulation And Dynamic Modules
 
@@ -214,29 +259,39 @@ Nest equivalent:
 - global modules
 - dynamic modules
 
+Status: implemented.
+
 Current gap:
 
-`a3s-boot` registers providers into one resolved application container. Nest
-modules encapsulate providers unless they are exported, and dynamic modules can
-produce providers/imports from runtime configuration.
+`a3s-boot` previously registered providers into one resolved application
+container. Boot now creates module-scoped provider registries. A module can see
+its own providers plus exported providers from imports and global modules.
+Dynamic modules can produce imports, providers, exports, controllers, and routes
+from runtime configuration.
 
 Tasks:
 
-- Introduce module-scoped provider registries.
-- Add explicit provider exports and imported-module visibility.
-- Support re-exporting imported modules.
-- Add global modules for opt-in application-wide providers.
-- Add dynamic module builders for configuration-driven providers.
+- Introduce module-scoped provider registries. (Implemented)
+- Add explicit provider exports and imported-module visibility. (Implemented)
+- Support re-exporting imported modules. (Implemented through transitive token
+  exports)
+- Add global modules for opt-in application-wide providers. (Implemented through
+  `Module::is_global`)
+- Add dynamic module builders for configuration-driven providers. (Implemented
+  with `DynamicModule`)
 - Preserve direct host access through `BootApplication::get(...)` where it makes
   sense, but avoid accidentally exposing private feature-module providers.
+  (Implemented; root scopes and global exports are visible to the host)
 
 Acceptance:
 
 - A provider declared but not exported by an imported module is not visible to
-  the importing module.
+  the importing module. (Covered)
 - Exported providers are visible transitively according to explicit imports.
-- Duplicate-provider checks respect module scope.
+  (Covered)
+- Duplicate-provider checks respect module scope. (Covered)
 - Existing simple module examples continue to work or have a documented migration.
+  (Covered; root module providers remain visible through `BootApplication::get`)
 
 ## Milestone 5: Middleware
 
@@ -246,21 +301,28 @@ Nest equivalent:
 - `MiddlewareConsumer`
 - route-scoped middleware
 
+Status: implemented.
+
 Tasks:
 
 - Add middleware trait that can inspect/mutate `BootRequest` before pipes and
-  guards.
-- Allow middleware to short-circuit with `BootResponse`.
+  guards. (Implemented)
+- Allow middleware to short-circuit with `BootResponse`. (Implemented through
+  `MiddlewareOutcome::Respond`)
 - Support global, module/controller, and route-scoped registration.
+  (Implemented)
 - Preserve order: middleware, pipes, guards, interceptors, handler, filters.
+  (Covered)
 - Ensure adapter-level request validation remains before middleware.
+  (Covered for Axum)
 
 Acceptance:
 
 - Middleware can add request headers or context values before a handler.
-- Middleware can reject a request before guards run.
-- Route-scoped middleware only applies to matching route groups.
-- Pipeline ordering is covered by tests.
+  (Covered)
+- Middleware can reject a request before guards run. (Covered)
+- Route-scoped middleware only applies to matching route groups. (Covered)
+- Pipeline ordering is covered by tests. (Covered)
 
 ## Milestone 6: WebSocket Gateways
 
@@ -271,23 +333,30 @@ Nest equivalent:
 - gateway lifecycle hooks
 - gateway guards/pipes/interceptors
 
+Status: implemented.
+
 Tasks:
 
-- Define adapter-neutral WebSocket connection and message traits.
-- Add gateway registration API.
-- Add `#[websocket_gateway]` and `#[subscribe_message]` macros.
+- Define adapter-neutral WebSocket connection and message traits. (Implemented)
+- Add gateway registration API. (Implemented through `WebSocketGatewayDefinition`,
+  `Module::gateways`, `DynamicModule::gateway`, and application builder support)
+- Add `#[websocket_gateway]` and `#[subscribe_message]` macros. (Implemented)
 - Implement Axum WebSocket adapter support behind the `axum` feature.
-- Reuse DI and pipeline concepts where possible.
+  (Implemented)
+- Reuse DI and pipeline concepts where possible. (Implemented with provider-backed
+  gateways and gateway-specific pipe/guard/interceptor hooks)
 
 Acceptance:
 
 - A gateway can accept a WebSocket connection and dispatch messages by event
-  name.
-- Gateway handlers can use providers.
-- Gateway guards/pipes/interceptors run in deterministic order.
-- Tests cover in-process adapter behavior and Axum integration.
+  name. (Covered)
+- Gateway handlers can use providers. (Covered)
+- Gateway guards/pipes/interceptors run in deterministic order. (Covered)
+- Tests cover in-process adapter behavior and Axum integration. (Covered)
 
 ## Milestone 7: Microservice Transports
+
+Status: implemented.
 
 Nest equivalent:
 
@@ -296,23 +365,31 @@ Nest equivalent:
 
 Tasks:
 
-- Define an adapter-neutral message transport trait.
-- Add message pattern registration APIs and macros.
-- Reuse provider lookup and pipeline primitives.
+- Define an adapter-neutral message transport trait. (Implemented with
+  `MessageTransport`)
+- Add message pattern registration APIs and macros. (Implemented with
+  `MessagePatternDefinition`, `Module::message_patterns`,
+  `BootApplicationBuilder::message_pattern`, `#[message_controller]`,
+  `#[message_pattern]`, and `#[event_pattern]`)
+- Reuse provider lookup and pipeline primitives. (Implemented with
+  provider-backed module registration plus transport-specific pipes, guards,
+  interceptors, and payload validation)
 - Start with an in-process test transport before external brokers.
+  (Implemented with `InProcessTransport`)
 - Add one production transport only after the core contract is stable.
 
 Acceptance:
 
 - A module can register message handlers independently from HTTP routes.
-- Message handlers can use providers and validation.
-- Tests cover request-response and event-only patterns.
+  (Covered)
+- Message handlers can use providers and validation. (Covered)
+- Tests cover request-response and event-only patterns. (Covered)
 
 ## Milestone 8: Technique Modules
 
 Nest equivalent areas:
 
-- configuration
+- configuration (implemented)
 - cache
 - task scheduling
 - queues
@@ -326,7 +403,7 @@ Nest equivalent areas:
 Tasks:
 
 - Prefer companion crates or feature modules over bloating the core.
-- Keep configuration HCL-first unless a local convention says otherwise.
+- Keep configuration ACL-first.
 - Define integration points through providers, middleware, guards, interceptors,
   and adapters.
 
@@ -335,18 +412,20 @@ Acceptance:
 - Each technique module has its own tests and docs.
 - Core remains usable without the technique modules.
 - Modules compose through the same provider and lifecycle APIs.
+- Configuration can load ACL into typed providers, use environment defaults,
+  and participate in module imports/exports. (Covered)
 
 ## Immediate Next Task
 
-Start with Milestone 1: parameter extraction macros.
+Start with Milestone 8 technique modules. Keep GraphQL out of scope.
 
 Suggested implementation sequence:
 
-1. Add macro parser support for method argument attributes in
-   `macros/src/lib.rs`.
-2. Generate `BootRequest` extraction wrappers for `#[body]`, `#[param]`,
-   `#[query]`, and `#[header]`.
-3. Add focused macro tests in `tests/macros.rs`.
+1. Pick the next technique module with the smallest stable core surface,
+   likely logging or cache.
+2. Define integration through providers, middleware, guards, interceptors, or
+   adapters instead of adding one-off framework hooks.
+3. Add crate-local tests and README examples for the chosen technique module.
 4. Update README examples to use extractor macros.
 5. Run:
 

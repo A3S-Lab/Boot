@@ -1,6 +1,6 @@
 use a3s_boot::{
-    BootApplication, BootError, BootRequest, BootResponse, ControllerDefinition, ExecutionContext,
-    HttpMethod, Module, ModuleRef, ProviderDefinition, ProviderToken, Result,
+    BootApplication, BootError, BootRequest, BootResponse, ControllerDefinition, DynamicModule,
+    ExecutionContext, HttpMethod, Module, ModuleRef, ProviderDefinition, ProviderToken, Result,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -46,6 +46,26 @@ struct SharedConfig {
 #[derive(Debug)]
 struct UsesSharedConfig {
     config: Arc<SharedConfig>,
+}
+
+#[derive(Debug)]
+struct GlobalConfig {
+    value: &'static str,
+}
+
+#[derive(Debug)]
+struct UsesGlobalConfig {
+    config: Arc<GlobalConfig>,
+}
+
+#[derive(Debug)]
+struct RuntimeConfig {
+    value: String,
+}
+
+#[derive(Debug)]
+struct UsesRuntimeConfig {
+    config: Arc<RuntimeConfig>,
 }
 
 #[derive(Debug)]
@@ -132,6 +152,187 @@ impl Module for DuplicateProviderParentModule {
     }
 }
 
+#[derive(Debug)]
+struct PrivateConfigModule;
+
+impl Module for PrivateConfigModule {
+    fn name(&self) -> &'static str {
+        "private-config"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::singleton(SharedConfig {
+            value: "private",
+        })])
+    }
+}
+
+#[derive(Debug)]
+struct NeedsPrivateConfigModule;
+
+impl Module for NeedsPrivateConfigModule {
+    fn name(&self) -> &'static str {
+        "needs-private-config"
+    }
+
+    fn imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(PrivateConfigModule)]
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::factory::<UsesSharedConfig, _>(
+            |module_ref| {
+                Ok(UsesSharedConfig {
+                    config: module_ref.get::<SharedConfig>()?,
+                })
+            },
+        )])
+    }
+}
+
+#[derive(Debug)]
+struct ExportedConfigModule;
+
+impl Module for ExportedConfigModule {
+    fn name(&self) -> &'static str {
+        "exported-config"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::singleton(SharedConfig {
+            value: "exported",
+        })])
+    }
+
+    fn exports(&self) -> Result<Vec<ProviderToken>> {
+        Ok(vec![ProviderToken::of::<SharedConfig>()])
+    }
+}
+
+#[derive(Debug)]
+struct UsesExportedConfigModule;
+
+impl Module for UsesExportedConfigModule {
+    fn name(&self) -> &'static str {
+        "uses-exported-config"
+    }
+
+    fn imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(ExportedConfigModule)]
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::factory::<UsesSharedConfig, _>(
+            |module_ref| {
+                Ok(UsesSharedConfig {
+                    config: module_ref.get::<SharedConfig>()?,
+                })
+            },
+        )])
+    }
+}
+
+#[derive(Debug)]
+struct ReExportedConfigModule;
+
+impl Module for ReExportedConfigModule {
+    fn name(&self) -> &'static str {
+        "re-exported-config"
+    }
+
+    fn imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(ExportedConfigModule)]
+    }
+
+    fn exports(&self) -> Result<Vec<ProviderToken>> {
+        Ok(vec![ProviderToken::of::<SharedConfig>()])
+    }
+}
+
+#[derive(Debug)]
+struct UsesReExportedConfigModule;
+
+impl Module for UsesReExportedConfigModule {
+    fn name(&self) -> &'static str {
+        "uses-re-exported-config"
+    }
+
+    fn imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(ReExportedConfigModule)]
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::factory::<UsesSharedConfig, _>(
+            |module_ref| {
+                Ok(UsesSharedConfig {
+                    config: module_ref.get::<SharedConfig>()?,
+                })
+            },
+        )])
+    }
+}
+
+#[derive(Debug)]
+struct GlobalConfigModule;
+
+impl Module for GlobalConfigModule {
+    fn name(&self) -> &'static str {
+        "global-config"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::singleton(GlobalConfig {
+            value: "global",
+        })])
+    }
+
+    fn exports(&self) -> Result<Vec<ProviderToken>> {
+        Ok(vec![ProviderToken::of::<GlobalConfig>()])
+    }
+
+    fn is_global(&self) -> bool {
+        true
+    }
+}
+
+#[derive(Debug)]
+struct UsesGlobalConfigModule;
+
+impl Module for UsesGlobalConfigModule {
+    fn name(&self) -> &'static str {
+        "uses-global-config"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::factory::<UsesGlobalConfig, _>(
+            |module_ref| {
+                Ok(UsesGlobalConfig {
+                    config: module_ref.get::<GlobalConfig>()?,
+                })
+            },
+        )])
+    }
+}
+
+#[derive(Debug)]
+struct UsesRuntimeConfigModule;
+
+impl Module for UsesRuntimeConfigModule {
+    fn name(&self) -> &'static str {
+        "uses-runtime-config"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::factory::<UsesRuntimeConfig, _>(
+            |module_ref| {
+                Ok(UsesRuntimeConfig {
+                    config: module_ref.get::<RuntimeConfig>()?,
+                })
+            },
+        )])
+    }
+}
+
 #[test]
 fn module_ref_exposes_optional_lookup_and_presence_checks() {
     let module_ref = ModuleRef::new();
@@ -184,16 +385,17 @@ fn optional_provider_lookup_preserves_type_mismatch_errors() {
 }
 
 #[test]
-fn duplicate_providers_across_imported_modules_stop_parent_initialization() {
+fn duplicate_providers_are_scoped_to_declaring_modules() {
     let init_calls = Arc::new(AtomicUsize::new(0));
-    let result = BootApplication::builder()
+    let app = BootApplication::builder()
         .import(DuplicateProviderParentModule {
             init_calls: Arc::clone(&init_calls),
         })
-        .build();
+        .build()
+        .unwrap();
 
-    assert!(matches!(result, Err(BootError::DuplicateProvider(_))));
-    assert_eq!(init_calls.load(Ordering::SeqCst), 0);
+    assert!(app.get::<ItemsService>().is_ok());
+    assert_eq!(init_calls.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -224,6 +426,83 @@ fn duplicate_provider_factories_are_rejected_before_execution() {
 
     assert!(matches!(result, Err(BootError::DuplicateProvider(_))));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn unexported_imported_providers_are_not_visible_to_importing_modules() {
+    let result = BootApplication::builder()
+        .import(NeedsPrivateConfigModule)
+        .build();
+
+    assert!(matches!(
+        result,
+        Err(BootError::MissingProvider(message))
+            if message == ProviderToken::of::<SharedConfig>().to_string()
+    ));
+}
+
+#[test]
+fn exported_imported_providers_are_visible_to_importing_modules() {
+    let app = BootApplication::builder()
+        .import(UsesExportedConfigModule)
+        .build()
+        .unwrap();
+
+    let config = app.get::<SharedConfig>().unwrap();
+    let dependent = app.get::<UsesSharedConfig>().unwrap();
+
+    assert_eq!(config.value, "exported");
+    assert_eq!(dependent.config.value, "exported");
+}
+
+#[test]
+fn imported_exports_can_be_re_exported_transitively() {
+    let app = BootApplication::builder()
+        .import(UsesReExportedConfigModule)
+        .build()
+        .unwrap();
+
+    let config = app.get::<SharedConfig>().unwrap();
+    let dependent = app.get::<UsesSharedConfig>().unwrap();
+
+    assert_eq!(config.value, "exported");
+    assert_eq!(dependent.config.value, "exported");
+}
+
+#[test]
+fn global_modules_expose_exported_providers_to_other_modules() {
+    let app = BootApplication::builder()
+        .import(GlobalConfigModule)
+        .import(UsesGlobalConfigModule)
+        .build()
+        .unwrap();
+
+    let config = app.get::<GlobalConfig>().unwrap();
+    let dependent = app.get::<UsesGlobalConfig>().unwrap();
+
+    assert_eq!(config.value, "global");
+    assert_eq!(dependent.config.value, "global");
+}
+
+#[test]
+fn dynamic_modules_can_provide_exported_runtime_configuration() {
+    let dynamic_config = DynamicModule::new("runtime-config")
+        .provider(ProviderDefinition::singleton(RuntimeConfig {
+            value: "dynamic".to_string(),
+        }))
+        .export::<RuntimeConfig>()
+        .global();
+    let app = BootApplication::builder()
+        .import(dynamic_config)
+        .import(UsesRuntimeConfigModule)
+        .build()
+        .unwrap();
+
+    let config = app.get::<RuntimeConfig>().unwrap();
+    let dependent = app.get::<UsesRuntimeConfig>().unwrap();
+
+    assert_eq!(config.value, "dynamic");
+    assert_eq!(dependent.config.value, "dynamic");
 }
 
 #[test]

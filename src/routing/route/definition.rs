@@ -1,4 +1,7 @@
-use crate::{ExceptionFilter, Guard, HttpMethod, Interceptor, Pipe, Result};
+use crate::{
+    ExceptionFilter, Guard, HttpMethod, Interceptor, Middleware, OpenApiRouteMetadata, Pipe,
+    RequestValidator, Result,
+};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -13,12 +16,17 @@ pub struct RouteDefinition {
     pub(super) method: HttpMethod,
     pub(super) path: String,
     pub(super) handler: Arc<dyn RouteHandler>,
+    pub(super) middleware: Vec<Arc<dyn Middleware>>,
     pub(super) pipes: Vec<Arc<dyn Pipe>>,
     pub(super) guards: Vec<Arc<dyn Guard>>,
     pub(super) interceptors: Vec<Arc<dyn Interceptor>>,
     pub(super) filters: Vec<Arc<dyn ExceptionFilter>>,
+    pub(super) validators: Vec<RequestValidator>,
+    pub(super) validation_enabled: bool,
+    pub(super) validation_disabled: bool,
     pub(super) module_name: Option<String>,
     pub(super) controller_prefix: Option<String>,
+    pub(super) openapi: OpenApiRouteMetadata,
 }
 
 impl RouteDefinition {
@@ -32,12 +40,17 @@ impl RouteDefinition {
             method,
             path,
             handler: Arc::new(handler),
+            middleware: Vec::new(),
             pipes: Vec::new(),
             guards: Vec::new(),
             interceptors: Vec::new(),
             filters: Vec::new(),
+            validators: Vec::new(),
+            validation_enabled: false,
+            validation_disabled: false,
             module_name: None,
             controller_prefix: None,
+            openapi: OpenApiRouteMetadata::default(),
         })
     }
 
@@ -75,5 +88,13 @@ impl RouteDefinition {
 
     pub fn handler(&self) -> Arc<dyn RouteHandler> {
         Arc::clone(&self.handler)
+    }
+
+    pub fn openapi(&self) -> &OpenApiRouteMetadata {
+        &self.openapi
+    }
+
+    pub fn validation_enabled(&self) -> bool {
+        self.validation_enabled
     }
 }

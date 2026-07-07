@@ -1,14 +1,22 @@
 use super::definition::RouteDefinition;
 use crate::pipeline::PipelineComponents;
-use crate::{ExceptionFilter, Guard, Interceptor, Pipe};
+use crate::{
+    body_validator, params_validator, query_validator, ExceptionFilter, Guard, Interceptor,
+    Middleware, Pipe, Validate,
+};
+use serde::de::DeserializeOwned;
 use std::sync::Arc;
 
 impl RouteDefinition {
     pub(crate) fn with_pipeline_prefix(mut self, pipeline: &PipelineComponents) -> Self {
+        self.middleware = prepend(&pipeline.middleware, self.middleware);
         self.pipes = prepend(&pipeline.pipes, self.pipes);
         self.guards = prepend(&pipeline.guards, self.guards);
         self.interceptors = prepend(&pipeline.interceptors, self.interceptors);
         self.filters = prepend(&pipeline.filters, self.filters);
+        if !self.validation_disabled {
+            self.validation_enabled = pipeline.validation_enabled || self.validation_enabled;
+        }
         self
     }
 
@@ -17,6 +25,14 @@ impl RouteDefinition {
         P: Pipe,
     {
         self.pipes.push(Arc::new(pipe));
+        self
+    }
+
+    pub fn with_middleware<M>(mut self, middleware: M) -> Self
+    where
+        M: Middleware,
+    {
+        self.middleware.push(Arc::new(middleware));
         self
     }
 
@@ -41,6 +57,42 @@ impl RouteDefinition {
         F: ExceptionFilter,
     {
         self.filters.push(Arc::new(filter));
+        self
+    }
+
+    pub fn with_validation(mut self) -> Self {
+        self.validation_enabled = true;
+        self.validation_disabled = false;
+        self
+    }
+
+    pub fn without_validation(mut self) -> Self {
+        self.validation_enabled = false;
+        self.validation_disabled = true;
+        self
+    }
+
+    pub fn with_body_validation<T>(mut self) -> Self
+    where
+        T: DeserializeOwned + Validate + 'static,
+    {
+        self.validators.push(body_validator::<T>());
+        self
+    }
+
+    pub fn with_params_validation<T>(mut self) -> Self
+    where
+        T: DeserializeOwned + Validate + 'static,
+    {
+        self.validators.push(params_validator::<T>());
+        self
+    }
+
+    pub fn with_query_validation<T>(mut self) -> Self
+    where
+        T: DeserializeOwned + Validate + 'static,
+    {
+        self.validators.push(query_validator::<T>());
         self
     }
 }

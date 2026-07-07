@@ -2,7 +2,9 @@ use super::handler::RouteHandler;
 use super::path::normalize_prefix;
 use super::route::RouteDefinition;
 use crate::pipeline::PipelineComponents;
-use crate::{BootRequest, ExceptionFilter, Guard, Interceptor, Pipe, Result, SseEvent};
+use crate::{
+    BootRequest, ExceptionFilter, Guard, Interceptor, Middleware, Pipe, Result, SseEvent, Validate,
+};
 use futures_core::Stream;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -14,6 +16,7 @@ pub struct ControllerDefinition {
     prefix: String,
     routes: Vec<RouteDefinition>,
     pipeline: PipelineComponents,
+    openapi_tags: Vec<String>,
 }
 
 impl ControllerDefinition {
@@ -23,10 +26,15 @@ impl ControllerDefinition {
             prefix,
             routes: Vec::new(),
             pipeline: PipelineComponents::default(),
+            openapi_tags: Vec::new(),
         })
     }
 
     pub fn route(mut self, route: RouteDefinition) -> Result<Self> {
+        let mut route = route;
+        for tag in &self.openapi_tags {
+            route = route.with_tag(tag.clone());
+        }
         self.routes.push(
             route
                 .with_prefix(&self.prefix)?
@@ -40,6 +48,14 @@ impl ControllerDefinition {
         P: Pipe,
     {
         self.pipeline.push_pipe(pipe);
+        self
+    }
+
+    pub fn with_middleware<M>(mut self, middleware: M) -> Self
+    where
+        M: Middleware,
+    {
+        self.pipeline.push_middleware(middleware);
         self
     }
 
@@ -64,6 +80,19 @@ impl ControllerDefinition {
         F: ExceptionFilter,
     {
         self.pipeline.push_filter(filter);
+        self
+    }
+
+    pub fn with_validation(mut self) -> Self {
+        self.pipeline.enable_validation();
+        self
+    }
+
+    pub fn with_tag(mut self, tag: impl Into<String>) -> Self {
+        let tag = tag.into();
+        if !self.openapi_tags.contains(&tag) {
+            self.openapi_tags.push(tag);
+        }
         self
     }
 
@@ -142,6 +171,37 @@ impl ControllerDefinition {
         )?)
     }
 
+    pub fn post_validated_json<T, H, Fut, R>(
+        self,
+        path: impl Into<String>,
+        handler: H,
+    ) -> Result<Self>
+    where
+        T: DeserializeOwned + Validate + Send + 'static,
+        H: Fn(T) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        self.post_validated_json_with_status(path, 200, handler)
+    }
+
+    pub fn post_validated_json_with_status<T, H, Fut, R>(
+        self,
+        path: impl Into<String>,
+        status: u16,
+        handler: H,
+    ) -> Result<Self>
+    where
+        T: DeserializeOwned + Validate + Send + 'static,
+        H: Fn(T) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        self.route(RouteDefinition::post_validated_json_with_status(
+            path, status, handler,
+        )?)
+    }
+
     pub fn put<H>(self, path: impl Into<String>, handler: H) -> Result<Self>
     where
         H: RouteHandler,
@@ -176,6 +236,37 @@ impl ControllerDefinition {
         )?)
     }
 
+    pub fn put_validated_json<T, H, Fut, R>(
+        self,
+        path: impl Into<String>,
+        handler: H,
+    ) -> Result<Self>
+    where
+        T: DeserializeOwned + Validate + Send + 'static,
+        H: Fn(T) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        self.put_validated_json_with_status(path, 200, handler)
+    }
+
+    pub fn put_validated_json_with_status<T, H, Fut, R>(
+        self,
+        path: impl Into<String>,
+        status: u16,
+        handler: H,
+    ) -> Result<Self>
+    where
+        T: DeserializeOwned + Validate + Send + 'static,
+        H: Fn(T) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        self.route(RouteDefinition::put_validated_json_with_status(
+            path, status, handler,
+        )?)
+    }
+
     pub fn patch_json<T, H, Fut, R>(self, path: impl Into<String>, handler: H) -> Result<Self>
     where
         T: DeserializeOwned + Send + 'static,
@@ -199,6 +290,37 @@ impl ControllerDefinition {
         R: Serialize + Send + 'static,
     {
         self.route(RouteDefinition::patch_json_with_status(
+            path, status, handler,
+        )?)
+    }
+
+    pub fn patch_validated_json<T, H, Fut, R>(
+        self,
+        path: impl Into<String>,
+        handler: H,
+    ) -> Result<Self>
+    where
+        T: DeserializeOwned + Validate + Send + 'static,
+        H: Fn(T) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        self.patch_validated_json_with_status(path, 200, handler)
+    }
+
+    pub fn patch_validated_json_with_status<T, H, Fut, R>(
+        self,
+        path: impl Into<String>,
+        status: u16,
+        handler: H,
+    ) -> Result<Self>
+    where
+        T: DeserializeOwned + Validate + Send + 'static,
+        H: Fn(T) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        self.route(RouteDefinition::patch_validated_json_with_status(
             path, status, handler,
         )?)
     }

@@ -1,12 +1,19 @@
 use super::builder::BootApplicationBuilder;
 use crate::{
-    BootError, BootRequest, BootResponse, HttpAdapter, HttpMethod, Module, ModuleRef, Result,
-    RouteDefinition,
+    BootError, BootRequest, BootResponse, HttpAdapter, HttpMethod, MessagePatternDefinition,
+    MessageTransport, Module, ModuleRef, OpenApiDocument, OpenApiInfo, Result, RouteDefinition,
+    TransportMessage, TransportReply, WebSocketGatewayDefinition,
 };
 use std::collections::BTreeMap;
 use std::fmt;
 use std::net::SocketAddr;
 use std::sync::Arc;
+
+#[derive(Clone)]
+pub(crate) struct ModuleInstance {
+    pub module: Arc<dyn Module>,
+    pub module_ref: ModuleRef,
+}
 
 /// Resolved route and decoded path parameters for a method/path lookup.
 pub struct RouteMatch<'a> {
@@ -46,9 +53,11 @@ impl fmt::Debug for RouteMatch<'_> {
 #[derive(Clone)]
 pub struct BootApplication {
     pub(crate) routes: Vec<RouteDefinition>,
+    pub(crate) gateways: Vec<WebSocketGatewayDefinition>,
+    pub(crate) message_patterns: Vec<MessagePatternDefinition>,
     pub(crate) modules: Vec<String>,
     pub(crate) module_ref: ModuleRef,
-    pub(crate) module_instances: Vec<Arc<dyn Module>>,
+    pub(crate) module_instances: Vec<ModuleInstance>,
 }
 
 impl BootApplication {
@@ -65,6 +74,21 @@ impl BootApplication {
     /// Routes exposed by the application.
     pub fn routes(&self) -> &[RouteDefinition] {
         &self.routes
+    }
+
+    /// WebSocket gateways exposed by the application.
+    pub fn gateways(&self) -> &[WebSocketGatewayDefinition] {
+        &self.gateways
+    }
+
+    /// Microservice message patterns exposed by the application.
+    pub fn message_patterns(&self) -> &[MessagePatternDefinition] {
+        &self.message_patterns
+    }
+
+    /// Generate an OpenAPI 3 document from the resolved route table.
+    pub fn openapi(&self, info: OpenApiInfo) -> OpenApiDocument {
+        OpenApiDocument::from_routes(info, &self.routes)
     }
 
     /// Route registered for a method and the most specific route shape matching a path.
@@ -86,6 +110,18 @@ impl BootApplication {
             return Ok(None);
         };
         Ok(Some(RouteMatch { route, params }))
+    }
+
+    pub fn gateway_for(&self, path: &str) -> Option<&WebSocketGatewayDefinition> {
+        self.gateways
+            .iter()
+            .find(|gateway| gateway.matches_path(path))
+    }
+
+    pub fn message_pattern_for(&self, pattern: &str) -> Option<&MessagePatternDefinition> {
+        self.message_patterns
+            .iter()
+            .find(|definition| definition.pattern() == pattern)
     }
 
     /// HTTP methods registered for the most specific route shape matching a path.
@@ -196,11 +232,29 @@ impl BootApplication {
         }
     }
 
+    /// Dispatch a microservice transport message through the resolved pattern table.
+    pub async fn dispatch_message(
+        &self,
+        message: TransportMessage,
+    ) -> Result<Option<TransportReply>> {
+        let pattern = message.pattern.clone();
+        let Some(definition) = self.message_pattern_for(&pattern) else {
+            return Err(BootError::NotFound(format!("message pattern {pattern}")));
+        };
+        definition.dispatch(message).await
+    }
+
+    /// Dispatch an event-only transport message and ignore any handler reply.
+    pub async fn emit_message(&self, message: TransportMessage) -> Result<()> {
+        self.dispatch_message(message).await.map(|_| ())
+    }
+
     /// Run async startup hooks before serving, when the host needs them.
     pub async fn bootstrap(&self) -> Result<()> {
-        for module in &self.module_instances {
-            module
-                .on_application_bootstrap(self.module_ref.clone())
+        for instance in &self.module_instances {
+            instance
+                .module
+                .on_application_bootstrap(instance.module_ref.clone())
                 .await?;
         }
         Ok(())
@@ -208,9 +262,10 @@ impl BootApplication {
 
     /// Run async shutdown hooks in reverse registration order.
     pub async fn shutdown(&self) -> Result<()> {
-        for module in self.module_instances.iter().rev() {
-            module
-                .on_application_shutdown(self.module_ref.clone())
+        for instance in self.module_instances.iter().rev() {
+            instance
+                .module
+                .on_application_shutdown(instance.module_ref.clone())
                 .await?;
         }
         Ok(())
@@ -222,6 +277,14 @@ impl BootApplication {
         A: HttpAdapter,
     {
         adapter.build(self)
+    }
+
+    /// Build this application through a concrete message transport.
+    pub fn into_message_transport<T>(self, transport: &T) -> Result<T::Output>
+    where
+        T: MessageTransport,
+    {
+        transport.build(self)
     }
 
     /// Serve this application through a concrete HTTP adapter.

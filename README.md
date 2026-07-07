@@ -41,18 +41,29 @@ Nest parity development plan.
 
 This repository contains the first framework slice:
 
-- `Module` for declaring imports, providers, controllers, direct routes, and lifecycle hooks
+- `Module` for declaring imports, providers, exports, controllers, direct
+  routes, global visibility, and lifecycle hooks
 - `ModuleRef` for typed provider lookup, optional lookup, presence checks, and token listing
 - `ProviderDefinition` for singleton, factory, and shared `Arc` factory providers
+- module-scoped provider visibility with explicit `exports()`, transitive
+  re-exports, global modules, and `DynamicModule` for runtime-built modules
 - `ControllerDefinition` for prefix-based route groups
 - `a3s-boot-macros` with `#[injectable]`, `#[controller]`, and route attributes
   such as `#[get("/{id}")]`, `#[post("/", status = 201)]`, and
-  `#[sse("/events")]`
-- `Pipe`, `Guard`, `Interceptor`, and `ExceptionFilter` pipeline traits
-- application-level `use_global_pipe`, `use_global_guard`,
-  `use_global_interceptor`, and `use_global_filter`
+  `#[sse("/events")]`, plus parameter extractors such as `#[param("id")]`,
+  `#[query]`, `#[query("name")]`, `#[body]`, `#[header("name")]`, and
+  `#[request]`, and WebSocket macros such as `#[websocket_gateway]` and
+  `#[subscribe_message]`, plus microservice macros such as
+  `#[message_controller]`, `#[message_pattern]`, and `#[event_pattern]`
+- `Middleware`, `Pipe`, `Guard`, `Interceptor`, and `ExceptionFilter` pipeline traits
+- application-level `use_global_middleware`, `use_global_pipe`,
+  `use_global_guard`, `use_global_interceptor`, `use_global_filter`, and
+  `use_global_validation`
 - exception filters that can recover errors from pipes, guards, handlers, and
   interceptors and decline to the next filter
+- DTO validation through the `Validate` trait, validating JSON helpers,
+  request-level `validated_json`, `validated_query`, and `validated_params`,
+  and Nest-style `#[validate]` / `#[skip_validation]` macros
 - `BootRequest::text`, `json`, `with_text`, `with_json`, `BootResponse::json`,
   and controller `*_json` / `*_json_with_status` route helpers
 - `BootResponse::text_with_status(...)`, `json_with_status(...)`,
@@ -60,6 +71,20 @@ This repository contains the first framework slice:
   `empty(...)`, and `no_content()` response helpers, redirect helpers,
   response body helpers, response status predicates, and response validation
 - `SseEvent` and streaming `text/event-stream` route helpers for Nest-style SSE
+- `WebSocketGatewayDefinition`, `WebSocketMessage`, gateway pipes, guards, and
+  interceptors, plus Axum WebSocket route registration behind the `axum` feature
+- `MessagePatternDefinition`, `TransportMessage`, `TransportReply`,
+  transport pipes, guards, interceptors, `MessageTransport`, and
+  `InProcessTransport` for adapter-neutral microservice request-response and
+  event-only message dispatch
+- `ConfigModule` behind the `config` feature for ACL-backed typed
+  configuration providers, including `env(...)`, `concat(...)`, named exports,
+  global exports, and `Validate` integration
+- OpenAPI route metadata, schema-crate-neutral document generation, and
+  optional `/openapi.json` serving through `serve_openapi(...)`, with
+  Nest-style metadata macros such as `#[tag]`, `#[operation]`, `#[response]`,
+  `#[request_body]`, and `#[bearer_auth]`, plus optional `schemars`-backed
+  schema components behind the `openapi-schemas` feature
 - JSON request content-type and response accept helpers with HTTP 415/406 mapping
 - request authorization/cookie helpers, HTTP 401 unauthorized mapping, and
   opt-in `WWW-Authenticate` response challenges
@@ -77,6 +102,9 @@ This repository contains the first framework slice:
 - `BootApplication::call(...)` and `handle(...)` for framework-neutral
   in-process request dispatch, `route_for(...)` and `route_match(...)` for route lookup, and
   `allowed_methods(...)` / `allowed_methods_header(...)` for adapter method introspection
+- `BootApplication::dispatch_message(...)`, `emit_message(...)`,
+  `message_pattern_for(...)`, and `into_message_transport(...)` for
+  framework-neutral microservice dispatch
 - duplicate module deduplication by module name
 - duplicate route rejection by HTTP method and path shape
 - framework-neutral route registration
@@ -103,6 +131,15 @@ This repository contains the first framework slice:
 [dependencies]
 a3s-boot = "0.1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+Enable the optional ACL-backed configuration module when the application needs
+typed runtime configuration:
+
+```toml
+[dependencies]
+a3s-boot = { version = "0.1", features = ["config"] }
+serde = { version = "1", features = ["derive"] }
 ```
 
 ```rust
@@ -166,12 +203,29 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@Controller("cats")` | `#[controller("/cats")]` on an inherent `impl` block |
 | `@Get(":id")` | `#[get("/{id}")]` on an async method |
 | `@Post()` | `#[post("/", status = 201)]` on an async method |
+| `@Param("id")` | `#[param("id")]` on a method argument |
+| `@Query()` / `@Query("page")` | `#[query]` for a DTO or `#[query("page")]` for one value |
+| `@Body()` | `#[body]` on a JSON body DTO argument |
+| `@Headers("x-request-id")` | `#[header("x-request-id")]` on a method argument |
+| `@Req()` | `#[request]` on a `BootRequest` argument |
 | `@Sse("events")` | `#[sse("/events")]` on an async method returning an SSE event stream |
+| `@WebSocketGateway()` | `#[websocket_gateway("/ws")]` on an inherent `impl` block |
+| `@SubscribeMessage("cat.find")` | `#[subscribe_message("cat.find")]` on an async gateway method |
+| Microservice controller | `#[message_controller]` on an inherent `impl` block |
+| `@MessagePattern("cat.find")` | `#[message_pattern("cat.find")]` on an async message method |
+| `@EventPattern("cat.created")` | `#[event_pattern("cat.created")]` on an async event method |
+| `@Payload()` | A typed message method argument deserialized from `TransportMessage::data` |
+| `@UsePipes(new ValidationPipe())` | `#[validate]` on a controller impl or route method |
+| `@ApiTags("cats")` | `#[tag("cats")]` below `#[controller]` |
+| `@ApiOperation(...)` | `#[operation(summary = "...", operation_id = "...")]` on a route method |
+| `@ApiResponse(...)` | `#[response(status = 200, description = "...", schema = CatDto)]` |
+| `@ApiBearerAuth()` | `#[bearer_auth]` on a route method |
 | Constructor injection | Resolve dependencies from `ModuleRef`, store them in the controller, then call `Arc<Self>.controller()?` |
 | `@Module({ providers, controllers, imports })` | `impl Module` with `providers()`, `controllers()`, and `imports()` |
 
 These are Rust procedural macros, not TypeScript runtime decorators. They
-generate ordinary `ProviderDefinition` and `ControllerDefinition` values at
+generate ordinary `ProviderDefinition`, `ControllerDefinition`, and
+`MessagePatternDefinition` values at
 compile time. The explicit API remains available and is what the macros expand
 into:
 
@@ -179,8 +233,9 @@ into:
 use std::sync::Arc;
 
 use a3s_boot::{
-    controller, injectable, AxumAdapter, BootApplication, BootRequest, BootResponse,
+    controller, injectable, AxumAdapter, BootApplication, BootError, BootResponse,
     ControllerDefinition, Module, ModuleRef, ProviderDefinition, Result, SseEvent, SseStream,
+    Validate,
 };
 use serde::{Deserialize, Serialize};
 
@@ -188,6 +243,22 @@ use serde::{Deserialize, Serialize};
 struct CreateCatDto {
     name: String,
 }
+
+impl Validate for CreateCatDto {
+    fn validate(&self) -> Result<()> {
+        if self.name.trim().is_empty() {
+            return Err(BootError::BadRequest("name is required".to_string()));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct FindCatQuery {
+    include_toys: Option<bool>,
+}
+
+impl Validate for FindCatQuery {}
 
 #[derive(Debug, Serialize)]
 struct CatDto {
@@ -221,15 +292,34 @@ struct CatsController {
 }
 
 #[controller("/cats")]
+#[validate]
+#[tag("cats")]
 impl CatsController {
     #[get("/{id}")]
-    async fn find_one(&self, request: BootRequest) -> Result<CatDto> {
-        let id = request.param("id").unwrap_or("unknown");
-        Ok(self.cats.find_one(id))
+    #[operation(summary = "Find a cat", operation_id = "findCat")]
+    #[response(status = 200, description = "Cat found", schema = CatDto)]
+    #[bearer_auth]
+    async fn find_one(
+        &self,
+        #[param("id")] id: String,
+        #[query] query: FindCatQuery,
+        #[header("x-request-id")] request_id: Option<String>,
+    ) -> Result<CatDto> {
+        let mut cat = self.cats.find_one(&id);
+        if query.include_toys.unwrap_or(false) {
+            cat.name = format!("{} with toys", cat.name);
+        }
+        if let Some(request_id) = request_id {
+            cat.id = format!("{}:{request_id}", cat.id);
+        }
+        Ok(cat)
     }
 
     #[post("/", status = 201)]
-    async fn create(&self, dto: CreateCatDto) -> Result<CatDto> {
+    #[operation(summary = "Create a cat", operation_id = "createCat")]
+    #[request_body(schema = CreateCatDto)]
+    #[response(status = 201, description = "Cat created", schema = CatDto)]
+    async fn create(&self, #[body] dto: CreateCatDto) -> Result<CatDto> {
         Ok(self.cats.create(dto))
     }
 
@@ -274,16 +364,107 @@ async fn main() -> Result<()> {
 `#[injectable]` adds provider helper methods such as `into_provider()` and
 `from_arc_provider(...)`. `#[controller("/cats")]` adds a
 `controller(self: Arc<Self>)` method that collects route attributes from the
-impl block. GET, POST, PUT, PATCH, and DELETE route attributes default to JSON:
-`#[get]` and `#[delete]` can accept `BootRequest` and return serializable DTOs,
-while `#[post]`, `#[put]`, and `#[patch]` accept one JSON DTO argument and
-return a serializable DTO. Add `raw` only when the method should return
-`Result<BootResponse>` directly, for example `#[get("/health", raw)]`. The
-explicit `*_json` route attributes remain available as compatibility aliases,
-but typical code should use `#[get]` and `#[post]` directly.
+impl block. GET, POST, PUT, PATCH, and DELETE route attributes default to JSON.
+Use extractor attributes on method arguments for Nest-style request binding:
+`#[param("id")]`, `#[params]`, `#[query]`, `#[query("name")]`, `#[body]`,
+`#[header("name")]`, `#[headers]`, and `#[request]`. Add `raw` only when the
+method should return `Result<BootResponse>` directly, for example
+`#[get("/health", raw)]`. The explicit `*_json` route attributes remain
+available as compatibility aliases, but typical code should use `#[get]` and
+`#[post]` directly.
 `#[sse("/events")]` registers a GET endpoint that returns a
 `text/event-stream` response and accepts any stream whose items are
 `Result<SseEvent>`.
+
+## Validation Pipeline
+
+DTO validation is explicit. Implement `Validate` for request DTOs, then enable
+validation globally, at controller scope, or at route scope. Invalid DTOs map to
+`BootError::BadRequest`, which adapters expose as HTTP 400. The
+`post_validated_json` / `put_validated_json` / `patch_validated_json` helpers are
+route-level shortcuts; global and controller-level validation run validators
+registered on each route.
+
+```rust
+use a3s_boot::{
+    BootApplication, BootError, ControllerDefinition, Result, RouteDefinition, Validate,
+};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize)]
+struct CreateCatDto {
+    name: String,
+}
+
+impl Validate for CreateCatDto {
+    fn validate(&self) -> Result<()> {
+        if self.name.trim().is_empty() {
+            return Err(BootError::BadRequest("name is required".to_string()));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct CatDto {
+    name: String,
+}
+
+let route = RouteDefinition::post_validated_json("/", |dto: CreateCatDto| async move {
+    Ok(CatDto { name: dto.name })
+})?;
+
+let controller = ControllerDefinition::new("/cats")?
+    .with_validation()
+    .route(
+        RouteDefinition::post_json("/", |dto: CreateCatDto| async move {
+            Ok(CatDto { name: dto.name })
+        })?
+        .with_body_validation::<CreateCatDto>(),
+    )?;
+
+let app = BootApplication::builder()
+    .use_global_validation()
+    .route(
+        RouteDefinition::post_json("/", |dto: CreateCatDto| async move {
+            Ok(CatDto { name: dto.name })
+        })?
+        .with_body_validation::<CreateCatDto>(),
+    )
+    .build()?;
+```
+
+For Nest-style controllers, put `#[validate]` below `#[controller]`. It adds
+validators for `#[body]`, `#[query]`, and `#[params]` DTO arguments. Use
+`#[skip_validation]` on a route method when a controller-level validation policy
+should not apply to that method.
+
+```rust
+#[controller("/cats")]
+#[validate]
+impl CatsController {
+    #[post("/", status = 201)]
+    async fn create(&self, #[body] dto: CreateCatDto) -> Result<CatDto> {
+        Ok(self.cats.create(dto))
+    }
+
+    #[get("/search")]
+    async fn search(&self, #[query] query: FindCatQuery) -> Result<Vec<CatDto>> {
+        Ok(self.cats.search(query))
+    }
+
+    #[post("/raw", raw)]
+    #[skip_validation]
+    async fn raw(&self, #[request] request: BootRequest) -> Result<BootResponse> {
+        Ok(BootResponse::text(request.text()?))
+    }
+}
+```
+
+Manual handlers can also call `BootRequest::validated_json::<T>()`,
+`validated_query::<T>()`, or `validated_params::<T>()`. Raw handlers are not
+validated unless they register validators explicitly, for example with
+`RouteDefinition::with_body_validation::<T>()`.
 
 ## Server-Sent Events
 
@@ -309,11 +490,329 @@ SSE routes require clients to accept `text/event-stream`; missing `Accept`,
 `*/*`, `text/*`, and `text/event-stream` are accepted, while requests that only
 accept unrelated media types return `BootError::NotAcceptable`.
 
+## OpenAPI Metadata
+
+Boot can generate an OpenAPI 3 document from resolved routes. Route metadata is
+adapter-neutral and can be added with builder methods or Nest-style metadata
+macros. `serve_openapi(...)` mounts a generated JSON document without including
+that document route in its own output. Schema components can be registered
+manually, or generated from `schemars::JsonSchema` when the `openapi-schemas`
+feature is enabled.
+
+```rust
+use a3s_boot::{
+    BootApplication, BootRequest, OpenApiInfo, OpenApiResponse, OpenApiSchema,
+    RouteDefinition,
+};
+use serde::Serialize;
+
+#[derive(Debug, Serialize)]
+struct CatDto {
+    id: String,
+    name: String,
+}
+
+let route = RouteDefinition::get_json("/cats/{id}", |request: BootRequest| async move {
+    Ok(CatDto {
+        id: request.param("id").unwrap_or("unknown").to_string(),
+        name: "Milo".to_string(),
+    })
+})?
+.with_tag("cats")
+.with_operation_id("findCat")
+.with_summary("Find a cat")
+.with_query_parameter("include_toys", false, OpenApiSchema::boolean())
+.with_json_response(200, "Cat found", OpenApiSchema::object())
+.with_response(404, OpenApiResponse::description("Cat not found"))
+.with_schema_component("CatDto", OpenApiSchema::object());
+
+let app = BootApplication::builder()
+    .route(route)
+    .serve_openapi("/openapi.json", OpenApiInfo::new("Cats API", "1.0.0"))
+    .build()?;
+
+let document = app.openapi(OpenApiInfo::new("Cats API", "1.0.0"));
+let json = serde_json::to_value(document)?;
+```
+
+Path parameters are inferred from `{name}` route segments and documented as
+required string parameters unless the route supplies a more specific path
+parameter schema. `ControllerDefinition::with_tag("cats")` applies a tag to all
+routes registered after it, similar to Nest Swagger's `@ApiTags`. In macro
+controllers, `#[param("id")]`, `#[query("name")]`, `#[header("name")]`, and
+`#[body]` also add matching OpenAPI parameter or request-body metadata.
+
+With `openapi-schemas`, routes can collect component schemas directly from
+types that derive `schemars::JsonSchema`:
+
+```rust
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+struct CatDto {
+    id: String,
+    name: String,
+}
+
+let route = RouteDefinition::get_json("/cats/{id}", |request: BootRequest| async move {
+    Ok(CatDto {
+        id: request.param("id").unwrap_or("unknown").to_string(),
+        name: "Milo".to_string(),
+    })
+})?
+.with_json_response(200, "Cat found", OpenApiSchema::reference("CatDto"))
+.try_with_json_schema_component::<CatDto>()?;
+```
+
+## WebSocket Gateways
+
+WebSocket gateways mirror Nest's `@WebSocketGateway()` and
+`@SubscribeMessage()` style while keeping the runtime adapter-neutral. Messages
+are JSON objects with an `event` string and optional `data` value. The Axum
+adapter registers gateway paths as WebSocket upgrade routes behind the `axum`
+feature.
+
+```rust
+use std::sync::Arc;
+
+use a3s_boot::{
+    injectable, subscribe_message, websocket_gateway, Module, ModuleRef,
+    ProviderDefinition, Result, WebSocketGatewayDefinition, WebSocketMessage,
+};
+use serde::Serialize;
+
+#[derive(Debug, Serialize)]
+struct CatDto {
+    id: String,
+    name: String,
+}
+
+#[injectable]
+#[derive(Debug)]
+struct CatsService;
+
+impl CatsService {
+    fn find_one(&self, id: &str) -> CatDto {
+        CatDto {
+            id: id.to_string(),
+            name: "Milo".to_string(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CatsGateway {
+    cats: Arc<CatsService>,
+}
+
+#[websocket_gateway("/cats/ws")]
+impl CatsGateway {
+    #[subscribe_message("cat.find")]
+    async fn find(&self, message: WebSocketMessage) -> Result<WebSocketMessage> {
+        let id = message
+            .data()
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("unknown");
+        WebSocketMessage::json("cat.found", &self.cats.find_one(id))
+    }
+}
+
+#[derive(Debug)]
+struct CatsModule;
+
+impl Module for CatsModule {
+    fn name(&self) -> &'static str {
+        "cats"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![CatsService.into_provider()])
+    }
+
+    fn gateways(&self, module_ref: &ModuleRef) -> Result<Vec<WebSocketGatewayDefinition>> {
+        let cats = module_ref.get::<CatsService>()?;
+        Ok(vec![Arc::new(CatsGateway { cats }).gateway()?])
+    }
+}
+```
+
+The explicit API is available for tests, dynamic modules, and adapters:
+
+```rust
+use a3s_boot::{
+    BootRequest, HttpMethod, Result, WebSocketGatewayDefinition, WebSocketMessage,
+};
+use serde_json::json;
+
+async fn dispatch() -> Result<()> {
+    let gateway = WebSocketGatewayDefinition::new("/events")?
+        .subscribe("ping", |message: WebSocketMessage| async move {
+            Ok(WebSocketMessage::new("pong", message.data))
+        })?;
+
+    let reply = gateway
+        .dispatch(
+            BootRequest::new(HttpMethod::Get, "/events"),
+            WebSocketMessage::new("ping", json!({ "id": 1 })),
+        )
+        .await?
+        .unwrap();
+
+    assert_eq!(reply.event(), "pong");
+    Ok(())
+}
+```
+
+Gateway-specific `WebSocketPipe`, `WebSocketGuard`, and `WebSocketInterceptor`
+hooks run in deterministic order: pipes, guards, interceptor `before`, handler,
+then interceptor `after` in reverse order. They are separate from HTTP
+middleware because WebSocket message dispatch is event-based rather than
+request/response-based, but they follow the same pipeline vocabulary.
+
+## Microservice Transports
+
+Microservice message patterns mirror Nest's `@MessagePattern()` and
+`@EventPattern()` style. The core is adapter-neutral: messages are JSON-like
+`TransportMessage` values with a `pattern` and `data`, and external brokers can
+implement `MessageTransport`. `InProcessTransport` is included for tests,
+workers, and single-process dispatch.
+
+```rust
+use std::sync::Arc;
+
+use a3s_boot::{
+    injectable, message_controller, event_pattern, message_pattern, InProcessTransport,
+    MessagePatternDefinition, MessageTransport, Module, ModuleRef, ProviderDefinition, Result,
+};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize)]
+struct FindCatMessage {
+    id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CatDto {
+    id: String,
+    name: String,
+}
+
+#[injectable]
+#[derive(Debug)]
+struct CatsService;
+
+impl CatsService {
+    fn find_one(&self, id: &str) -> CatDto {
+        CatDto {
+            id: id.to_string(),
+            name: "Milo".to_string(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CatsMessages {
+    cats: Arc<CatsService>,
+}
+
+#[message_controller]
+impl CatsMessages {
+    #[message_pattern("cat.find")]
+    async fn find(&self, payload: FindCatMessage) -> Result<CatDto> {
+        Ok(self.cats.find_one(&payload.id))
+    }
+
+    #[event_pattern("cat.created")]
+    async fn created(&self, payload: FindCatMessage) -> Result<()> {
+        let _ = self.cats.find_one(&payload.id);
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct CatsModule;
+
+impl Module for CatsModule {
+    fn name(&self) -> &'static str {
+        "cats"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![CatsService.into_provider()])
+    }
+
+    fn message_patterns(&self, module_ref: &ModuleRef) -> Result<Vec<MessagePatternDefinition>> {
+        let cats = module_ref.get::<CatsService>()?;
+        Arc::new(CatsMessages { cats }).message_patterns()
+    }
+}
+```
+
+`#[message_pattern("cat.find")]` defaults to JSON responses, so returning
+`Result<CatDto>` becomes a `TransportReply` automatically. Use
+`#[message_pattern("cat.find", raw)]` when a handler should return
+`TransportReply` directly. Typed method arguments are deserialized from
+`TransportMessage::data`; use `TransportMessage` as the argument type when the
+handler needs raw access to the pattern and payload.
+
+The explicit API is available for dynamic registration and validation:
+
+```rust
+use a3s_boot::{
+    BootApplication, InProcessTransport, MessagePatternDefinition, MessageTransport,
+    Result, TransportMessage, Validate,
+};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize, Serialize)]
+struct CreateCatMessage {
+    name: String,
+}
+
+impl Validate for CreateCatMessage {
+    fn validate(&self) -> Result<()> {
+        if self.name.trim().is_empty() {
+            return Err(a3s_boot::BootError::BadRequest("name is required".to_string()));
+        }
+        Ok(())
+    }
+}
+
+async fn dispatch() -> Result<()> {
+    let app = BootApplication::builder()
+        .message_pattern(MessagePatternDefinition::request_validated_json(
+            "cat.create",
+            |payload: CreateCatMessage| async move { Ok(payload) },
+        )?)
+        .build()?;
+
+    let client = InProcessTransport::new().build(app)?;
+    let reply = client
+        .send(TransportMessage::json(
+            "cat.create",
+            &CreateCatMessage {
+                name: "Luna".to_string(),
+            },
+        )?)
+        .await?
+        .unwrap();
+
+    assert_eq!(reply.data()["name"], "Luna");
+    Ok(())
+}
+```
+
+Transport-specific `TransportPipe`, `TransportGuard`, and
+`TransportInterceptor` hooks run in deterministic order: pipes, validation,
+guards, interceptor `before`, handler, then interceptor `after` in reverse
+order.
+
 ## Providers
 
 Providers can be registered as owned singletons, factories, shared `Arc<T>`
-values, or factories that return `Arc<T>`. Provider tokens are unique across the
-resolved module graph:
+values, or factories that return `Arc<T>`. Provider tokens are unique inside a
+module scope; different modules can declare the same token without colliding.
+Importing modules can only see providers that imported modules explicitly
+export:
 
 ```rust
 use std::sync::Arc;
@@ -360,6 +859,273 @@ fn inspect_app(app: &BootApplication) -> Result<()> {
     Ok(())
 }
 ```
+
+## Module Encapsulation
+
+Modules are provider visibility boundaries. A module can use its own providers
+and the exported providers of its imports. Providers declared by an imported
+module stay private unless that module returns their `ProviderToken` from
+`exports()`.
+
+```rust
+use a3s_boot::{
+    BootApplication, Module, ModuleRef, ProviderDefinition, ProviderToken, Result,
+};
+use std::sync::Arc;
+
+#[derive(Debug)]
+struct Config {
+    database_url: String,
+}
+
+#[derive(Debug)]
+struct Repository {
+    config: Arc<Config>,
+}
+
+#[derive(Debug)]
+struct ConfigModule;
+
+impl Module for ConfigModule {
+    fn name(&self) -> &'static str {
+        "config"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::singleton(Config {
+            database_url: "postgres://localhost/app".to_string(),
+        })])
+    }
+
+    fn exports(&self) -> Result<Vec<ProviderToken>> {
+        Ok(vec![ProviderToken::of::<Config>()])
+    }
+}
+
+#[derive(Debug)]
+struct CatsModule;
+
+impl Module for CatsModule {
+    fn name(&self) -> &'static str {
+        "cats"
+    }
+
+    fn imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(ConfigModule)]
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::factory::<Repository, _>(|module_ref| {
+            Ok(Repository {
+                config: module_ref.get::<Config>()?,
+            })
+        })])
+    }
+}
+
+let app = BootApplication::builder().import(CatsModule).build()?;
+let repository = app.get::<Repository>()?;
+```
+
+A module can re-export an imported provider by listing the imported token in its
+own `exports()`. Global modules expose their exported providers to other module
+scopes after registration:
+
+```rust
+#[derive(Debug)]
+struct GlobalConfigModule;
+
+impl Module for GlobalConfigModule {
+    fn name(&self) -> &'static str {
+        "global-config"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::singleton(Config {
+            database_url: "postgres://localhost/app".to_string(),
+        })])
+    }
+
+    fn exports(&self) -> Result<Vec<ProviderToken>> {
+        Ok(vec![ProviderToken::of::<Config>()])
+    }
+
+    fn is_global(&self) -> bool {
+        true
+    }
+}
+```
+
+Use `DynamicModule` when providers are assembled from runtime configuration:
+
+```rust
+use a3s_boot::DynamicModule;
+
+fn config_module(database_url: String) -> DynamicModule {
+    DynamicModule::new("runtime-config")
+        .provider(ProviderDefinition::singleton(Config { database_url }))
+        .export::<Config>()
+        .global()
+}
+```
+
+`BootApplication::get(...)` resolves from root module scopes and global exports.
+Private providers from imported feature modules are not exposed unless they are
+exported into a root-visible scope.
+
+## Configuration
+
+Enable the `config` feature to load typed configuration from ACL. `ConfigModule`
+implements `Module`, registers the parsed config value as a provider, and
+exports it to importing modules. This keeps configuration composition on the
+same provider/module path as services and repositories.
+
+```rust
+use std::sync::Arc;
+
+use a3s_boot::{
+    BootApplication, ConfigModule, Module, ModuleRef, ProviderDefinition, Result, Validate,
+};
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+struct AppConfig {
+    database_url: String,
+    port: u16,
+}
+
+impl Validate for AppConfig {
+    fn validate(&self) -> Result<()> {
+        if self.port == 0 {
+            return Err(a3s_boot::BootError::BadRequest(
+                "port must be non-zero".to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct Repository {
+    config: Arc<AppConfig>,
+}
+
+#[derive(Debug)]
+struct CatsModule {
+    config: ConfigModule<AppConfig>,
+}
+
+impl Module for CatsModule {
+    fn name(&self) -> &'static str {
+        "cats"
+    }
+
+    fn imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(self.config.clone())]
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::factory::<Repository, _>(|module_ref| {
+            Ok(Repository {
+                config: module_ref.get::<AppConfig>()?,
+            })
+        })])
+    }
+}
+
+let config = ConfigModule::<AppConfig>::from_validated_acl_str(
+    "app-config",
+    r#"
+        database_url = env("DATABASE_URL", "postgres://localhost/app")
+        port = 3000
+    "#,
+)?;
+
+let app = BootApplication::builder()
+    .import(CatsModule { config })
+    .build()?;
+let repository = app.get::<Repository>()?;
+```
+
+ACL values are converted through serde into your config type. Top-level
+attributes map to struct fields, unlabeled blocks map to nested structs, and
+labeled blocks map to maps keyed by the first label:
+
+```acl
+database_url = "postgres://localhost/app"
+features = ["http", "sse", "transport"]
+
+limits {
+    body_bytes = 4096
+}
+
+providers "openai" {
+    api_key = env("OPENAI_API_KEY", "test-key")
+    base_url = concat("https://", "api.openai.com", "/v1")
+}
+```
+
+Use `ConfigModule::from_acl_file(...)` for file-backed configuration,
+`ConfigModule::from_acl_str(...)` for embedded configuration, and
+`ConfigModule::from_value(...)` for already-built values. Add `.named("token")`
+to export a named provider, or `.global()` to make the config visible to every
+module scope after registration.
+
+## Middleware
+
+Middleware runs after route matching and path parameter decoding, but before
+pipes, validation, guards, interceptors, and handlers. A middleware can mutate
+the `BootRequest` and continue, or short-circuit with a `BootResponse`.
+
+```rust
+use a3s_boot::{
+    BootApplication, BootRequest, BootResponse, ControllerDefinition, MiddlewareOutcome,
+    Result, RouteDefinition,
+};
+
+fn app() -> Result<BootApplication> {
+    let controller = ControllerDefinition::new("/cats")?
+        .with_middleware(|request: BootRequest| async move {
+            Ok(MiddlewareOutcome::next(
+                request.with_header("x-controller", "cats"),
+            ))
+        })
+        .get("/", |request: BootRequest| async move {
+            Ok(BootResponse::text(
+                request.header("x-controller").unwrap_or("missing"),
+            ))
+        })?;
+
+    BootApplication::builder()
+        .use_global_middleware(|request: BootRequest| async move {
+            Ok(MiddlewareOutcome::next(
+                request.with_header("x-global", "boot"),
+            ))
+        })
+        .route(
+            RouteDefinition::get("/health", |_| async {
+                Ok(BootResponse::text("ok"))
+            })?
+            .with_middleware(|request: BootRequest| async move {
+                if request.header("x-block").is_some() {
+                    return Ok(MiddlewareOutcome::response(
+                        BootResponse::text_with_status(403, "blocked"),
+                    ));
+                }
+                Ok(MiddlewareOutcome::next(request))
+            }),
+        )
+        .route(controller.routes()[0].clone())
+        .build()
+}
+```
+
+Global middleware is prepended to module middleware, then controller middleware,
+then route middleware. Module middleware is returned from `Module::middleware()`
+and applies to controllers and direct routes declared by that module. Errors
+returned by middleware go through exception filters; short-circuit responses
+skip the remaining request pipeline. Adapters still run their own request
+validation before Boot middleware executes.
 
 ## JSON DTOs
 
@@ -760,9 +1526,13 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | HTTP adapter | Replaceable backend adapter; Axum is the first implementation |
 | Controller | Typed request handlers grouped by route prefix |
 | Provider | Injectable service or repository dependency |
+| Middleware | Request inspection, mutation, and short-circuiting before pipes and guards |
 | Guard | Request authorization and policy gate |
 | Interceptor | Cross-cutting request/response behavior at global, controller, or route scope |
 | Pipe | Request validation and transformation |
+| WebSocket gateway | Event-based bidirectional message handlers |
+| Message transport | Adapter-neutral request-response and event-only message patterns |
+| Configuration | Optional ACL-backed typed providers through `ConfigModule` |
 | Filter | Error mapping into HTTP responses |
 | Lifecycle hook | Startup and shutdown behavior for modules and providers |
 
@@ -780,11 +1550,15 @@ The crate is split by framework concern:
 src/
 ├── adapters/     # Optional backend adapters such as Axum
 ├── app/          # Application instance, builder, and module registration
+├── config.rs     # Optional ACL-backed typed configuration module
 ├── http/         # Adapter-neutral request, response, methods, and query parsing
-├── module/       # Module trait and lifecycle hooks
-├── pipeline/     # Pipes, guards, interceptors, filters, and execution context
+├── module/       # Module trait, dynamic modules, exports, and lifecycle hooks
+├── pipeline/     # Middleware, pipes, guards, interceptors, filters, and execution context
 ├── provider/     # Provider tokens, definitions, and ModuleRef container
 ├── routing/      # Route handlers, controllers, route execution, and path matching
+├── transport/    # Adapter-neutral microservice message patterns and transports
+├── validation.rs # DTO validation trait and route validation hooks
+├── websocket/    # Adapter-neutral WebSocket gateways, messages, and pipeline hooks
 ├── error.rs
 └── lib.rs
 ```

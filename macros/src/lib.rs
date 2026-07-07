@@ -2,8 +2,8 @@ use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::{
-    parse_macro_input, Attribute, FnArg, Ident, ImplItem, ImplItemFn, Item, ItemImpl, LitInt,
-    LitStr, Pat, PatType, Result, Token,
+    parse_macro_input, Attribute, FnArg, GenericArgument, Ident, ImplItem, ImplItemFn, Item,
+    ItemImpl, LitBool, LitInt, LitStr, Pat, PatType, PathArguments, Result, Token, Type,
 };
 
 #[proc_macro_attribute]
@@ -40,6 +40,52 @@ pub fn controller(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand_controller(prefix, item_impl)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
+}
+
+#[proc_macro_attribute]
+pub fn websocket_gateway(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let path = parse_macro_input!(attr as LitStr);
+    let item_impl = parse_macro_input!(item as ItemImpl);
+
+    expand_websocket_gateway(path, item_impl)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+#[proc_macro_attribute]
+pub fn message_controller(attr: TokenStream, item: TokenStream) -> TokenStream {
+    if !attr.is_empty() {
+        return syn::Error::new(
+            proc_macro2::TokenStream::from(attr)
+                .into_iter()
+                .next()
+                .unwrap()
+                .span(),
+            "#[message_controller] does not accept arguments",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    let item_impl = parse_macro_input!(item as ItemImpl);
+    expand_message_controller(item_impl)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+#[proc_macro_attribute]
+pub fn subscribe_message(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    websocket_attribute_outside_gateway("subscribe_message", item)
+}
+
+#[proc_macro_attribute]
+pub fn message_pattern(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    message_attribute_outside_controller("message_pattern", item)
+}
+
+#[proc_macro_attribute]
+pub fn event_pattern(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    message_attribute_outside_controller("event_pattern", item)
 }
 
 #[proc_macro_attribute]
@@ -107,6 +153,81 @@ pub fn delete_json(_attr: TokenStream, item: TokenStream) -> TokenStream {
     route_attribute_outside_controller("delete_json", item)
 }
 
+#[proc_macro_attribute]
+pub fn body(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    extractor_attribute_outside_controller("body", item)
+}
+
+#[proc_macro_attribute]
+pub fn request(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    extractor_attribute_outside_controller("request", item)
+}
+
+#[proc_macro_attribute]
+pub fn param(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    extractor_attribute_outside_controller("param", item)
+}
+
+#[proc_macro_attribute]
+pub fn params(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    extractor_attribute_outside_controller("params", item)
+}
+
+#[proc_macro_attribute]
+pub fn query(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    extractor_attribute_outside_controller("query", item)
+}
+
+#[proc_macro_attribute]
+pub fn header(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    extractor_attribute_outside_controller("header", item)
+}
+
+#[proc_macro_attribute]
+pub fn headers(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    extractor_attribute_outside_controller("headers", item)
+}
+
+#[proc_macro_attribute]
+pub fn tag(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    openapi_attribute_outside_controller("tag", item)
+}
+
+#[proc_macro_attribute]
+pub fn operation(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    openapi_attribute_outside_controller("operation", item)
+}
+
+#[proc_macro_attribute]
+pub fn response(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    openapi_attribute_outside_controller("response", item)
+}
+
+#[proc_macro_attribute]
+pub fn request_body(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    openapi_attribute_outside_controller("request_body", item)
+}
+
+#[proc_macro_attribute]
+pub fn bearer_auth(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    openapi_attribute_outside_controller("bearer_auth", item)
+}
+
+#[proc_macro_attribute]
+pub fn hide_from_openapi(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    openapi_attribute_outside_controller("hide_from_openapi", item)
+}
+
+#[proc_macro_attribute]
+pub fn validate(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    validation_attribute_outside_controller("validate", item)
+}
+
+#[proc_macro_attribute]
+pub fn skip_validation(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    validation_attribute_outside_controller("skip_validation", item)
+}
+
 fn expand_injectable(item_struct: syn::ItemStruct) -> Result<proc_macro2::TokenStream> {
     let ident = &item_struct.ident;
     let (impl_generics, ty_generics, where_clause) = item_struct.generics.split_for_impl();
@@ -160,6 +281,18 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
     let self_ty = item_impl.self_ty.clone();
     let mut routes = Vec::new();
     let mut errors: Option<syn::Error> = None;
+    let (clean_impl_attrs, controller_validation, controller_validation_errors) =
+        take_controller_validation_attrs(&item_impl.attrs);
+    let (clean_impl_attrs, controller_openapi, controller_openapi_errors) =
+        take_controller_openapi_attrs(&clean_impl_attrs);
+    item_impl.attrs = clean_impl_attrs;
+    for error in controller_validation_errors {
+        push_error(&mut errors, error);
+    }
+    for error in controller_openapi_errors {
+        push_error(&mut errors, error);
+    }
+    let controller_openapi = controller_openapi.tokens();
 
     for item in &mut item_impl.items {
         let ImplItem::Fn(method) = item else {
@@ -167,13 +300,64 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
         };
 
         let (clean_attrs, method_routes, route_errors) = take_route_attrs(&method.attrs);
+        let (clean_attrs, route_validation, validation_errors) =
+            take_route_validation_attrs(&clean_attrs);
+        let (clean_attrs, openapi_specs, openapi_errors) = take_route_openapi_attrs(&clean_attrs);
         method.attrs = clean_attrs;
         for error in route_errors {
             push_error(&mut errors, error);
         }
+        for error in validation_errors {
+            push_error(&mut errors, error);
+        }
+        for error in openapi_errors {
+            push_error(&mut errors, error);
+        }
+        if method_routes.is_empty() && !openapi_specs.is_empty() {
+            push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &method.sig.ident,
+                    "OpenAPI route attributes must be used on route methods",
+                ),
+            );
+        }
+        if method_routes.is_empty() && route_validation.is_present() {
+            push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &method.sig.ident,
+                    "validation route attributes must be used on route methods",
+                ),
+            );
+        }
+
+        let input = if method_routes.is_empty() {
+            None
+        } else {
+            match RouteMethodInput::from_method(method) {
+                Ok(input) => Some(input),
+                Err(error) => {
+                    push_error(&mut errors, error);
+                    None
+                }
+            }
+        };
 
         for route in method_routes {
-            match route_registration(route, method) {
+            let Some(input) = input.clone() else {
+                continue;
+            };
+            let validation_enabled = route_validation.enabled(controller_validation.enabled);
+            let validation_skipped = route_validation.skip;
+            match route_registration(
+                route,
+                method,
+                input,
+                validation_enabled,
+                validation_skipped,
+                &openapi_specs,
+            ) {
                 Ok(registration) => routes.push(registration),
                 Err(error) => push_error(&mut errors, error),
             }
@@ -194,11 +378,461 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
                 let mut __a3s_boot_controller =
                     ::a3s_boot::ControllerDefinition::new(#prefix)?;
                 #(
+                    __a3s_boot_controller = __a3s_boot_controller.#controller_openapi;
+                )*
+                #(
                     __a3s_boot_controller = #routes;
                 )*
                 Ok(__a3s_boot_controller)
             }
         }
+    })
+}
+
+fn expand_websocket_gateway(
+    path: LitStr,
+    mut item_impl: ItemImpl,
+) -> Result<proc_macro2::TokenStream> {
+    if item_impl.trait_.is_some() {
+        return Err(syn::Error::new_spanned(
+            &item_impl,
+            "#[websocket_gateway] can only be used on inherent impl blocks",
+        ));
+    }
+
+    let self_ty = item_impl.self_ty.clone();
+    let mut subscriptions = Vec::new();
+    let mut errors: Option<syn::Error> = None;
+
+    for item in &mut item_impl.items {
+        let ImplItem::Fn(method) = item else {
+            continue;
+        };
+
+        let (clean_attrs, events, event_errors) = take_subscribe_message_attrs(&method.attrs);
+        method.attrs = clean_attrs;
+        for error in event_errors {
+            push_error(&mut errors, error);
+        }
+        if events.is_empty() {
+            continue;
+        }
+
+        let input = match RouteMethodInput::from_method(method) {
+            Ok(input) => input,
+            Err(error) => {
+                push_error(&mut errors, error);
+                continue;
+            }
+        };
+
+        if method.sig.asyncness.is_none() {
+            push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &method.sig.fn_token,
+                    "websocket gateway message handlers must be async",
+                ),
+            );
+            continue;
+        }
+
+        for event in events {
+            match websocket_subscription(method, input.clone(), event) {
+                Ok(subscription) => subscriptions.push(subscription),
+                Err(error) => push_error(&mut errors, error),
+            }
+        }
+    }
+
+    if let Some(error) = errors {
+        return Err(error);
+    }
+
+    Ok(quote! {
+        #item_impl
+
+        impl #self_ty {
+            pub fn gateway(
+                self: ::std::sync::Arc<Self>,
+            ) -> ::a3s_boot::Result<::a3s_boot::WebSocketGatewayDefinition> {
+                let mut __a3s_boot_gateway =
+                    ::a3s_boot::WebSocketGatewayDefinition::new(#path)?;
+                #(
+                    __a3s_boot_gateway = #subscriptions;
+                )*
+                Ok(__a3s_boot_gateway)
+            }
+        }
+    })
+}
+
+fn expand_message_controller(mut item_impl: ItemImpl) -> Result<proc_macro2::TokenStream> {
+    if item_impl.trait_.is_some() {
+        return Err(syn::Error::new_spanned(
+            &item_impl,
+            "#[message_controller] can only be used on inherent impl blocks",
+        ));
+    }
+
+    let self_ty = item_impl.self_ty.clone();
+    let mut patterns = Vec::new();
+    let mut errors: Option<syn::Error> = None;
+    let (clean_impl_attrs, controller_validation, controller_validation_errors) =
+        take_controller_validation_attrs(&item_impl.attrs);
+    item_impl.attrs = clean_impl_attrs;
+    for error in controller_validation_errors {
+        push_error(&mut errors, error);
+    }
+
+    for item in &mut item_impl.items {
+        let ImplItem::Fn(method) = item else {
+            continue;
+        };
+
+        let (clean_attrs, specs, pattern_errors) = take_message_pattern_attrs(&method.attrs);
+        let (clean_attrs, route_validation, validation_errors) =
+            take_route_validation_attrs(&clean_attrs);
+        method.attrs = clean_attrs;
+        for error in pattern_errors {
+            push_error(&mut errors, error);
+        }
+        for error in validation_errors {
+            push_error(&mut errors, error);
+        }
+        if specs.is_empty() && route_validation.is_present() {
+            push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &method.sig.ident,
+                    "validation attributes must be used on message pattern methods",
+                ),
+            );
+        }
+        if specs.is_empty() {
+            continue;
+        }
+
+        let input = match RouteMethodInput::from_method(method) {
+            Ok(input) => input,
+            Err(error) => {
+                push_error(&mut errors, error);
+                continue;
+            }
+        };
+
+        if method.sig.asyncness.is_none() {
+            push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &method.sig.fn_token,
+                    "message pattern handlers must be async",
+                ),
+            );
+            continue;
+        }
+
+        let validation_enabled = route_validation.enabled(controller_validation.enabled);
+        for spec in specs {
+            match message_pattern_registration(method, input.clone(), spec, validation_enabled) {
+                Ok(pattern) => patterns.push(pattern),
+                Err(error) => push_error(&mut errors, error),
+            }
+        }
+    }
+
+    if let Some(error) = errors {
+        return Err(error);
+    }
+
+    Ok(quote! {
+        #item_impl
+
+        impl #self_ty {
+            pub fn message_patterns(
+                self: ::std::sync::Arc<Self>,
+            ) -> ::a3s_boot::Result<::std::vec::Vec<::a3s_boot::MessagePatternDefinition>> {
+                let mut __a3s_boot_patterns = ::std::vec::Vec::new();
+                #(
+                    __a3s_boot_patterns.push(#patterns);
+                )*
+                Ok(__a3s_boot_patterns)
+            }
+        }
+    })
+}
+
+fn take_subscribe_message_attrs(
+    attrs: &[Attribute],
+) -> (Vec<Attribute>, Vec<LitStr>, Vec<syn::Error>) {
+    let mut clean_attrs = Vec::new();
+    let mut events = Vec::new();
+    let mut errors = Vec::new();
+
+    for attr in attrs {
+        let Some(ident) = attr.path().segments.last().map(|segment| &segment.ident) else {
+            clean_attrs.push(attr.clone());
+            continue;
+        };
+
+        if ident != "subscribe_message" {
+            clean_attrs.push(attr.clone());
+            continue;
+        }
+
+        match attr.parse_args::<LitStr>() {
+            Ok(event) => events.push(event),
+            Err(error) => errors.push(error),
+        }
+    }
+
+    (clean_attrs, events, errors)
+}
+
+fn websocket_subscription(
+    method: &ImplItemFn,
+    input: RouteMethodInput,
+    event: LitStr,
+) -> Result<proc_macro2::TokenStream> {
+    let method_ident = &method.sig.ident;
+    let controller_name = format_ident!("__a3s_boot_ws_{}", method_ident);
+    let handler = match input.into_legacy_arg()? {
+        Some(MethodArg { ident, ty, .. }) => quote! {
+            {
+                let #controller_name = ::std::sync::Arc::clone(&self);
+                move |__a3s_boot_message: ::a3s_boot::WebSocketMessage| {
+                    let #controller_name = ::std::sync::Arc::clone(&#controller_name);
+                    async move {
+                        let #ident: #ty = __a3s_boot_message;
+                        #controller_name.#method_ident(#ident).await
+                    }
+                }
+            }
+        },
+        None => quote! {
+            {
+                let #controller_name = ::std::sync::Arc::clone(&self);
+                move |_message: ::a3s_boot::WebSocketMessage| {
+                    let #controller_name = ::std::sync::Arc::clone(&#controller_name);
+                    async move { #controller_name.#method_ident().await }
+                }
+            }
+        },
+    };
+
+    Ok(quote! {
+        __a3s_boot_gateway.subscribe(#event, #handler)?
+    })
+}
+
+fn take_message_pattern_attrs(
+    attrs: &[Attribute],
+) -> (Vec<Attribute>, Vec<MessagePatternSpec>, Vec<syn::Error>) {
+    let mut clean_attrs = Vec::new();
+    let mut patterns = Vec::new();
+    let mut errors = Vec::new();
+
+    for attr in attrs {
+        let Some(kind) = MessagePatternAttrKind::from_attribute(attr) else {
+            clean_attrs.push(attr.clone());
+            continue;
+        };
+
+        match attr.parse_args::<MessagePatternArgs>() {
+            Ok(args) => {
+                if matches!(kind, MessagePatternAttrKind::Event) && args.raw.is_some() {
+                    errors.push(syn::Error::new_spanned(
+                        args.raw.unwrap(),
+                        "raw is not supported on event pattern attributes",
+                    ));
+                } else {
+                    patterns.push(MessagePatternSpec { kind, args });
+                }
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+
+    (clean_attrs, patterns, errors)
+}
+
+fn message_pattern_registration(
+    method: &ImplItemFn,
+    input: RouteMethodInput,
+    spec: MessagePatternSpec,
+    validation_enabled: bool,
+) -> Result<proc_macro2::TokenStream> {
+    let method_ident = &method.sig.ident;
+    let pattern = spec.args.pattern;
+    let raw = spec.args.raw.is_some();
+    let definition = match spec.kind {
+        MessagePatternAttrKind::Message => {
+            let handler = message_request_handler(method_ident, input.clone(), raw)?;
+            quote! {
+                ::a3s_boot::MessagePatternDefinition::request(#pattern, #handler)?
+            }
+        }
+        MessagePatternAttrKind::Event => {
+            let handler = message_event_handler(method_ident, input.clone())?;
+            quote! {
+                ::a3s_boot::MessagePatternDefinition::event(#pattern, #handler)?
+            }
+        }
+    };
+
+    let definition = message_validation_definition(definition, input, validation_enabled)?;
+    Ok(definition)
+}
+
+fn message_request_handler(
+    method_ident: &Ident,
+    input: RouteMethodInput,
+    raw: bool,
+) -> Result<proc_macro2::TokenStream> {
+    let controller_name = format_ident!("__a3s_boot_message_{}", method_ident);
+    Ok(match input.into_legacy_arg()? {
+        Some(arg) if is_type_ident(&arg.ty, "TransportMessage") => {
+            let MethodArg { ident, ty, .. } = arg;
+            let call = message_request_call(method_ident, &controller_name, raw, quote!(#ident));
+            quote! {
+                {
+                    let #controller_name = ::std::sync::Arc::clone(&self);
+                    move |__a3s_boot_message: ::a3s_boot::TransportMessage| {
+                        let #controller_name = ::std::sync::Arc::clone(&#controller_name);
+                        async move {
+                            let #ident: #ty = __a3s_boot_message;
+                            #call
+                        }
+                    }
+                }
+            }
+        }
+        Some(MethodArg { ident, ty, .. }) => {
+            let call = message_request_call(method_ident, &controller_name, raw, quote!(#ident));
+            quote! {
+                {
+                    let #controller_name = ::std::sync::Arc::clone(&self);
+                    move |__a3s_boot_message: ::a3s_boot::TransportMessage| {
+                        let #controller_name = ::std::sync::Arc::clone(&#controller_name);
+                        async move {
+                            let #ident: #ty = __a3s_boot_message.data_as::<#ty>()?;
+                            #call
+                        }
+                    }
+                }
+            }
+        }
+        None => {
+            let call = message_request_call(method_ident, &controller_name, raw, quote!());
+            quote! {
+                {
+                    let #controller_name = ::std::sync::Arc::clone(&self);
+                    move |_message: ::a3s_boot::TransportMessage| {
+                        let #controller_name = ::std::sync::Arc::clone(&#controller_name);
+                        async move { #call }
+                    }
+                }
+            }
+        }
+    })
+}
+
+fn message_request_call(
+    method_ident: &Ident,
+    controller_name: &Ident,
+    raw: bool,
+    args: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    if raw {
+        quote! {
+            #controller_name.#method_ident(#args).await
+        }
+    } else {
+        quote! {
+            {
+                let __a3s_boot_reply = #controller_name.#method_ident(#args).await?;
+                ::a3s_boot::TransportReply::json(&__a3s_boot_reply)
+            }
+        }
+    }
+}
+
+fn message_event_handler(
+    method_ident: &Ident,
+    input: RouteMethodInput,
+) -> Result<proc_macro2::TokenStream> {
+    let controller_name = format_ident!("__a3s_boot_event_{}", method_ident);
+    Ok(match input.into_legacy_arg()? {
+        Some(arg) if is_type_ident(&arg.ty, "TransportMessage") => {
+            let MethodArg { ident, ty, .. } = arg;
+            quote! {
+                {
+                    let #controller_name = ::std::sync::Arc::clone(&self);
+                    move |__a3s_boot_message: ::a3s_boot::TransportMessage| {
+                        let #controller_name = ::std::sync::Arc::clone(&#controller_name);
+                        async move {
+                            let #ident: #ty = __a3s_boot_message;
+                            let _ = #controller_name.#method_ident(#ident).await?;
+                            Ok(())
+                        }
+                    }
+                }
+            }
+        }
+        Some(MethodArg { ident, ty, .. }) => quote! {
+            {
+                let #controller_name = ::std::sync::Arc::clone(&self);
+                move |__a3s_boot_message: ::a3s_boot::TransportMessage| {
+                    let #controller_name = ::std::sync::Arc::clone(&#controller_name);
+                    async move {
+                        let #ident: #ty = __a3s_boot_message.data_as::<#ty>()?;
+                        let _ = #controller_name.#method_ident(#ident).await?;
+                        Ok(())
+                    }
+                }
+            }
+        },
+        None => quote! {
+            {
+                let #controller_name = ::std::sync::Arc::clone(&self);
+                move |_message: ::a3s_boot::TransportMessage| {
+                    let #controller_name = ::std::sync::Arc::clone(&#controller_name);
+                    async move {
+                        let _ = #controller_name.#method_ident().await?;
+                        Ok(())
+                    }
+                }
+            }
+        },
+    })
+}
+
+fn message_validation_definition(
+    definition: proc_macro2::TokenStream,
+    input: RouteMethodInput,
+    validation_enabled: bool,
+) -> Result<proc_macro2::TokenStream> {
+    if !validation_enabled {
+        return Ok(definition);
+    }
+
+    let Some(arg) = input.into_legacy_arg()? else {
+        return Err(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "message validation requires one typed payload argument",
+        ));
+    };
+
+    if is_type_ident(&arg.ty, "TransportMessage") {
+        return Err(syn::Error::new_spanned(
+            arg.ident,
+            "message validation requires a DTO payload argument, not TransportMessage",
+        ));
+    }
+
+    let ty = arg.ty;
+    Ok(quote! {
+        (#definition).with_payload_validation::<#ty>()
     })
 }
 
@@ -222,7 +856,14 @@ fn take_route_attrs(attrs: &[Attribute]) -> (Vec<Attribute>, Vec<RouteSpec>, Vec
     (clean_attrs, routes, errors)
 }
 
-fn route_registration(route: RouteSpec, method: &ImplItemFn) -> Result<proc_macro2::TokenStream> {
+fn route_registration(
+    route: RouteSpec,
+    method: &ImplItemFn,
+    input: RouteMethodInput,
+    validation_enabled: bool,
+    validation_skipped: bool,
+    openapi_specs: &[RouteOpenApiSpec],
+) -> Result<proc_macro2::TokenStream> {
     if method.sig.asyncness.is_none() {
         return Err(syn::Error::new_spanned(
             &method.sig.fn_token,
@@ -231,9 +872,9 @@ fn route_registration(route: RouteSpec, method: &ImplItemFn) -> Result<proc_macr
     }
 
     let method_ident = &method.sig.ident;
-    let input = RouteMethodInput::from_method(method)?;
     let status = route.args.status_value()?;
     let path = route.args.path;
+    let metadata_input = input.clone();
 
     let raw = route.args.raw.is_some();
     if raw && route.kind.is_explicit_json() {
@@ -243,7 +884,9 @@ fn route_registration(route: RouteSpec, method: &ImplItemFn) -> Result<proc_macr
         ));
     }
 
-    match route.kind.flavor(raw) {
+    let flavor = route.kind.flavor(raw);
+    let mut json_success_status = None;
+    let route_definition = match flavor {
         RouteFlavor::Sse => {
             if route.args.status.is_some() {
                 return Err(syn::Error::new_spanned(
@@ -257,10 +900,14 @@ fn route_registration(route: RouteSpec, method: &ImplItemFn) -> Result<proc_macr
                     "raw is not supported on SSE route attributes",
                 ));
             }
-            let handler = raw_or_json_request_handler(method_ident, input);
-            Ok(quote! {
-                __a3s_boot_controller.sse(#path, #handler)?
-            })
+            let handler = if input.has_extractors() {
+                extracted_sse_handler(method_ident, input)?
+            } else {
+                raw_or_json_request_handler(method_ident, input)?
+            };
+            quote! {
+                ::a3s_boot::RouteDefinition::sse(#path, #handler)?
+            }
         }
         RouteFlavor::Raw => {
             if route.args.status.is_some() {
@@ -270,51 +917,163 @@ fn route_registration(route: RouteSpec, method: &ImplItemFn) -> Result<proc_macr
                 ));
             }
             let builder = route.kind.raw_builder_ident();
-            let handler = raw_or_json_request_handler(method_ident, input);
-            Ok(quote! {
-                __a3s_boot_controller.#builder(#path, #handler)?
-            })
+            let handler = if input.has_extractors() {
+                extracted_raw_handler(method_ident, input)?
+            } else {
+                raw_or_json_request_handler(method_ident, input)?
+            };
+            quote! {
+                ::a3s_boot::RouteDefinition::#builder(#path, #handler)?
+            }
         }
         RouteFlavor::JsonRequest => {
-            let builder = route.kind.json_builder_ident().ok_or_else(|| {
-                syn::Error::new_spanned(
-                    &method.sig.ident,
-                    "this HTTP method does not support JSON route inference",
-                )
-            })?;
-            let handler = raw_or_json_request_handler(method_ident, input);
-            Ok(quote! {
-                __a3s_boot_controller.#builder(#path, #status, #handler)?
-            })
+            if input.has_extractors() {
+                let builder = route.kind.raw_builder_ident();
+                let handler = extracted_json_response_handler(method_ident, input, status.clone())?;
+                json_success_status = Some(status.clone());
+                quote! {
+                    ::a3s_boot::RouteDefinition::#builder(#path, #handler)?
+                }
+            } else {
+                let builder = route.kind.json_builder_ident().ok_or_else(|| {
+                    syn::Error::new_spanned(
+                        &method.sig.ident,
+                        "this HTTP method does not support JSON route inference",
+                    )
+                })?;
+                let handler = raw_or_json_request_handler(method_ident, input)?;
+                quote! {
+                    ::a3s_boot::RouteDefinition::#builder(#path, #status, #handler)?
+                }
+            }
         }
         RouteFlavor::JsonBody => {
-            let Some(input) = input.arg else {
-                return Err(syn::Error::new_spanned(
-                    &method.sig.ident,
-                    "JSON body routes must accept one DTO argument after &self",
-                ));
-            };
-            let builder = route.kind.json_builder_ident().ok_or_else(|| {
-                syn::Error::new_spanned(
-                    &method.sig.ident,
-                    "this HTTP method does not support JSON route inference",
-                )
-            })?;
-            let handler = json_body_handler(method_ident, input);
-            Ok(quote! {
-                __a3s_boot_controller.#builder(#path, #status, #handler)?
-            })
+            if input.has_extractors() {
+                let builder = route.kind.raw_builder_ident();
+                let handler = extracted_json_response_handler(method_ident, input, status.clone())?;
+                json_success_status = Some(status.clone());
+                quote! {
+                    ::a3s_boot::RouteDefinition::#builder(#path, #handler)?
+                }
+            } else {
+                let Some(input) = input.into_legacy_arg()? else {
+                    return Err(syn::Error::new_spanned(
+                        &method.sig.ident,
+                        "JSON body routes must accept one DTO argument after &self",
+                    ));
+                };
+                let builder = route.kind.json_builder_ident().ok_or_else(|| {
+                    syn::Error::new_spanned(
+                        &method.sig.ident,
+                        "this HTTP method does not support JSON route inference",
+                    )
+                })?;
+                let handler = json_body_handler(method_ident, input);
+                quote! {
+                    ::a3s_boot::RouteDefinition::#builder(#path, #status, #handler)?
+                }
+            }
+        }
+    };
+
+    let route_definition = validation_route_definition(
+        route_definition,
+        &metadata_input,
+        flavor,
+        validation_enabled,
+        validation_skipped,
+    )?;
+
+    let route_definition = openapi_route_definition(
+        route_definition,
+        &metadata_input,
+        flavor,
+        json_success_status,
+        openapi_specs,
+    )?;
+
+    Ok(quote! {
+        __a3s_boot_controller.route(#route_definition)?
+    })
+}
+
+fn validation_route_definition(
+    mut route_definition: proc_macro2::TokenStream,
+    input: &RouteMethodInput,
+    flavor: RouteFlavor,
+    validation_enabled: bool,
+    validation_skipped: bool,
+) -> Result<proc_macro2::TokenStream> {
+    if validation_skipped {
+        return Ok(quote! {
+            (#route_definition).without_validation()
+        });
+    }
+
+    if !validation_enabled {
+        return Ok(route_definition);
+    }
+
+    for token in extractor_validation_tokens(input, flavor) {
+        route_definition = quote! {
+            (#route_definition).#token
+        };
+    }
+
+    Ok(quote! {
+        (#route_definition).with_validation()
+    })
+}
+
+fn extractor_validation_tokens(
+    input: &RouteMethodInput,
+    flavor: RouteFlavor,
+) -> Vec<proc_macro2::TokenStream> {
+    let mut tokens = Vec::new();
+
+    if matches!(flavor, RouteFlavor::JsonBody) && !input.has_extractors() {
+        if let Some(arg) = input.args.first() {
+            let ty = &arg.ty;
+            tokens.push(quote! {
+                with_body_validation::<#ty>()
+            });
         }
     }
+
+    for arg in &input.args {
+        let Some(extractor) = &arg.extractor else {
+            continue;
+        };
+        let ty = &arg.ty;
+
+        match extractor {
+            Extractor::Body => tokens.push(quote! {
+                with_body_validation::<#ty>()
+            }),
+            Extractor::Params => tokens.push(quote! {
+                with_params_validation::<#ty>()
+            }),
+            Extractor::Query(None) => tokens.push(quote! {
+                with_query_validation::<#ty>()
+            }),
+            Extractor::Request
+            | Extractor::Param(_)
+            | Extractor::Query(Some(_))
+            | Extractor::Header(_)
+            | Extractor::Headers => {}
+        }
+    }
+
+    tokens
 }
 
 fn raw_or_json_request_handler(
     method_ident: &Ident,
     input: RouteMethodInput,
-) -> proc_macro2::TokenStream {
+) -> Result<proc_macro2::TokenStream> {
     let controller_name = format_ident!("__a3s_boot_{}", method_ident);
-    match input.arg {
-        Some(MethodArg { ident, ty }) => quote! {
+    Ok(match input.into_legacy_arg()? {
+        Some(MethodArg { ident, ty, .. }) => quote! {
             {
                 let #controller_name = ::std::sync::Arc::clone(&self);
                 move |#ident: #ty| {
@@ -332,12 +1091,12 @@ fn raw_or_json_request_handler(
                 }
             }
         },
-    }
+    })
 }
 
 fn json_body_handler(method_ident: &Ident, input: MethodArg) -> proc_macro2::TokenStream {
     let controller_name = format_ident!("__a3s_boot_{}", method_ident);
-    let MethodArg { ident, ty } = input;
+    let MethodArg { ident, ty, .. } = input;
     quote! {
         {
             let #controller_name = ::std::sync::Arc::clone(&self);
@@ -349,7 +1108,860 @@ fn json_body_handler(method_ident: &Ident, input: MethodArg) -> proc_macro2::Tok
     }
 }
 
+fn extracted_raw_handler(
+    method_ident: &Ident,
+    input: RouteMethodInput,
+) -> Result<proc_macro2::TokenStream> {
+    let controller_name = format_ident!("__a3s_boot_{}", method_ident);
+    let (extractors, args) = extracted_arguments(input)?;
+
+    Ok(quote! {
+        {
+            let #controller_name = ::std::sync::Arc::clone(&self);
+            move |__a3s_boot_request: ::a3s_boot::BootRequest| {
+                let #controller_name = ::std::sync::Arc::clone(&#controller_name);
+                async move {
+                    #(#extractors)*
+                    #controller_name.#method_ident(#(#args),*).await
+                }
+            }
+        }
+    })
+}
+
+fn extracted_json_response_handler(
+    method_ident: &Ident,
+    input: RouteMethodInput,
+    status: proc_macro2::TokenStream,
+) -> Result<proc_macro2::TokenStream> {
+    let controller_name = format_ident!("__a3s_boot_{}", method_ident);
+    let (extractors, args) = extracted_arguments(input)?;
+
+    Ok(quote! {
+        {
+            let #controller_name = ::std::sync::Arc::clone(&self);
+            move |__a3s_boot_request: ::a3s_boot::BootRequest| {
+                let #controller_name = ::std::sync::Arc::clone(&#controller_name);
+                async move {
+                    __a3s_boot_request.require_accepts_json()?;
+                    #(#extractors)*
+                    let __a3s_boot_body = #controller_name.#method_ident(#(#args),*).await?;
+                    ::a3s_boot::BootResponse::json_with_status(#status, &__a3s_boot_body)
+                }
+            }
+        }
+    })
+}
+
+fn extracted_sse_handler(
+    method_ident: &Ident,
+    input: RouteMethodInput,
+) -> Result<proc_macro2::TokenStream> {
+    let controller_name = format_ident!("__a3s_boot_{}", method_ident);
+    let (extractors, args) = extracted_arguments(input)?;
+
+    Ok(quote! {
+        {
+            let #controller_name = ::std::sync::Arc::clone(&self);
+            move |__a3s_boot_request: ::a3s_boot::BootRequest| {
+                let #controller_name = ::std::sync::Arc::clone(&#controller_name);
+                async move {
+                    #(#extractors)*
+                    #controller_name.#method_ident(#(#args),*).await
+                }
+            }
+        }
+    })
+}
+
+fn extracted_arguments(
+    input: RouteMethodInput,
+) -> Result<(Vec<proc_macro2::TokenStream>, Vec<Ident>)> {
+    let mut body_arg: Option<Ident> = None;
+    let mut extractors = Vec::new();
+    let mut args = Vec::new();
+
+    for arg in input.args {
+        let extractor = arg.extractor.clone().ok_or_else(|| {
+            syn::Error::new_spanned(
+                &arg.ident,
+                "all route arguments must use extractor attributes when any extractor is used",
+            )
+        })?;
+
+        if matches!(extractor, Extractor::Body) {
+            if let Some(existing) = body_arg {
+                return Err(syn::Error::new_spanned(
+                    existing,
+                    "route methods can accept at most one #[body] argument",
+                ));
+            }
+            body_arg = Some(arg.ident.clone());
+        }
+
+        args.push(arg.ident.clone());
+        extractors.push(extractor_tokens(arg, extractor));
+    }
+
+    Ok((extractors, args))
+}
+
+fn extractor_tokens(arg: MethodArg, extractor: Extractor) -> proc_macro2::TokenStream {
+    let MethodArg { ident, ty, .. } = arg;
+    match extractor {
+        Extractor::Body => quote! {
+            __a3s_boot_request.require_json_content_type()?;
+            let #ident: #ty = __a3s_boot_request.json::<#ty>()?;
+        },
+        Extractor::Request => quote! {
+            let #ident: #ty = __a3s_boot_request.clone();
+        },
+        Extractor::Params => quote! {
+            let #ident: #ty = __a3s_boot_request.params::<#ty>()?;
+        },
+        Extractor::Param(name) => single_value_extractor_tokens(
+            ident,
+            ty,
+            &name,
+            "path parameter",
+            quote!(__a3s_boot_request.param(#name).map(::std::string::ToString::to_string)),
+        ),
+        Extractor::Query(None) => quote! {
+            let #ident: #ty = __a3s_boot_request.query::<#ty>()?;
+        },
+        Extractor::Query(Some(name)) => single_value_extractor_tokens(
+            ident,
+            ty,
+            &name,
+            "query parameter",
+            quote!(__a3s_boot_request.query_value(#name)?),
+        ),
+        Extractor::Header(name) => single_value_extractor_tokens(
+            ident,
+            ty,
+            &name,
+            "header",
+            quote!(__a3s_boot_request.header(#name).map(::std::string::ToString::to_string)),
+        ),
+        Extractor::Headers => quote! {
+            let #ident: #ty = __a3s_boot_request.headers.clone();
+        },
+    }
+}
+
+fn single_value_extractor_tokens(
+    ident: Ident,
+    ty: Box<Type>,
+    name: &LitStr,
+    label: &'static str,
+    value: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    let name = name.value();
+    let missing = format!("missing {label}: {name}");
+    let invalid = format!("invalid {label} {name}: {{}}");
+
+    if let Some(inner) = option_inner_type(&ty) {
+        quote! {
+            let #ident: #ty = match #value {
+                Some(__a3s_boot_value) => {
+                    Some(__a3s_boot_value.parse::<#inner>().map_err(|error| {
+                        ::a3s_boot::BootError::BadRequest(format!(#invalid, error))
+                    })?)
+                }
+                None => None,
+            };
+        }
+    } else {
+        quote! {
+            let #ident: #ty = #value
+                .ok_or_else(|| ::a3s_boot::BootError::BadRequest(#missing.to_string()))?
+                .parse::<#ty>()
+                .map_err(|error| ::a3s_boot::BootError::BadRequest(format!(#invalid, error)))?;
+        }
+    }
+}
+
+fn openapi_route_definition(
+    mut route_definition: proc_macro2::TokenStream,
+    input: &RouteMethodInput,
+    flavor: RouteFlavor,
+    json_success_status: Option<proc_macro2::TokenStream>,
+    specs: &[RouteOpenApiSpec],
+) -> Result<proc_macro2::TokenStream> {
+    if let Some(status) = json_success_status {
+        route_definition = quote! {
+            (#route_definition).with_response(
+                #status,
+                ::a3s_boot::OpenApiResponse::description("Success")
+            )
+        };
+    }
+
+    for token in extractor_openapi_tokens(input, flavor) {
+        route_definition = quote! {
+            (#route_definition).#token
+        };
+    }
+
+    for spec in specs {
+        for token in spec.tokens()? {
+            route_definition = quote! {
+                (#route_definition).#token
+            };
+        }
+    }
+
+    Ok(route_definition)
+}
+
+fn extractor_openapi_tokens(
+    input: &RouteMethodInput,
+    flavor: RouteFlavor,
+) -> Vec<proc_macro2::TokenStream> {
+    let mut tokens = Vec::new();
+
+    if matches!(flavor, RouteFlavor::JsonBody) && !input.has_extractors() {
+        if let Some(arg) = input.args.first() {
+            let schema = openapi_schema_tokens(&arg.ty);
+            tokens.push(quote! {
+                with_json_request_body(#schema)
+            });
+        }
+    }
+
+    for arg in &input.args {
+        let Some(extractor) = &arg.extractor else {
+            continue;
+        };
+
+        match extractor {
+            Extractor::Body => {
+                let schema = openapi_schema_tokens(&arg.ty);
+                tokens.push(quote! {
+                    with_json_request_body(#schema)
+                });
+            }
+            Extractor::Param(name) => {
+                let schema = openapi_schema_tokens(&arg.ty);
+                tokens.push(quote! {
+                    with_path_parameter(#name, #schema)
+                });
+            }
+            Extractor::Query(Some(name)) => {
+                let required = option_inner_type(&arg.ty).is_none();
+                let schema = openapi_schema_tokens(&arg.ty);
+                tokens.push(quote! {
+                    with_query_parameter(#name, #required, #schema)
+                });
+            }
+            Extractor::Header(name) => {
+                let required = option_inner_type(&arg.ty).is_none();
+                let schema = openapi_schema_tokens(&arg.ty);
+                tokens.push(quote! {
+                    with_header_parameter(#name, #required, #schema)
+                });
+            }
+            Extractor::Request
+            | Extractor::Params
+            | Extractor::Query(None)
+            | Extractor::Headers => {}
+        }
+    }
+
+    tokens
+}
+
+fn openapi_schema_tokens(ty: &Type) -> proc_macro2::TokenStream {
+    if let Some(inner) = option_inner_type(ty) {
+        return openapi_schema_tokens(&inner);
+    }
+
+    let Type::Path(type_path) = ty else {
+        return quote!(::a3s_boot::OpenApiSchema::object());
+    };
+    let Some(segment) = type_path.path.segments.last() else {
+        return quote!(::a3s_boot::OpenApiSchema::object());
+    };
+    let ident = &segment.ident;
+    let ident_string = ident.to_string();
+
+    if ident == "Vec" {
+        if let PathArguments::AngleBracketed(arguments) = &segment.arguments {
+            if let Some(GenericArgument::Type(inner)) = arguments.args.first() {
+                let inner_schema = openapi_schema_tokens(inner);
+                return quote!(::a3s_boot::OpenApiSchema::array(#inner_schema));
+            }
+        }
+    }
+
+    match ident_string.as_str() {
+        "String" | "str" => quote!(::a3s_boot::OpenApiSchema::string()),
+        "bool" => quote!(::a3s_boot::OpenApiSchema::boolean()),
+        "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64" | "u128"
+        | "usize" => quote!(::a3s_boot::OpenApiSchema::integer()),
+        "f32" | "f64" => quote!(::a3s_boot::OpenApiSchema::number()),
+        _ => quote!(::a3s_boot::OpenApiSchema::reference(#ident_string)),
+    }
+}
+
+fn take_controller_validation_attrs(
+    attrs: &[Attribute],
+) -> (Vec<Attribute>, ControllerValidationAttrs, Vec<syn::Error>) {
+    let mut clean_attrs = Vec::new();
+    let mut validation = ControllerValidationAttrs::default();
+    let mut errors = Vec::new();
+
+    for attr in attrs {
+        let Some(kind) = ValidationAttrKind::from_attribute(attr) else {
+            clean_attrs.push(attr.clone());
+            continue;
+        };
+
+        match kind {
+            ValidationAttrKind::Validate => {
+                if let Err(error) = expect_no_extractor_args(attr, "validate") {
+                    errors.push(error);
+                } else if validation.enabled {
+                    errors.push(syn::Error::new_spanned(
+                        attr,
+                        "duplicate #[validate] attribute",
+                    ));
+                } else {
+                    validation.enabled = true;
+                }
+            }
+            ValidationAttrKind::SkipValidation => errors.push(syn::Error::new_spanned(
+                attr,
+                "#[skip_validation] is only supported on route methods",
+            )),
+        }
+    }
+
+    (clean_attrs, validation, errors)
+}
+
+fn take_route_validation_attrs(
+    attrs: &[Attribute],
+) -> (Vec<Attribute>, RouteValidationAttrs, Vec<syn::Error>) {
+    let mut clean_attrs = Vec::new();
+    let mut validation = RouteValidationAttrs::default();
+    let mut errors = Vec::new();
+
+    for attr in attrs {
+        let Some(kind) = ValidationAttrKind::from_attribute(attr) else {
+            clean_attrs.push(attr.clone());
+            continue;
+        };
+
+        if let Err(error) = expect_no_extractor_args(attr, kind.name()) {
+            errors.push(error);
+            continue;
+        }
+
+        match kind {
+            ValidationAttrKind::Validate => validation.validate = true,
+            ValidationAttrKind::SkipValidation => validation.skip = true,
+        }
+    }
+
+    if validation.validate && validation.skip {
+        errors.push(syn::Error::new(
+            proc_macro2::Span::call_site(),
+            "route methods cannot use both #[validate] and #[skip_validation]",
+        ));
+    }
+
+    (clean_attrs, validation, errors)
+}
+
+fn take_controller_openapi_attrs(
+    attrs: &[Attribute],
+) -> (Vec<Attribute>, ControllerOpenApiAttrs, Vec<syn::Error>) {
+    let mut clean_attrs = Vec::new();
+    let mut openapi = ControllerOpenApiAttrs::default();
+    let mut errors = Vec::new();
+
+    for attr in attrs {
+        let Some(kind) = OpenApiAttrKind::from_attribute(attr) else {
+            clean_attrs.push(attr.clone());
+            continue;
+        };
+
+        match kind {
+            OpenApiAttrKind::Tag => match attr.parse_args::<LitStr>() {
+                Ok(tag) => openapi.tags.push(tag),
+                Err(error) => errors.push(error),
+            },
+            _ => errors.push(syn::Error::new_spanned(
+                attr,
+                "only #[tag(\"name\")] is supported on #[controller] impl blocks",
+            )),
+        }
+    }
+
+    (clean_attrs, openapi, errors)
+}
+
+fn take_route_openapi_attrs(
+    attrs: &[Attribute],
+) -> (Vec<Attribute>, Vec<RouteOpenApiSpec>, Vec<syn::Error>) {
+    let mut clean_attrs = Vec::new();
+    let mut specs = Vec::new();
+    let mut errors = Vec::new();
+
+    for attr in attrs {
+        let Some(kind) = OpenApiAttrKind::from_attribute(attr) else {
+            clean_attrs.push(attr.clone());
+            continue;
+        };
+
+        match kind.parse_route_spec(attr) {
+            Ok(spec) => specs.push(spec),
+            Err(error) => errors.push(error),
+        }
+    }
+
+    (clean_attrs, specs, errors)
+}
+
+#[derive(Default)]
+struct ControllerOpenApiAttrs {
+    tags: Vec<LitStr>,
+}
+
+impl ControllerOpenApiAttrs {
+    fn tokens(&self) -> Vec<proc_macro2::TokenStream> {
+        self.tags.iter().map(|tag| quote!(with_tag(#tag))).collect()
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ValidationAttrKind {
+    Validate,
+    SkipValidation,
+}
+
+impl ValidationAttrKind {
+    fn from_attribute(attr: &Attribute) -> Option<Self> {
+        let ident = attr.path().segments.last()?.ident.to_string();
+        match ident.as_str() {
+            "validate" => Some(Self::Validate),
+            "skip_validation" => Some(Self::SkipValidation),
+            _ => None,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Validate => "validate",
+            Self::SkipValidation => "skip_validation",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct ControllerValidationAttrs {
+    enabled: bool,
+}
+
+#[derive(Clone, Copy, Default)]
+struct RouteValidationAttrs {
+    validate: bool,
+    skip: bool,
+}
+
+impl RouteValidationAttrs {
+    fn is_present(self) -> bool {
+        self.validate || self.skip
+    }
+
+    fn enabled(self, controller_enabled: bool) -> bool {
+        !self.skip && (controller_enabled || self.validate)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum MessagePatternAttrKind {
+    Message,
+    Event,
+}
+
+impl MessagePatternAttrKind {
+    fn from_attribute(attr: &Attribute) -> Option<Self> {
+        let ident = attr.path().segments.last()?.ident.to_string();
+        match ident.as_str() {
+            "message_pattern" => Some(Self::Message),
+            "event_pattern" => Some(Self::Event),
+            _ => None,
+        }
+    }
+}
+
+struct MessagePatternSpec {
+    kind: MessagePatternAttrKind,
+    args: MessagePatternArgs,
+}
+
+#[derive(Clone)]
+struct MessagePatternArgs {
+    pattern: LitStr,
+    raw: Option<Ident>,
+}
+
+impl Parse for MessagePatternArgs {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let pattern = input.parse::<LitStr>()?;
+        let mut raw = None;
+
+        while !input.is_empty() {
+            input.parse::<Token![,]>()?;
+            let name = input.parse::<Ident>()?;
+
+            if name == "raw" {
+                if raw.is_some() {
+                    return Err(syn::Error::new_spanned(name, "duplicate `raw` option"));
+                }
+                raw = Some(name);
+            } else {
+                return Err(syn::Error::new_spanned(name, "expected `raw`"));
+            }
+        }
+
+        Ok(Self { pattern, raw })
+    }
+}
+
+#[derive(Clone, Copy)]
+enum OpenApiAttrKind {
+    Tag,
+    Operation,
+    Response,
+    RequestBody,
+    BearerAuth,
+    HideFromOpenApi,
+}
+
+impl OpenApiAttrKind {
+    fn from_attribute(attr: &Attribute) -> Option<Self> {
+        let ident = attr.path().segments.last()?.ident.to_string();
+        match ident.as_str() {
+            "tag" => Some(Self::Tag),
+            "operation" => Some(Self::Operation),
+            "response" => Some(Self::Response),
+            "request_body" => Some(Self::RequestBody),
+            "bearer_auth" => Some(Self::BearerAuth),
+            "hide_from_openapi" => Some(Self::HideFromOpenApi),
+            _ => None,
+        }
+    }
+
+    fn parse_route_spec(self, attr: &Attribute) -> Result<RouteOpenApiSpec> {
+        match self {
+            Self::Tag => attr.parse_args::<LitStr>().map(RouteOpenApiSpec::Tag),
+            Self::Operation => attr
+                .parse_args::<OperationArgs>()
+                .map(RouteOpenApiSpec::Operation),
+            Self::Response => attr
+                .parse_args::<ResponseArgs>()
+                .map(RouteOpenApiSpec::Response),
+            Self::RequestBody => attr
+                .parse_args::<RequestBodyArgs>()
+                .map(RouteOpenApiSpec::RequestBody),
+            Self::BearerAuth => {
+                expect_no_extractor_args(attr, "bearer_auth")?;
+                Ok(RouteOpenApiSpec::BearerAuth)
+            }
+            Self::HideFromOpenApi => {
+                expect_no_extractor_args(attr, "hide_from_openapi")?;
+                Ok(RouteOpenApiSpec::HideFromOpenApi)
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+enum RouteOpenApiSpec {
+    Tag(LitStr),
+    Operation(OperationArgs),
+    Response(ResponseArgs),
+    RequestBody(RequestBodyArgs),
+    BearerAuth,
+    HideFromOpenApi,
+}
+
+impl RouteOpenApiSpec {
+    fn tokens(&self) -> Result<Vec<proc_macro2::TokenStream>> {
+        match self {
+            Self::Tag(tag) => Ok(vec![quote!(with_tag(#tag))]),
+            Self::Operation(args) => Ok(args.tokens()),
+            Self::Response(args) => args.tokens().map(|token| vec![token]),
+            Self::RequestBody(args) => Ok(vec![args.tokens()]),
+            Self::BearerAuth => Ok(vec![quote!(with_bearer_auth())]),
+            Self::HideFromOpenApi => Ok(vec![quote!(hide_from_openapi())]),
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct OperationArgs {
+    summary: Option<LitStr>,
+    description: Option<LitStr>,
+    operation_id: Option<LitStr>,
+    deprecated: bool,
+}
+
+impl OperationArgs {
+    fn tokens(&self) -> Vec<proc_macro2::TokenStream> {
+        let mut tokens = Vec::new();
+        if let Some(summary) = &self.summary {
+            tokens.push(quote!(with_summary(#summary)));
+        }
+        if let Some(description) = &self.description {
+            tokens.push(quote!(with_description(#description)));
+        }
+        if let Some(operation_id) = &self.operation_id {
+            tokens.push(quote!(with_operation_id(#operation_id)));
+        }
+        if self.deprecated {
+            tokens.push(quote!(with_deprecated()));
+        }
+        tokens
+    }
+}
+
+impl Parse for OperationArgs {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let mut args = Self::default();
+
+        while !input.is_empty() {
+            let name = input.parse::<Ident>()?;
+            if name == "deprecated" {
+                if args.deprecated {
+                    return Err(syn::Error::new_spanned(
+                        name,
+                        "duplicate `deprecated` option",
+                    ));
+                }
+                args.deprecated = true;
+            } else {
+                input.parse::<Token![=]>()?;
+                let value = input.parse::<LitStr>()?;
+                if name == "summary" {
+                    set_once(&mut args.summary, value, name)?;
+                } else if name == "description" {
+                    set_once(&mut args.description, value, name)?;
+                } else if name == "operation_id" || name == "id" {
+                    set_once(&mut args.operation_id, value, name)?;
+                } else {
+                    return Err(syn::Error::new_spanned(
+                        name,
+                        "expected `summary`, `description`, `operation_id`, or `deprecated`",
+                    ));
+                }
+            }
+            parse_optional_comma(input)?;
+        }
+
+        Ok(args)
+    }
+}
+
+#[derive(Clone)]
+struct ResponseArgs {
+    status: LitInt,
+    description: Option<LitStr>,
+    schema: Option<Type>,
+}
+
+impl ResponseArgs {
+    fn tokens(&self) -> Result<proc_macro2::TokenStream> {
+        let status = self.status.base10_parse::<u16>()?;
+        let description = match &self.description {
+            Some(description) => quote!(#description),
+            None => quote!("Success"),
+        };
+
+        Ok(match &self.schema {
+            Some(schema) => {
+                let schema = openapi_schema_tokens(schema);
+                quote!(with_json_response(#status, #description, #schema))
+            }
+            None => quote! {
+                with_response(
+                    #status,
+                    ::a3s_boot::OpenApiResponse::description(#description)
+                )
+            },
+        })
+    }
+}
+
+impl Parse for ResponseArgs {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let mut status = None;
+        let mut description = None;
+        let mut schema = None;
+
+        while !input.is_empty() {
+            let name = input.parse::<Ident>()?;
+            input.parse::<Token![=]>()?;
+            if name == "status" {
+                set_once(&mut status, input.parse::<LitInt>()?, name)?;
+            } else if name == "description" {
+                set_once(&mut description, input.parse::<LitStr>()?, name)?;
+            } else if name == "schema" || name == "ty" || name == "body" {
+                set_once(&mut schema, input.parse::<Type>()?, name)?;
+            } else {
+                return Err(syn::Error::new_spanned(
+                    name,
+                    "expected `status`, `description`, or `schema`",
+                ));
+            }
+            parse_optional_comma(input)?;
+        }
+
+        let Some(status) = status else {
+            return Err(input.error("missing required `status` option"));
+        };
+
+        Ok(Self {
+            status,
+            description,
+            schema,
+        })
+    }
+}
+
+#[derive(Clone, Default)]
+struct RequestBodyArgs {
+    schema: Option<Type>,
+    description: Option<LitStr>,
+    required: Option<LitBool>,
+}
+
+impl RequestBodyArgs {
+    fn tokens(&self) -> proc_macro2::TokenStream {
+        let schema = self
+            .schema
+            .as_ref()
+            .map(openapi_schema_tokens)
+            .unwrap_or_else(|| quote!(::a3s_boot::OpenApiSchema::object()));
+        let mut request_body = quote!(::a3s_boot::OpenApiRequestBody::json(#schema));
+
+        if let Some(description) = &self.description {
+            request_body = quote!((#request_body).with_description(#description));
+        }
+
+        if self
+            .required
+            .as_ref()
+            .is_some_and(|required| !required.value)
+        {
+            request_body = quote!((#request_body).optional());
+        }
+
+        quote!(with_request_body(#request_body))
+    }
+}
+
+impl Parse for RequestBodyArgs {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let mut args = Self::default();
+
+        while !input.is_empty() {
+            let name = input.parse::<Ident>()?;
+            input.parse::<Token![=]>()?;
+            if name == "schema" || name == "ty" || name == "body" {
+                set_once(&mut args.schema, input.parse::<Type>()?, name)?;
+            } else if name == "description" {
+                set_once(&mut args.description, input.parse::<LitStr>()?, name)?;
+            } else if name == "required" {
+                set_once(&mut args.required, input.parse::<LitBool>()?, name)?;
+            } else {
+                return Err(syn::Error::new_spanned(
+                    name,
+                    "expected `schema`, `description`, or `required`",
+                ));
+            }
+            parse_optional_comma(input)?;
+        }
+
+        Ok(args)
+    }
+}
+
+fn set_once<T>(slot: &mut Option<T>, value: T, name: Ident) -> Result<()> {
+    if slot.is_some() {
+        let message = format!("duplicate `{name}` option");
+        return Err(syn::Error::new_spanned(&name, message));
+    }
+    *slot = Some(value);
+    Ok(())
+}
+
+fn parse_optional_comma(input: ParseStream<'_>) -> Result<()> {
+    if input.is_empty() {
+        return Ok(());
+    }
+    input.parse::<Token![,]>()?;
+    Ok(())
+}
+
 fn route_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
+    let item = proc_macro2::TokenStream::from(item);
+    let message =
+        format!("#[{name}] must be used inside an impl block annotated with #[controller]");
+    quote! {
+        compile_error!(#message);
+        #item
+    }
+    .into()
+}
+
+fn extractor_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
+    let item = proc_macro2::TokenStream::from(item);
+    let message = format!("#[{name}] must be used on a route method argument inside #[controller]");
+    quote! {
+        compile_error!(#message);
+        #item
+    }
+    .into()
+}
+
+fn openapi_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
+    let item = proc_macro2::TokenStream::from(item);
+    let message =
+        format!("#[{name}] must be used inside an impl block annotated with #[controller]");
+    quote! {
+        compile_error!(#message);
+        #item
+    }
+    .into()
+}
+
+fn message_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
+    let item = proc_macro2::TokenStream::from(item);
+    let message =
+        format!("#[{name}] must be used inside an impl block annotated with #[message_controller]");
+    quote! {
+        compile_error!(#message);
+        #item
+    }
+    .into()
+}
+
+fn websocket_attribute_outside_gateway(name: &str, item: TokenStream) -> TokenStream {
+    let item = proc_macro2::TokenStream::from(item);
+    let message =
+        format!("#[{name}] must be used inside an impl block annotated with #[websocket_gateway]");
+    quote! {
+        compile_error!(#message);
+        #item
+    }
+    .into()
+}
+
+fn validation_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
     let item = proc_macro2::TokenStream::from(item);
     let message =
         format!("#[{name}] must be used inside an impl block annotated with #[controller]");
@@ -366,6 +1978,17 @@ fn push_error(slot: &mut Option<syn::Error>, error: syn::Error) {
     } else {
         *slot = Some(error);
     }
+}
+
+fn is_type_ident(ty: &Type, ident: &str) -> bool {
+    let Type::Path(type_path) = ty else {
+        return false;
+    };
+    type_path
+        .path
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == ident)
 }
 
 struct RouteArgs {
@@ -525,6 +2148,7 @@ impl RouteKind {
     }
 }
 
+#[derive(Clone, Copy)]
 enum RouteFlavor {
     Sse,
     Raw,
@@ -532,13 +2156,14 @@ enum RouteFlavor {
     JsonBody,
 }
 
+#[derive(Clone)]
 struct RouteMethodInput {
-    arg: Option<MethodArg>,
+    args: Vec<MethodArg>,
 }
 
 impl RouteMethodInput {
-    fn from_method(method: &ImplItemFn) -> Result<Self> {
-        let mut inputs = method.sig.inputs.iter();
+    fn from_method(method: &mut ImplItemFn) -> Result<Self> {
+        let mut inputs = method.sig.inputs.iter_mut();
         let Some(FnArg::Receiver(receiver)) = inputs.next() else {
             return Err(syn::Error::new_spanned(
                 &method.sig.ident,
@@ -563,36 +2188,178 @@ impl RouteMethodInput {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        match args.len() {
-            0 => Ok(Self { arg: None }),
-            1 => Ok(Self {
-                arg: args.into_iter().next(),
-            }),
-            _ => Err(syn::Error::new_spanned(
-                &method.sig.inputs,
-                "controller route methods can accept at most one argument after &self",
-            )),
+        Ok(Self { args })
+    }
+
+    fn has_extractors(&self) -> bool {
+        self.args.iter().any(|arg| arg.extractor.is_some())
+    }
+
+    fn into_legacy_arg(self) -> Result<Option<MethodArg>> {
+        if self.has_extractors() {
+            return Err(syn::Error::new_spanned(
+                self.args
+                    .iter()
+                    .find(|arg| arg.extractor.is_some())
+                    .map(|arg| arg.ident.clone())
+                    .unwrap_or_else(|| format_ident!("argument")),
+                "route methods with extractor attributes must use extractor attributes on every argument",
+            ));
         }
+
+        if self.args.len() > 1 {
+            return Err(syn::Error::new_spanned(
+                self.args[1].ident.clone(),
+                "controller route methods without extractor attributes can accept at most one argument after &self",
+            ));
+        }
+
+        Ok(self.args.into_iter().next())
     }
 }
 
+#[derive(Clone)]
 struct MethodArg {
     ident: Ident,
-    ty: Box<syn::Type>,
+    ty: Box<Type>,
+    extractor: Option<Extractor>,
 }
 
 impl MethodArg {
-    fn from_pat_type(input: &PatType) -> Result<Self> {
-        let Pat::Ident(ident) = input.pat.as_ref() else {
-            return Err(syn::Error::new_spanned(
-                &input.pat,
-                "controller route arguments must be simple identifiers",
-            ));
+    fn from_pat_type(input: &mut PatType) -> Result<Self> {
+        let ident = match input.pat.as_ref() {
+            Pat::Ident(ident) => ident.ident.clone(),
+            _ => {
+                return Err(syn::Error::new_spanned(
+                    &input.pat,
+                    "controller route arguments must be simple identifiers",
+                ));
+            }
         };
+        let extractor = take_extractor_attrs(input)?;
 
         Ok(Self {
-            ident: ident.ident.clone(),
+            ident,
             ty: input.ty.clone(),
+            extractor,
         })
+    }
+}
+
+#[derive(Clone)]
+enum Extractor {
+    Body,
+    Request,
+    Params,
+    Param(LitStr),
+    Query(Option<LitStr>),
+    Header(LitStr),
+    Headers,
+}
+
+impl Extractor {
+    fn from_attribute(attr: &Attribute) -> Result<Option<Self>> {
+        let Some(ident) = attr.path().segments.last().map(|segment| &segment.ident) else {
+            return Ok(None);
+        };
+
+        let extractor = if ident == "body" {
+            expect_no_extractor_args(attr, "body")?;
+            Self::Body
+        } else if ident == "request" {
+            expect_no_extractor_args(attr, "request")?;
+            Self::Request
+        } else if ident == "params" {
+            expect_no_extractor_args(attr, "params")?;
+            Self::Params
+        } else if ident == "param" {
+            Self::Param(parse_extractor_name(attr, "param")?)
+        } else if ident == "query" {
+            Self::Query(parse_optional_extractor_name(attr, "query")?)
+        } else if ident == "header" {
+            Self::Header(parse_extractor_name(attr, "header")?)
+        } else if ident == "headers" {
+            expect_no_extractor_args(attr, "headers")?;
+            Self::Headers
+        } else {
+            return Ok(None);
+        };
+
+        Ok(Some(extractor))
+    }
+}
+
+fn take_extractor_attrs(input: &mut PatType) -> Result<Option<Extractor>> {
+    let mut clean_attrs = Vec::new();
+    let mut extractor = None;
+
+    for attr in std::mem::take(&mut input.attrs) {
+        let Some(parsed) = Extractor::from_attribute(&attr)? else {
+            clean_attrs.push(attr);
+            continue;
+        };
+
+        if extractor.is_some() {
+            return Err(syn::Error::new_spanned(
+                attr,
+                "route arguments can use at most one extractor attribute",
+            ));
+        }
+        extractor = Some(parsed);
+    }
+
+    input.attrs = clean_attrs;
+    Ok(extractor)
+}
+
+fn expect_no_extractor_args(attr: &Attribute, name: &str) -> Result<()> {
+    match &attr.meta {
+        syn::Meta::Path(_) => Ok(()),
+        _ => Err(syn::Error::new_spanned(
+            attr,
+            format!("#[{name}] does not accept arguments"),
+        )),
+    }
+}
+
+fn parse_extractor_name(attr: &Attribute, name: &str) -> Result<LitStr> {
+    attr.parse_args::<LitStr>().map_err(|_| {
+        syn::Error::new_spanned(
+            attr,
+            format!("#[{name}] requires one string literal argument"),
+        )
+    })
+}
+
+fn parse_optional_extractor_name(attr: &Attribute, name: &str) -> Result<Option<LitStr>> {
+    match &attr.meta {
+        syn::Meta::Path(_) => Ok(None),
+        _ => parse_extractor_name(attr, name).map(Some),
+    }
+}
+
+fn option_inner_type(ty: &Type) -> Option<Type> {
+    let Type::Path(type_path) = ty else {
+        return None;
+    };
+    if type_path.qself.is_some() {
+        return None;
+    }
+
+    let segment = type_path.path.segments.last()?;
+    if segment.ident != "Option" {
+        return None;
+    }
+
+    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return None;
+    };
+    if arguments.args.len() != 1 {
+        return None;
+    }
+
+    match arguments.args.first()? {
+        GenericArgument::Type(inner) => Some(inner.clone()),
+        _ => None,
     }
 }

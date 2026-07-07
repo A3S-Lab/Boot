@@ -1,6 +1,6 @@
 mod controller;
 mod handler;
-mod path;
+pub(crate) mod path;
 mod route;
 
 pub use controller::ControllerDefinition;

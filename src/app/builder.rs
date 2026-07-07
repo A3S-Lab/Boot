@@ -1,9 +1,10 @@
 use super::application::BootApplication;
-use super::registration::register_module;
+use super::registration::{ModuleRegistrationSink, ModuleRegistry};
 use crate::pipeline::PipelineComponents;
 use crate::{
-    BootError, ExceptionFilter, Guard, Interceptor, Module, ModuleRef, Pipe, Result,
-    RouteDefinition,
+    BootError, BootResponse, ExceptionFilter, Guard, Interceptor, MessagePatternDefinition,
+    Middleware, Module, ModuleRef, OpenApiDocument, OpenApiInfo, Pipe, Result, RouteDefinition,
+    WebSocketGatewayDefinition,
 };
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -13,8 +14,11 @@ use std::sync::Arc;
 pub struct BootApplicationBuilder {
     modules: Vec<Arc<dyn Module>>,
     routes: Vec<RouteDefinition>,
+    gateways: Vec<WebSocketGatewayDefinition>,
+    message_patterns: Vec<MessagePatternDefinition>,
     global_pipeline: PipelineComponents,
     global_prefix: Option<String>,
+    openapi_routes: Vec<(String, OpenApiInfo)>,
 }
 
 impl BootApplicationBuilder {
@@ -43,9 +47,36 @@ impl BootApplicationBuilder {
         self
     }
 
+    /// Add a framework-neutral WebSocket gateway directly to the application shell.
+    pub fn gateway(mut self, gateway: WebSocketGatewayDefinition) -> Self {
+        self.gateways.push(gateway);
+        self
+    }
+
+    /// Add a framework-neutral microservice message pattern directly to the application shell.
+    pub fn message_pattern(mut self, pattern: MessagePatternDefinition) -> Self {
+        self.message_patterns.push(pattern);
+        self
+    }
+
+    /// Serve a generated OpenAPI document at the given path.
+    pub fn serve_openapi(mut self, path: impl Into<String>, info: OpenApiInfo) -> Self {
+        self.openapi_routes.push((path.into(), info));
+        self
+    }
+
     /// Prefix every route in the built application, for example `/api/v1`.
     pub fn global_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.global_prefix = Some(prefix.into());
+        self
+    }
+
+    /// Add application-wide middleware, similar to Nest middleware.
+    pub fn use_global_middleware<M>(mut self, middleware: M) -> Self
+    where
+        M: Middleware,
+    {
+        self.global_pipeline.push_middleware(middleware);
         self
     }
 
@@ -85,10 +116,18 @@ impl BootApplicationBuilder {
         self
     }
 
+    /// Enable DTO validation for routes that carry validation metadata.
+    pub fn use_global_validation(mut self) -> Self {
+        self.global_pipeline.enable_validation();
+        self
+    }
+
     /// Resolve module imports, providers, controllers, and routes.
     pub fn build(self) -> Result<BootApplication> {
         let module_ref = ModuleRef::new();
-        let mut seen = BTreeSet::new();
+        let global_ref = ModuleRef::new();
+        module_ref.add_visible_scope(global_ref.clone())?;
+        let mut registry = ModuleRegistry::new(global_ref);
         let mut modules = Vec::new();
         let mut module_instances = Vec::new();
         let mut routes = self
@@ -96,29 +135,78 @@ impl BootApplicationBuilder {
             .into_iter()
             .map(|route| route.with_pipeline_prefix(&self.global_pipeline))
             .collect::<Vec<_>>();
+        let mut gateways = self.gateways;
+        let mut message_patterns = self.message_patterns;
 
-        for module in &self.modules {
-            register_module(
-                Arc::clone(module),
-                &module_ref,
-                &self.global_pipeline,
-                &mut seen,
-                &mut modules,
-                &mut module_instances,
-                &mut routes,
-            )?;
+        {
+            let mut sink = ModuleRegistrationSink {
+                modules: &mut modules,
+                module_instances: &mut module_instances,
+                routes: &mut routes,
+                gateways: &mut gateways,
+                message_patterns: &mut message_patterns,
+            };
+
+            for module in &self.modules {
+                let registered = registry.register_module(
+                    Arc::clone(module),
+                    &self.global_pipeline,
+                    &mut sink,
+                )?;
+                module_ref.add_visible_scope(registered.module_ref)?;
+            }
         }
 
-        let routes = apply_global_prefix(routes, self.global_prefix.as_deref())?;
+        let mut routes = apply_global_prefix(routes, self.global_prefix.as_deref())?;
+        let gateways = apply_global_gateway_prefix(gateways, self.global_prefix.as_deref())?;
+        let documented_routes = routes.clone();
+
+        for (path, info) in self.openapi_routes {
+            let document = OpenApiDocument::from_routes(info, &documented_routes);
+            let route =
+                openapi_json_route(path, document)?.with_pipeline_prefix(&self.global_pipeline);
+            let route = match self.global_prefix.as_deref() {
+                Some(prefix) => route.with_path_prefix(prefix)?,
+                None => route,
+            };
+            routes.push(route);
+        }
+
         validate_unique_routes(&routes)?;
+        validate_unique_gateways(&gateways)?;
+        validate_unique_message_patterns(&message_patterns)?;
+        validate_gateway_route_conflicts(&routes, &gateways)?;
 
         Ok(BootApplication {
             routes,
+            gateways,
+            message_patterns,
             modules,
             module_ref,
             module_instances,
         })
     }
+}
+
+fn apply_global_gateway_prefix(
+    gateways: Vec<WebSocketGatewayDefinition>,
+    prefix: Option<&str>,
+) -> Result<Vec<WebSocketGatewayDefinition>> {
+    match prefix {
+        Some(prefix) => gateways
+            .into_iter()
+            .map(|gateway| gateway.with_path_prefix(prefix))
+            .collect(),
+        None => Ok(gateways),
+    }
+}
+
+fn openapi_json_route(path: String, document: OpenApiDocument) -> Result<RouteDefinition> {
+    RouteDefinition::get(path, move |_| {
+        let document = document.clone();
+        async move { BootResponse::json(&document) }
+    })
+    .map(RouteDefinition::hide_from_openapi)
 }
 
 fn apply_global_prefix(
@@ -144,6 +232,52 @@ fn validate_unique_routes(routes: &[RouteDefinition]) -> Result<()> {
                 "{} {}",
                 route.method().as_str(),
                 route.path()
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_unique_gateways(gateways: &[WebSocketGatewayDefinition]) -> Result<()> {
+    let mut seen = BTreeSet::new();
+
+    for gateway in gateways {
+        if !seen.insert(gateway.path_shape()) {
+            return Err(BootError::DuplicateRoute(format!("WS {}", gateway.path())));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_gateway_route_conflicts(
+    routes: &[RouteDefinition],
+    gateways: &[WebSocketGatewayDefinition],
+) -> Result<()> {
+    let get_routes = routes
+        .iter()
+        .filter(|route| route.method() == crate::HttpMethod::Get)
+        .map(RouteDefinition::path_shape)
+        .collect::<BTreeSet<_>>();
+
+    for gateway in gateways {
+        if get_routes.contains(&gateway.path_shape()) {
+            return Err(BootError::DuplicateRoute(format!("GET {}", gateway.path())));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_unique_message_patterns(patterns: &[MessagePatternDefinition]) -> Result<()> {
+    let mut seen = BTreeSet::new();
+
+    for pattern in patterns {
+        if !seen.insert(pattern.pattern()) {
+            return Err(BootError::DuplicateRoute(format!(
+                "message pattern {}",
+                pattern.pattern()
             )));
         }
     }

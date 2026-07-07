@@ -23,7 +23,7 @@ pub(super) fn normalize_prefix(prefix: &str) -> Result<String> {
     Ok(prefix.trim_end_matches('/').to_string())
 }
 
-pub(super) fn join_paths(prefix: &str, path: &str) -> Result<String> {
+pub(crate) fn join_paths(prefix: &str, path: &str) -> Result<String> {
     validate_route_path(path)?;
     let prefix = normalize_prefix(prefix)?;
     let path = path.trim_start_matches('/');
@@ -45,7 +45,7 @@ pub(super) fn join_paths(prefix: &str, path: &str) -> Result<String> {
     Ok(joined)
 }
 
-pub(super) fn match_path_params(
+pub(crate) fn match_path_params(
     pattern: &str,
     path: &str,
 ) -> Result<Option<BTreeMap<String, String>>> {
@@ -68,7 +68,7 @@ pub(super) fn match_path_params(
     Ok(Some(params))
 }
 
-pub(super) fn match_path_shape(pattern: &str, path: &str) -> bool {
+pub(crate) fn match_path_shape(pattern: &str, path: &str) -> bool {
     let pattern_segments = split_path(pattern);
     let path_segments = split_path(path);
 
@@ -82,7 +82,7 @@ pub(super) fn match_path_shape(pattern: &str, path: &str) -> bool {
         .all(|(pattern, value)| route_param_name(pattern).is_some() || pattern == value)
 }
 
-pub(super) fn route_shape_key(path: &str) -> String {
+pub(crate) fn route_shape_key(path: &str) -> String {
     let segments = split_path(path)
         .into_iter()
         .map(|segment| {
