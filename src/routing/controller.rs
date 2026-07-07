@@ -3,7 +3,8 @@ use super::path::normalize_prefix;
 use super::route::RouteDefinition;
 use crate::pipeline::PipelineComponents;
 use crate::{
-    BootRequest, ExceptionFilter, Guard, Interceptor, Middleware, Pipe, Result, SseEvent, Validate,
+    BootRequest, ExceptionFilter, Guard, Interceptor, Middleware, Pipe, Result, RouteVersioning,
+    SseEvent, Validate,
 };
 use futures_core::Stream;
 use serde::de::DeserializeOwned;
@@ -17,6 +18,7 @@ pub struct ControllerDefinition {
     routes: Vec<RouteDefinition>,
     pipeline: PipelineComponents,
     openapi_tags: Vec<String>,
+    versioning: RouteVersioning,
 }
 
 impl ControllerDefinition {
@@ -27,11 +29,19 @@ impl ControllerDefinition {
             routes: Vec::new(),
             pipeline: PipelineComponents::default(),
             openapi_tags: Vec::new(),
+            versioning: RouteVersioning::default(),
         })
     }
 
     pub fn route(mut self, route: RouteDefinition) -> Result<Self> {
         let mut route = route;
+        if route.versioning().is_unspecified() && !self.versioning.is_unspecified() {
+            route = match &self.versioning {
+                RouteVersioning::Unspecified => route,
+                RouteVersioning::Versions(versions) => route.with_versions(versions.clone()),
+                RouteVersioning::Neutral => route.version_neutral(),
+            };
+        }
         for tag in &self.openapi_tags {
             route = route.with_tag(tag.clone());
         }
@@ -93,6 +103,25 @@ impl ControllerDefinition {
         if !self.openapi_tags.contains(&tag) {
             self.openapi_tags.push(tag);
         }
+        self
+    }
+
+    pub fn with_version(mut self, version: impl Into<String>) -> Self {
+        self.versioning = RouteVersioning::version(version);
+        self
+    }
+
+    pub fn with_versions<I, V>(mut self, versions: I) -> Self
+    where
+        I: IntoIterator<Item = V>,
+        V: Into<String>,
+    {
+        self.versioning = RouteVersioning::versions(versions);
+        self
+    }
+
+    pub fn version_neutral(mut self) -> Self {
+        self.versioning = RouteVersioning::neutral();
         self
     }
 

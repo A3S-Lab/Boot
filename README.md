@@ -91,6 +91,8 @@ This repository contains the first framework slice:
 - `LoggingModule` behind the `logging` feature for provider-backed structured
   `Logger` injection, pluggable `LogSink` backends, in-memory test capture, and
   request logging middleware/interceptor helpers
+- adapter-neutral API versioning through URI segments, request headers, or
+  media type parameters, with route-level and controller-level version metadata
 - OpenAPI route metadata, schema-crate-neutral document generation, and
   optional `/openapi.json` serving through `serve_openapi(...)`, with
   Nest-style metadata macros such as `#[tag]`, `#[operation]`, `#[response]`,
@@ -117,7 +119,7 @@ This repository contains the first framework slice:
   `message_pattern_for(...)`, and `into_message_transport(...)` for
   framework-neutral microservice dispatch
 - duplicate module deduplication by module name
-- duplicate route rejection by HTTP method and path shape
+- duplicate route rejection by HTTP method, path shape, and overlapping API versions
 - framework-neutral route registration
 - route calls validate HTTP method and path pattern before executing handlers
 - route matching preserves exact path segment shape, including trailing slashes,
@@ -536,6 +538,97 @@ fn notifications_controller() -> Result<ControllerDefinition> {
 SSE routes require clients to accept `text/event-stream`; missing `Accept`,
 `*/*`, `text/*`, and `text/event-stream` are accepted, while requests that only
 accept unrelated media types return `BootError::NotAcceptable`.
+
+## API Versioning
+
+Boot supports Nest-style API versioning without coupling route matching to a
+specific HTTP adapter. Enable one version extraction strategy on the application,
+then attach versions to individual routes or a whole controller.
+
+```rust
+use a3s_boot::{
+    ApiVersioning, BootApplication, BootRequest, BootResponse, ControllerDefinition,
+    Result, RouteDefinition,
+};
+
+let app = BootApplication::builder()
+    .enable_api_versioning(ApiVersioning::uri().with_default_version("1"))
+    .route(
+        RouteDefinition::get_json("/cats/{id}", |request: BootRequest| async move {
+            Ok(serde_json::json!({
+                "id": request.param("id").unwrap_or("unknown"),
+                "version": "1"
+            }))
+        })?
+        .with_version("1"),
+    )
+    .route(
+        RouteDefinition::get("/health", |_| async {
+            Ok(BootResponse::text("ok"))
+        })?
+        .version_neutral(),
+    )
+    .build()?;
+```
+
+With URI versioning, `/v1/cats/milo` matches the route path `/cats/{id}`;
+handlers receive decoded params from the unversioned route shape. A
+version-neutral route such as `/health` matches any requested version.
+
+Controller-level versions are inherited by routes that do not declare their own
+version:
+
+```rust
+use a3s_boot::{BootRequest, ControllerDefinition, Result};
+
+fn cats_controller() -> Result<ControllerDefinition> {
+    ControllerDefinition::new("/cats")?
+        .with_version("1")
+        .get_json("/{id}", |request: BootRequest| async move {
+            Ok(serde_json::json!({
+                "id": request.param("id").unwrap_or("unknown"),
+                "version": "1"
+            }))
+        })
+}
+```
+
+Header and media type strategies use the same route metadata:
+
+```rust
+use a3s_boot::{ApiVersioning, BootApplication, BootResponse, RouteDefinition};
+
+let header_versioned = BootApplication::builder()
+    .enable_api_versioning(ApiVersioning::header("x-api-version"))
+    .route(
+        RouteDefinition::get("/cats", |_| async {
+            Ok(BootResponse::text("cats v1"))
+        })?
+        .with_version("1"),
+    )
+    .route(
+        RouteDefinition::get("/cats", |_| async {
+            Ok(BootResponse::text("cats v2"))
+        })?
+        .with_version("2"),
+    )
+    .build()?;
+
+let media_type_versioned = BootApplication::builder()
+    .enable_api_versioning(ApiVersioning::media_type())
+    .route(
+        RouteDefinition::get("/cats", |_| async {
+            Ok(BootResponse::text("cats v2"))
+        })?
+        .with_version("2"),
+    )
+    .build()?;
+```
+
+For header versioning, send `x-api-version: 2`. For media type versioning, send
+an `Accept` value such as `application/json; v=2`. Routes without explicit
+version metadata match unversioned requests, and also match the configured
+default version when one is set with `.with_default_version("1")`.
 
 ## OpenAPI Metadata
 
@@ -1934,6 +2027,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | Scheduler | Optional provider-backed task scheduling through `ScheduleModule` |
 | Queue | Optional provider-backed background jobs through `QueueModule` |
 | Logger | Optional provider-backed structured logging through `LoggingModule` |
+| API versioning | URI, header, or media type version matching through route metadata |
 | Filter | Error mapping into HTTP responses |
 | Lifecycle hook | Startup and shutdown behavior for modules and providers |
 
@@ -1963,6 +2057,7 @@ src/
 ├── schedule.rs   # Optional provider-backed scheduler and in-process backend
 ├── transport/    # Adapter-neutral microservice message patterns and transports
 ├── validation.rs # DTO validation trait and route validation hooks
+├── versioning.rs # Adapter-neutral API versioning strategies and route metadata
 ├── websocket/    # Adapter-neutral WebSocket gateways, messages, and pipeline hooks
 ├── error.rs
 └── lib.rs

@@ -1,9 +1,9 @@
 #![cfg(feature = "axum")]
 
 use a3s_boot::{
-    AxumAdapter, BootApplication, BootError, BootRequest, BootResponse, ExecutionContext,
-    HttpMethod, MiddlewareOutcome, RouteDefinition, SseEvent, WebSocketGatewayDefinition,
-    WebSocketMessage,
+    ApiVersioning, AxumAdapter, BootApplication, BootError, BootRequest, BootResponse,
+    ExecutionContext, HttpMethod, MiddlewareOutcome, RouteDefinition, SseEvent,
+    WebSocketGatewayDefinition, WebSocketMessage,
 };
 use std::sync::Arc;
 
@@ -173,6 +173,84 @@ async fn axum_adapter_prefers_static_routes_over_param_routes() {
 
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, "static");
+}
+
+#[tokio::test]
+async fn axum_adapter_dispatches_uri_versioned_routes() {
+    use axum::body::{to_bytes, Body};
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    let app = BootApplication::builder()
+        .enable_api_versioning(ApiVersioning::uri())
+        .route(
+            RouteDefinition::get("/cats/{id}", |request: BootRequest| async move {
+                Ok(BootResponse::text(
+                    request.param("id").unwrap_or("missing").to_string(),
+                ))
+            })
+            .unwrap()
+            .with_version("1"),
+        )
+        .build()
+        .unwrap();
+    let router = app.into_adapter(&AxumAdapter::new()).unwrap();
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/v1/cats/milo")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = to_bytes(response.into_body(), 1024).await.unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "milo");
+}
+
+#[tokio::test]
+async fn axum_adapter_dispatches_header_versioned_routes_with_duplicate_shapes() {
+    use axum::body::{to_bytes, Body};
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    let app = BootApplication::builder()
+        .enable_api_versioning(ApiVersioning::header("x-api-version"))
+        .route(
+            RouteDefinition::get("/cats", |_| async { Ok(BootResponse::text("v1")) })
+                .unwrap()
+                .with_version("1"),
+        )
+        .route(
+            RouteDefinition::get("/cats", |_| async { Ok(BootResponse::text("v2")) })
+                .unwrap()
+                .with_version("2"),
+        )
+        .build()
+        .unwrap();
+    let router = app.into_adapter(&AxumAdapter::new()).unwrap();
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/cats")
+                .header("x-api-version", "2")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let body = to_bytes(response.into_body(), 1024).await.unwrap();
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "v2");
 }
 
 #[tokio::test]

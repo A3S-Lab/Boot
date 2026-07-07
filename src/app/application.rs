@@ -1,8 +1,9 @@
 use super::builder::BootApplicationBuilder;
+use crate::versioning::ApiVersionCandidate;
 use crate::{
-    BootError, BootRequest, BootResponse, HttpAdapter, HttpMethod, MessagePatternDefinition,
-    MessageTransport, Module, ModuleRef, OpenApiDocument, OpenApiInfo, Result, RouteDefinition,
-    TransportMessage, TransportReply, WebSocketGatewayDefinition,
+    ApiVersioning, BootError, BootRequest, BootResponse, HttpAdapter, HttpMethod,
+    MessagePatternDefinition, MessageTransport, Module, ModuleRef, OpenApiDocument, OpenApiInfo,
+    Result, RouteDefinition, TransportMessage, TransportReply, WebSocketGatewayDefinition,
 };
 use std::collections::BTreeMap;
 use std::fmt;
@@ -58,6 +59,7 @@ pub struct BootApplication {
     pub(crate) modules: Vec<String>,
     pub(crate) module_ref: ModuleRef,
     pub(crate) module_instances: Vec<ModuleInstance>,
+    pub(crate) api_versioning: Option<ApiVersioning>,
 }
 
 impl BootApplication {
@@ -74,6 +76,11 @@ impl BootApplication {
     /// Routes exposed by the application.
     pub fn routes(&self) -> &[RouteDefinition] {
         &self.routes
+    }
+
+    /// API versioning configuration used for HTTP route matching, when enabled.
+    pub fn api_versioning(&self) -> Option<&ApiVersioning> {
+        self.api_versioning.as_ref()
     }
 
     /// WebSocket gateways exposed by the application.
@@ -93,23 +100,24 @@ impl BootApplication {
 
     /// Route registered for a method and the most specific route shape matching a path.
     pub fn route_for(&self, method: HttpMethod, path: &str) -> Option<&RouteDefinition> {
-        let best_specificity = best_path_specificity(&self.routes, path)?;
-        self.routes.iter().find(|route| {
-            route.matches_path_shape(path)
-                && route.path_specificity().as_slice() == best_specificity.as_slice()
-                && route.method() == method
-        })
+        let candidates = self.path_candidates(path);
+        self.route_for_candidates(method, &candidates)
+            .map(|matched| matched.route)
     }
 
     /// Route and decoded path parameters for a method and path, when one is registered.
     pub fn route_match(&self, method: HttpMethod, path: &str) -> Result<Option<RouteMatch<'_>>> {
-        let Some(route) = self.route_for(method, path) else {
+        let candidates = self.path_candidates(path);
+        let Some(matched) = self.route_for_candidates(method, &candidates) else {
             return Ok(None);
         };
-        let Some(params) = route.path_params(path)? else {
+        let Some(params) = matched.route.path_params(&matched.path)? else {
             return Ok(None);
         };
-        Ok(Some(RouteMatch { route, params }))
+        Ok(Some(RouteMatch {
+            route: matched.route,
+            params,
+        }))
     }
 
     pub fn gateway_for(&self, path: &str) -> Option<&WebSocketGatewayDefinition> {
@@ -126,12 +134,25 @@ impl BootApplication {
 
     /// HTTP methods registered for the most specific route shape matching a path.
     pub fn allowed_methods(&self, path: &str) -> Vec<HttpMethod> {
-        let Some(best_specificity) = best_path_specificity(&self.routes, path) else {
+        let candidates = self.path_candidates(path);
+        let Some((candidate_index, best_specificity)) =
+            best_path_specificity(&self.routes, &candidates, self.api_versioning.as_ref())
+        else {
             return Vec::new();
         };
+        let candidate = &candidates[candidate_index];
 
         let mut methods = Vec::new();
-        for route in matching_routes_with_specificity(&self.routes, path, &best_specificity) {
+        for route in &self.routes {
+            if !route_matches_candidate(
+                route,
+                candidate,
+                &best_specificity,
+                self.api_versioning.as_ref(),
+            ) {
+                continue;
+            }
+
             if !methods.contains(&route.method()) {
                 methods.push(route.method());
             }
@@ -194,26 +215,36 @@ impl BootApplication {
 
     /// Dispatch a framework-neutral request through the resolved route table.
     pub async fn call(&self, request: BootRequest) -> Result<BootResponse> {
-        let path = request.path.clone();
-        let Some(best_specificity) = best_path_specificity(&self.routes, &path) else {
+        let candidates = self.request_candidates(&request);
+        let Some((candidate_index, best_specificity)) =
+            best_path_specificity(&self.routes, &candidates, self.api_versioning.as_ref())
+        else {
             return Err(BootError::NotFound(format!(
                 "{} {}",
                 request.method.as_str(),
                 request.path
             )));
         };
+        let candidate = &candidates[candidate_index];
 
-        if let Some(route) =
-            matching_route_with_specificity(&self.routes, &path, &best_specificity, |route| {
-                route.method() == request.method
-            })
-        {
+        if let Some(route) = matching_route_with_specificity(
+            &self.routes,
+            candidate,
+            &best_specificity,
+            self.api_versioning.as_ref(),
+            |route| route.method() == request.method,
+        ) {
+            let request = request.with_matched_path(candidate.path.clone());
             return route.call(request).await;
         }
 
-        if let Some(route) =
-            matching_route_with_specificity(&self.routes, &path, &best_specificity, |_| true)
-        {
+        if let Some(route) = matching_route_with_specificity(
+            &self.routes,
+            candidate,
+            &best_specificity,
+            self.api_versioning.as_ref(),
+            |_| true,
+        ) {
             return route.call(request).await;
         }
 
@@ -306,45 +337,118 @@ impl BootApplication {
             (Ok(()), Ok(())) => Ok(()),
         }
     }
+
+    fn request_candidates(&self, request: &BootRequest) -> Vec<ApiVersionCandidate> {
+        match self.api_versioning.as_ref() {
+            Some(versioning) => versioning.request_candidates(request),
+            None => vec![ApiVersionCandidate {
+                path: request.path.clone(),
+                version: None,
+            }],
+        }
+    }
+
+    fn path_candidates(&self, path: &str) -> Vec<ApiVersionCandidate> {
+        match self.api_versioning.as_ref() {
+            Some(versioning) => versioning.path_candidates(path),
+            None => vec![ApiVersionCandidate {
+                path: path.to_string(),
+                version: None,
+            }],
+        }
+    }
+
+    fn route_for_candidates<'a>(
+        &'a self,
+        method: HttpMethod,
+        candidates: &[ApiVersionCandidate],
+    ) -> Option<MatchedRoute<'a>> {
+        let (candidate_index, best_specificity) =
+            best_path_specificity(&self.routes, candidates, self.api_versioning.as_ref())?;
+        let candidate = &candidates[candidate_index];
+        let route = matching_route_with_specificity(
+            &self.routes,
+            candidate,
+            &best_specificity,
+            self.api_versioning.as_ref(),
+            |route| route.method() == method,
+        )?;
+
+        Some(MatchedRoute {
+            route,
+            path: candidate.path.clone(),
+        })
+    }
 }
 
-fn best_path_specificity(routes: &[RouteDefinition], path: &str) -> Option<Vec<u8>> {
-    let mut best_specificity = None;
+struct MatchedRoute<'a> {
+    route: &'a RouteDefinition,
+    path: String,
+}
 
-    for route in routes {
-        if route.matches_path_shape(path) {
-            let specificity = route.path_specificity();
-            if best_specificity
-                .as_ref()
-                .map(|best| specificity > *best)
-                .unwrap_or(true)
-            {
-                best_specificity = Some(specificity);
+fn best_path_specificity(
+    routes: &[RouteDefinition],
+    candidates: &[ApiVersionCandidate],
+    versioning: Option<&ApiVersioning>,
+) -> Option<(usize, Vec<u8>)> {
+    let mut best = None;
+
+    for (candidate_index, candidate) in candidates.iter().enumerate() {
+        for route in routes {
+            if route_matches_path_and_version(route, candidate, versioning) {
+                let specificity = route.path_specificity();
+                if best
+                    .as_ref()
+                    .map(|(_, best_specificity)| specificity > *best_specificity)
+                    .unwrap_or(true)
+                {
+                    best = Some((candidate_index, specificity));
+                }
             }
         }
     }
 
-    best_specificity
-}
-
-fn matching_routes_with_specificity<'a>(
-    routes: &'a [RouteDefinition],
-    path: &'a str,
-    specificity: &'a [u8],
-) -> impl Iterator<Item = &'a RouteDefinition> + 'a {
-    routes.iter().filter(move |route| {
-        route.matches_path_shape(path) && route.path_specificity().as_slice() == specificity
-    })
+    best
 }
 
 fn matching_route_with_specificity<'a, P>(
     routes: &'a [RouteDefinition],
-    path: &'a str,
-    specificity: &'a [u8],
+    candidate: &ApiVersionCandidate,
+    specificity: &[u8],
+    versioning: Option<&ApiVersioning>,
     mut predicate: P,
 ) -> Option<&'a RouteDefinition>
 where
     P: FnMut(&RouteDefinition) -> bool,
 {
-    matching_routes_with_specificity(routes, path, specificity).find(|route| predicate(route))
+    routes.iter().find(|route| {
+        route_matches_candidate(route, candidate, specificity, versioning) && predicate(route)
+    })
+}
+
+fn route_matches_candidate(
+    route: &RouteDefinition,
+    candidate: &ApiVersionCandidate,
+    specificity: &[u8],
+    versioning: Option<&ApiVersioning>,
+) -> bool {
+    route_matches_path_and_version(route, candidate, versioning)
+        && route.path_specificity().as_slice() == specificity
+}
+
+fn route_matches_path_and_version(
+    route: &RouteDefinition,
+    candidate: &ApiVersionCandidate,
+    versioning: Option<&ApiVersioning>,
+) -> bool {
+    if !route.matches_path_shape(&candidate.path) {
+        return false;
+    }
+
+    match versioning {
+        Some(versioning) => route
+            .versioning()
+            .matches(candidate.version.as_deref(), versioning.default_version()),
+        None => true,
+    }
 }

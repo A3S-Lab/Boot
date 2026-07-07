@@ -49,14 +49,28 @@ impl HttpAdapter for AxumAdapter {
     type Output = Router;
 
     fn build(&self, app: BootApplication) -> Result<Self::Output> {
-        let mut router = Router::new().fallback(not_found_fallback);
-        for route in app.routes().iter().cloned() {
-            let path = axum_route_path(route.path());
-            router = router.route(
-                &path,
-                route_to_method_router(route, app.clone(), self.body_limit),
-            );
+        let versioning_enabled = app.api_versioning().is_some();
+        let mut router = if versioning_enabled {
+            let body_limit = self.body_limit;
+            let app = app.clone();
+            Router::new().fallback(move |request: Request| {
+                let app = app.clone();
+                async move { dispatch_application(app, request, body_limit).await }
+            })
+        } else {
+            Router::new().fallback(not_found_fallback)
+        };
+
+        if !versioning_enabled {
+            for route in app.routes().iter().cloned() {
+                let path = axum_route_path(route.path());
+                router = router.route(
+                    &path,
+                    route_to_method_router(route, app.clone(), self.body_limit),
+                );
+            }
         }
+
         for gateway in app.gateways().iter().cloned() {
             let path = axum_route_path(gateway.path());
             router = router.route(&path, gateway_to_method_router(gateway));

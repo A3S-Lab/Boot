@@ -1,6 +1,6 @@
 use crate::{
     ExceptionFilter, Guard, HttpMethod, Interceptor, Middleware, OpenApiRouteMetadata, Pipe,
-    RequestValidator, Result,
+    RequestValidator, Result, RouteVersioning,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -27,6 +27,7 @@ pub struct RouteDefinition {
     pub(super) module_name: Option<String>,
     pub(super) controller_prefix: Option<String>,
     pub(super) openapi: OpenApiRouteMetadata,
+    pub(super) versioning: RouteVersioning,
 }
 
 impl RouteDefinition {
@@ -51,6 +52,7 @@ impl RouteDefinition {
             module_name: None,
             controller_prefix: None,
             openapi: OpenApiRouteMetadata::default(),
+            versioning: RouteVersioning::default(),
         })
     }
 
@@ -94,7 +96,30 @@ impl RouteDefinition {
         &self.openapi
     }
 
+    pub fn versioning(&self) -> &RouteVersioning {
+        &self.versioning
+    }
+
     pub fn validation_enabled(&self) -> bool {
         self.validation_enabled
+    }
+
+    pub fn with_version(mut self, version: impl Into<String>) -> Self {
+        self.versioning = RouteVersioning::version(version);
+        self
+    }
+
+    pub fn with_versions<I, V>(mut self, versions: I) -> Self
+    where
+        I: IntoIterator<Item = V>,
+        V: Into<String>,
+    {
+        self.versioning = RouteVersioning::versions(versions);
+        self
+    }
+
+    pub fn version_neutral(mut self) -> Self {
+        self.versioning = RouteVersioning::neutral();
+        self
     }
 }

@@ -2,9 +2,9 @@ use super::application::BootApplication;
 use super::registration::{ModuleRegistrationSink, ModuleRegistry};
 use crate::pipeline::PipelineComponents;
 use crate::{
-    BootError, BootResponse, ExceptionFilter, Guard, Interceptor, MessagePatternDefinition,
-    Middleware, Module, ModuleRef, OpenApiDocument, OpenApiInfo, Pipe, Result, RouteDefinition,
-    WebSocketGatewayDefinition,
+    ApiVersioning, BootError, BootResponse, ExceptionFilter, Guard, Interceptor,
+    MessagePatternDefinition, Middleware, Module, ModuleRef, OpenApiDocument, OpenApiInfo, Pipe,
+    Result, RouteDefinition, WebSocketGatewayDefinition,
 };
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -18,6 +18,7 @@ pub struct BootApplicationBuilder {
     message_patterns: Vec<MessagePatternDefinition>,
     global_pipeline: PipelineComponents,
     global_prefix: Option<String>,
+    api_versioning: Option<ApiVersioning>,
     openapi_routes: Vec<(String, OpenApiInfo)>,
 }
 
@@ -68,6 +69,12 @@ impl BootApplicationBuilder {
     /// Prefix every route in the built application, for example `/api/v1`.
     pub fn global_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.global_prefix = Some(prefix.into());
+        self
+    }
+
+    /// Enable adapter-neutral API version matching for HTTP routes.
+    pub fn enable_api_versioning(mut self, versioning: ApiVersioning) -> Self {
+        self.api_versioning = Some(versioning);
         self
     }
 
@@ -172,7 +179,7 @@ impl BootApplicationBuilder {
             routes.push(route);
         }
 
-        validate_unique_routes(&routes)?;
+        validate_unique_routes(&routes, self.api_versioning.as_ref())?;
         validate_unique_gateways(&gateways)?;
         validate_unique_message_patterns(&message_patterns)?;
         validate_gateway_route_conflicts(&routes, &gateways)?;
@@ -184,6 +191,7 @@ impl BootApplicationBuilder {
             modules,
             module_ref,
             module_instances,
+            api_versioning: self.api_versioning,
         })
     }
 }
@@ -222,16 +230,33 @@ fn apply_global_prefix(
     }
 }
 
-fn validate_unique_routes(routes: &[RouteDefinition]) -> Result<()> {
-    let mut seen = BTreeSet::new();
+fn validate_unique_routes(
+    routes: &[RouteDefinition],
+    versioning: Option<&ApiVersioning>,
+) -> Result<()> {
+    for (index, route) in routes.iter().enumerate() {
+        for existing in routes.iter().take(index) {
+            if existing.method() != route.method()
+                || existing.path_shape_key() != route.path_shape_key()
+            {
+                continue;
+            }
 
-    for route in routes {
-        let key = (route.method(), route.path_shape_key());
-        if !seen.insert(key) {
+            let duplicate = match versioning {
+                Some(versioning) => existing
+                    .versioning()
+                    .overlaps(route.versioning(), versioning.default_version()),
+                None => true,
+            };
+            if !duplicate {
+                continue;
+            }
+
             return Err(BootError::DuplicateRoute(format!(
-                "{} {}",
+                "{} {} version {}",
                 route.method().as_str(),
-                route.path()
+                route.path(),
+                route.versioning()
             )));
         }
     }

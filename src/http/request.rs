@@ -58,6 +58,11 @@ impl BootRequest {
         self
     }
 
+    pub(crate) fn with_matched_path(mut self, path: impl Into<String>) -> Self {
+        self.path = path.into();
+        self
+    }
+
     pub fn with_path_params(mut self, params: BTreeMap<String, String>) -> Self {
         self.params = params;
         self

@@ -31,6 +31,7 @@ mod routing;
 mod schedule;
 mod transport;
 mod validation;
+mod versioning;
 mod websocket;
 
 #[cfg(feature = "macros")]
@@ -89,6 +90,7 @@ pub use validation::Validate;
 pub(crate) use validation::{
     body_validator, params_validator, query_validator, validate_value, RequestValidator,
 };
+pub use versioning::{ApiVersioning, ApiVersioningStrategy, RouteVersioning};
 pub use websocket::{
     IntoWebSocketReply, WebSocketConnection, WebSocketContext, WebSocketGatewayConnection,
     WebSocketGatewayDefinition, WebSocketGuard, WebSocketInterceptor, WebSocketMessage,

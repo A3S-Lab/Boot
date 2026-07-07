@@ -76,6 +76,9 @@ Implemented today:
 - Provider-backed structured logging with `LoggingModule`, `Logger`, pluggable
   sinks, in-memory test capture, request middleware/interceptor helpers, and
   worker-friendly injection through the same provider graph.
+- API versioning with URI, header, and media type strategies; route-level and
+  controller-level version metadata; default versions; and version-neutral
+  routes.
 
 ## Priority Order
 
@@ -405,7 +408,7 @@ Nest equivalent areas:
 - task scheduling (implemented)
 - queues (implemented)
 - logging (implemented)
-- API versioning
+- API versioning (implemented)
 - serialization
 - compression
 - file upload
@@ -436,14 +439,20 @@ Acceptance:
 - Logging can register typed providers, write structured records through
   pluggable sinks, capture records in tests, and expose request/worker logging
   integration points without forcing a concrete backend. (Covered)
+- API versioning can route by URI segment, request header, or media type
+  parameter; inherit controller versions; use default versions; expose
+  version-neutral routes; and reject duplicate routes only when version metadata
+  overlaps. (Covered)
 
 ## Immediate Next Task
 
-Start with Milestone 8 technique modules. Keep GraphQL out of scope.
+Continue Milestone 8 technique modules with serialization. Keep GraphQL out of
+scope.
 
 Suggested implementation sequence:
 
-1. Start API versioning with route metadata and adapter-neutral matching rules.
+1. Start serialization with response-shaping metadata and adapter-neutral
+   interceptor hooks.
 2. Define integration through providers, middleware, guards, interceptors, or
    adapters instead of adding one-off framework hooks.
 3. Add crate-local tests and README examples for the chosen technique module.
