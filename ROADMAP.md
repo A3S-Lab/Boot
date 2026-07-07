@@ -82,6 +82,9 @@ Implemented today:
 - JSON response serialization with `SerializationInterceptor`, route/controller
   `SerializationOptions`, include/exclude field shaping, null skipping, and
   content-length updates after body rewriting.
+- Optional gzip response compression with `CompressionInterceptor`,
+  `CompressionOptions`, `Accept-Encoding` negotiation, `Vary` handling, and
+  content-length updates.
 
 ## Priority Order
 
@@ -413,7 +416,7 @@ Nest equivalent areas:
 - logging (implemented)
 - API versioning (implemented)
 - serialization (implemented)
-- compression
+- compression (implemented)
 - file upload
 - security helpers such as CORS, CSRF, helmet-like headers, and rate limiting
 
@@ -449,16 +452,19 @@ Acceptance:
 - Serialization can shape JSON response objects and arrays through global
   interceptors plus route/controller metadata, leave non-JSON responses
   unchanged, and keep content length valid after rewriting. (Covered)
+- Compression can gzip eligible responses when requested by `Accept-Encoding`,
+  skip too-small, streaming, and already-encoded responses, set `Vary`, and keep
+  content length valid after rewriting. (Covered)
 
 ## Immediate Next Task
 
-Continue Milestone 8 technique modules with compression. Keep GraphQL out of
+Continue Milestone 8 technique modules with file upload. Keep GraphQL out of
 scope.
 
 Suggested implementation sequence:
 
-1. Start compression with adapter-neutral response middleware/interceptor hooks
-   and opt-in encoding negotiation.
+1. Start file upload with adapter-neutral multipart request helpers and size
+   limits.
 2. Define integration through providers, middleware, guards, interceptors, or
    adapters instead of adding one-off framework hooks.
 3. Add crate-local tests and README examples for the chosen technique module.

@@ -91,6 +91,8 @@ This repository contains the first framework slice:
 - `LoggingModule` behind the `logging` feature for provider-backed structured
   `Logger` injection, pluggable `LogSink` backends, in-memory test capture, and
   request logging middleware/interceptor helpers
+- `CompressionInterceptor` behind the `compression` feature for gzip response
+  compression with `Accept-Encoding` negotiation and content-length updates
 - adapter-neutral API versioning through URI segments, request headers, or
   media type parameters, with route-level and controller-level version metadata
 - `SerializationInterceptor` and `SerializationOptions` for Nest-style JSON
@@ -191,6 +193,14 @@ provider-backed logging without forcing a concrete backend:
 ```toml
 [dependencies]
 a3s-boot = { version = "0.1", features = ["logging"] }
+```
+
+Enable the optional gzip compression interceptor when the application should
+compress eligible responses for clients that send `Accept-Encoding: gzip`:
+
+```toml
+[dependencies]
+a3s-boot = { version = "0.1", features = ["compression"] }
 ```
 
 ```rust
@@ -1825,6 +1835,32 @@ top-level fields, and `skip_null_fields()` drops null top-level fields. When a
 serialized response had a `Content-Length`, Boot updates it after rewriting the
 body.
 
+## Compression
+
+Enable the `compression` feature to use `CompressionInterceptor`, a Nest-style
+response compression hook for gzip. It runs after handlers and other route
+interceptors, checks the request `Accept-Encoding` header, skips responses that
+are already encoded or too small, and leaves SSE streams unchanged.
+
+```rust
+use a3s_boot::{
+    BootApplication, BootResponse, CompressionOptions, Result, RouteDefinition,
+};
+
+fn app() -> Result<BootApplication> {
+    BootApplication::builder()
+        .use_global_compression(CompressionOptions::new().with_min_size(512))
+        .route(RouteDefinition::get("/report", |_| async {
+            Ok(BootResponse::text("large report body"))
+        })?)
+        .build()
+}
+```
+
+Clients opt in with `Accept-Encoding: gzip`. Compressed responses include
+`Content-Encoding: gzip` and `Vary: accept-encoding`. If the response had a
+`Content-Length`, Boot rewrites it to the compressed body length.
+
 ## Params And Query
 
 Boot keeps route params adapter-neutral. Use whole `{name}` segments in routes
@@ -2104,6 +2140,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | Scheduler | Optional provider-backed task scheduling through `ScheduleModule` |
 | Queue | Optional provider-backed background jobs through `QueueModule` |
 | Logger | Optional provider-backed structured logging through `LoggingModule` |
+| Compression | Optional gzip response compression through `CompressionInterceptor` |
 | API versioning | URI, header, or media type version matching through route metadata |
 | Serialization | JSON response shaping through `SerializationInterceptor` metadata |
 | Filter | Error mapping into HTTP responses |
@@ -2124,6 +2161,7 @@ src/
 ├── adapters/     # Optional backend adapters such as Axum
 ├── app/          # Application instance, builder, and module registration
 ├── cache.rs      # Optional typed cache module and in-memory store
+├── compression.rs # Optional gzip response compression interceptor
 ├── config.rs     # Optional ACL-backed typed configuration module
 ├── http/         # Adapter-neutral request, response, methods, and query parsing
 ├── logging.rs    # Optional provider-backed structured logging module

@@ -6,6 +6,8 @@ use crate::{
     MessagePatternDefinition, Middleware, Module, ModuleRef, OpenApiDocument, OpenApiInfo, Pipe,
     Result, RouteDefinition, SerializationInterceptor, WebSocketGatewayDefinition,
 };
+#[cfg(feature = "compression")]
+use crate::{CompressionInterceptor, CompressionOptions};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -118,6 +120,14 @@ impl BootApplicationBuilder {
     pub fn use_global_serialization(mut self) -> Self {
         self.global_pipeline
             .push_interceptor(SerializationInterceptor::new());
+        self
+    }
+
+    /// Add gzip response compression for clients that send `Accept-Encoding: gzip`.
+    #[cfg(feature = "compression")]
+    pub fn use_global_compression(mut self, options: CompressionOptions) -> Self {
+        self.global_pipeline
+            .push_interceptor(CompressionInterceptor::with_options(options));
         self
     }
 
