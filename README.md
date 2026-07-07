@@ -34,7 +34,8 @@ macros expand at compile time into the same explicit module, provider, and
 controller definitions used by the core API. Axum is the default adapter, not
 the framework kernel. If you are coming from Nest.js, see
 [Nest-Style Attribute Macros](#nest-style-attribute-macros) for the
-`@Injectable` and `@Controller` style.
+`@Injectable` and `@Controller` style. See [ROADMAP.md](ROADMAP.md) for the
+Nest parity development plan.
 
 ## Status
 

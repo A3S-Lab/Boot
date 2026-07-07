@@ -21,7 +21,6 @@ Official Nest.js areas used as reference:
 - OpenAPI: https://docs.nestjs.com/openapi/introduction
 - WebSockets: https://docs.nestjs.com/websockets/gateways
 - Microservices: https://docs.nestjs.com/microservices/basics
-- GraphQL: https://docs.nestjs.com/graphql/quick-start
 - Techniques: https://docs.nestjs.com/techniques/configuration
 
 ## Current Baseline
@@ -51,11 +50,17 @@ Implemented today:
 5. Middleware
 6. WebSocket gateways
 7. Microservice transports
-8. GraphQL
-9. Technique modules: config, cache, schedule, queues, logging, versioning, file upload
+8. Technique modules: config, cache, schedule, queues, logging, versioning, file upload
 
 This order maximizes developer-facing Nest familiarity before adding broad
 transport integrations.
+
+## Out Of Scope
+
+GraphQL is intentionally out of scope for this roadmap. A3S Boot should focus
+on HTTP, SSE, WebSocket gateways, message transports, and the Nest-style module
+and controller experience. If GraphQL is ever needed, it should be evaluated as
+a separate companion crate rather than part of the core parity plan.
 
 ## Milestone 1: Parameter Extraction Macros
 
@@ -303,28 +308,7 @@ Acceptance:
 - Message handlers can use providers and validation.
 - Tests cover request-response and event-only patterns.
 
-## Milestone 8: GraphQL
-
-Nest equivalent:
-
-- resolvers
-- code-first and schema-first modes
-- subscriptions
-
-Tasks:
-
-- Decide whether GraphQL belongs in `a3s-boot` or a companion crate.
-- If in scope, wrap a Rust GraphQL library behind Boot module/provider
-  conventions.
-- Integrate provider injection, guards, interceptors, and lifecycle hooks.
-
-Acceptance:
-
-- A resolver can use an injected service.
-- Schema generation is deterministic.
-- HTTP and WebSocket subscription behavior are tested.
-
-## Milestone 9: Technique Modules
+## Milestone 8: Technique Modules
 
 Nest equivalent areas:
 
@@ -375,4 +359,3 @@ cargo clippy --all-targets -- -D warnings
 cargo clippy --no-default-features --all-targets -- -D warnings
 git diff --check
 ```
-
