@@ -82,6 +82,9 @@ This repository contains the first framework slice:
   global exports, and `Validate` integration
 - `CacheModule` behind the `cache` feature for typed in-memory caching, TTL,
   named exports, global exports, and provider-based injection
+- `ScheduleModule` behind the `schedule` feature for provider-backed
+  `Scheduler` injection, in-process timeout/interval/cron jobs, named exports,
+  global exports, and lifecycle-managed shutdown
 - OpenAPI route metadata, schema-crate-neutral document generation, and
   optional `/openapi.json` serving through `serve_openapi(...)`, with
   Nest-style metadata macros such as `#[tag]`, `#[operation]`, `#[response]`,
@@ -151,6 +154,15 @@ cache provider:
 [dependencies]
 a3s-boot = { version = "0.1", features = ["cache"] }
 serde = { version = "1", features = ["derive"] }
+```
+
+Enable the optional scheduler module when the application needs Nest-style
+scheduled jobs:
+
+```toml
+[dependencies]
+a3s-boot = { version = "0.1", features = ["schedule"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 ```rust
@@ -1156,6 +1168,107 @@ module default TTL. Add `.named("token")` to `CacheModule` when a module needs
 multiple cache providers, or `.global()` to make one cache visible to every
 module scope after registration.
 
+## Task Scheduling
+
+Enable the `schedule` feature to register `ScheduleModule` and inject a
+provider-backed `Scheduler`. The in-process backend supports the same core
+shapes as Nest's `@Timeout`, `@Interval`, and `@Cron`; jobs are started during
+application bootstrap and aborted during application shutdown.
+
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+
+use a3s_boot::{
+    BootApplication, BoxFuture, Module, ModuleRef, ProviderDefinition, Result, ScheduleModule,
+    Scheduler,
+};
+
+#[derive(Debug)]
+struct CatsService;
+
+impl CatsService {
+    async fn refresh_cache(&self) -> Result<()> {
+        Ok(())
+    }
+
+    async fn prune_old_records(&self) -> Result<()> {
+        Ok(())
+    }
+
+    async fn warmup(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct CatsModule {
+    schedule: ScheduleModule,
+}
+
+impl Module for CatsModule {
+    fn name(&self) -> &'static str {
+        "cats"
+    }
+
+    fn imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(self.schedule.clone())]
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::singleton(CatsService)])
+    }
+
+    fn on_application_bootstrap(&self, module_ref: ModuleRef) -> BoxFuture<'static, Result<()>> {
+        Box::pin(async move {
+            let scheduler = module_ref.get::<Scheduler>()?;
+            let cats = module_ref.get::<CatsService>()?;
+
+            // Nest @Interval("cats.refresh", 60000)
+            scheduler.interval("cats.refresh", Duration::from_secs(60), {
+                let cats = Arc::clone(&cats);
+                move |_| {
+                    let cats = Arc::clone(&cats);
+                    async move { cats.refresh_cache().await }
+                }
+            })?;
+
+            // Nest @Cron("0 0 * * * *")
+            scheduler.cron("cats.prune", "0 0 * * * *", {
+                let cats = Arc::clone(&cats);
+                move |_| {
+                    let cats = Arc::clone(&cats);
+                    async move { cats.prune_old_records().await }
+                }
+            })?;
+
+            // Nest @Timeout("cats.warmup", 5000)
+            scheduler.timeout("cats.warmup", Duration::from_secs(5), move |_| {
+                let cats = Arc::clone(&cats);
+                async move { cats.warmup().await }
+            })?;
+
+            Ok(())
+        })
+    }
+}
+
+let app = BootApplication::builder()
+    .import(CatsModule {
+        schedule: ScheduleModule::in_process("schedule"),
+    })
+    .build()?;
+app.bootstrap().await?;
+app.shutdown().await?;
+```
+
+Use `ScheduleModule::in_process("schedule").interval(...)`,
+`.timeout(...)`, or `.cron(...)` for jobs that can be declared directly on the
+schedule module. Use injected `Scheduler` registration when a job needs other
+providers from the importing module. Add `.named("token")` when a module needs
+multiple scheduler providers, or `.global()` to make one scheduler visible to
+every module scope after registration.
+
 ## Middleware
 
 Middleware runs after route matching and path parameter decoding, but before
@@ -1619,6 +1732,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | Message transport | Adapter-neutral request-response and event-only message patterns |
 | Configuration | Optional ACL-backed typed providers through `ConfigModule` |
 | Cache | Optional typed cache provider through `CacheModule` |
+| Scheduler | Optional provider-backed task scheduling through `ScheduleModule` |
 | Filter | Error mapping into HTTP responses |
 | Lifecycle hook | Startup and shutdown behavior for modules and providers |
 
@@ -1643,6 +1757,7 @@ src/
 ├── pipeline/     # Middleware, pipes, guards, interceptors, filters, and execution context
 ├── provider/     # Provider tokens, definitions, and ModuleRef container
 ├── routing/      # Route handlers, controllers, route execution, and path matching
+├── schedule.rs   # Optional provider-backed scheduler and in-process backend
 ├── transport/    # Adapter-neutral microservice message patterns and transports
 ├── validation.rs # DTO validation trait and route validation hooks
 ├── websocket/    # Adapter-neutral WebSocket gateways, messages, and pipeline hooks

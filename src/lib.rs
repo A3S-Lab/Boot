@@ -23,6 +23,8 @@ mod percent;
 mod pipeline;
 mod provider;
 mod routing;
+#[cfg(feature = "schedule")]
+mod schedule;
 mod transport;
 mod validation;
 mod websocket;
@@ -58,6 +60,11 @@ pub use pipeline::{
 };
 pub use provider::{ModuleRef, ProviderDefinition, ProviderToken};
 pub use routing::{ControllerDefinition, RouteDefinition, RouteHandler};
+#[cfg(feature = "schedule")]
+pub use schedule::{
+    InProcessScheduler, ScheduleContext, ScheduleModule, ScheduleTrigger, ScheduledJob,
+    ScheduledJobError, ScheduledJobInfo, ScheduledTask, Scheduler, SchedulerBackend,
+};
 pub use transport::{
     InProcessTransport, InProcessTransportClient, IntoTransportReply, MessagePatternDefinition,
     MessagePatternKind, MessageTransport, TransportContext, TransportGuard, TransportInterceptor,

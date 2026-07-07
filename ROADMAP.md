@@ -67,6 +67,9 @@ Implemented today:
   provider exports, environment/default function support, and validation hooks.
 - Typed cache modules with `CacheModule`, `Cache`, in-memory storage,
   default TTLs, named/global provider exports, and cache-store abstraction.
+- Provider-backed task scheduling with `ScheduleModule`, `Scheduler`,
+  in-process timeout/interval/cron jobs, named/global provider exports, and
+  lifecycle-managed shutdown.
 
 ## Priority Order
 
@@ -393,7 +396,7 @@ Nest equivalent areas:
 
 - configuration (implemented)
 - cache (implemented)
-- task scheduling
+- task scheduling (implemented)
 - queues
 - logging
 - API versioning
@@ -418,6 +421,9 @@ Acceptance:
   and participate in module imports/exports. (Covered)
 - Cache can register typed providers, cache serde values with TTL, and
   participate in module imports/exports. (Covered)
+- Schedule can register typed providers, run timeout/interval/cron jobs through
+  lifecycle-managed in-process tasks, and participate in module imports/exports.
+  (Covered)
 
 ## Immediate Next Task
 
@@ -425,8 +431,8 @@ Start with Milestone 8 technique modules. Keep GraphQL out of scope.
 
 Suggested implementation sequence:
 
-1. Start task scheduling with a provider-backed scheduler abstraction and an
-   in-process scheduler suitable for tests.
+1. Start queues with a provider-backed queue abstraction and an in-process
+   queue suitable for tests.
 2. Define integration through providers, middleware, guards, interceptors, or
    adapters instead of adding one-off framework hooks.
 3. Add crate-local tests and README examples for the chosen technique module.
