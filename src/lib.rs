@@ -11,6 +11,8 @@ use std::pin::Pin;
 
 mod adapters;
 mod app;
+#[cfg(feature = "cache")]
+mod cache;
 #[cfg(feature = "config")]
 mod config;
 mod error;
@@ -36,6 +38,8 @@ pub use a3s_boot_macros::{
 #[cfg(feature = "axum")]
 pub use adapters::AxumAdapter;
 pub use app::{BootApplication, BootApplicationBuilder, RouteMatch};
+#[cfg(feature = "cache")]
+pub use cache::{Cache, CacheModule, CacheOptions, CacheStore, InMemoryCacheStore};
 #[cfg(feature = "config")]
 pub use config::{
     acl_document_to_json, parse_acl_config, parse_validated_acl_config, ConfigModule,

@@ -80,6 +80,8 @@ This repository contains the first framework slice:
 - `ConfigModule` behind the `config` feature for ACL-backed typed
   configuration providers, including `env(...)`, `concat(...)`, named exports,
   global exports, and `Validate` integration
+- `CacheModule` behind the `cache` feature for typed in-memory caching, TTL,
+  named exports, global exports, and provider-based injection
 - OpenAPI route metadata, schema-crate-neutral document generation, and
   optional `/openapi.json` serving through `serve_openapi(...)`, with
   Nest-style metadata macros such as `#[tag]`, `#[operation]`, `#[response]`,
@@ -139,6 +141,15 @@ typed runtime configuration:
 ```toml
 [dependencies]
 a3s-boot = { version = "0.1", features = ["config"] }
+serde = { version = "1", features = ["derive"] }
+```
+
+Enable the optional in-memory cache module when the application needs a typed
+cache provider:
+
+```toml
+[dependencies]
+a3s-boot = { version = "0.1", features = ["cache"] }
 serde = { version = "1", features = ["derive"] }
 ```
 
@@ -1071,6 +1082,80 @@ Use `ConfigModule::from_acl_file(...)` for file-backed configuration,
 to export a named provider, or `.global()` to make the config visible to every
 module scope after registration.
 
+## Caching
+
+Enable the `cache` feature to register a typed cache provider. `CacheModule`
+implements `Module`, exports `Cache`, and starts with an in-memory backend for
+single-process services and tests. External stores can implement `CacheStore`
+later without changing service code.
+
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+
+use a3s_boot::{
+    BootApplication, Cache, CacheModule, CacheOptions, Module, ModuleRef, ProviderDefinition,
+    Result,
+};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CatDto {
+    id: String,
+    name: String,
+}
+
+#[derive(Debug)]
+struct CatsService {
+    cache: Arc<Cache>,
+}
+
+impl CatsService {
+    fn find_one(&self, id: &str) -> Result<CatDto> {
+        self.cache.get_or_insert_with(format!("cat:{id}"), || {
+            Ok(CatDto {
+                id: id.to_string(),
+                name: "Milo".to_string(),
+            })
+        })
+    }
+}
+
+#[derive(Debug)]
+struct CatsModule;
+
+impl Module for CatsModule {
+    fn name(&self) -> &'static str {
+        "cats"
+    }
+
+    fn imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(CacheModule::in_memory_with_options(
+            "cache",
+            CacheOptions::new().with_default_ttl(Duration::from_secs(60)),
+        ))]
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::factory::<CatsService, _>(|module_ref| {
+            Ok(CatsService {
+                cache: module_ref.get::<Cache>()?,
+            })
+        })])
+    }
+}
+
+let app = BootApplication::builder().import(CatsModule).build()?;
+let cats = app.get::<CatsService>()?;
+let cat = cats.find_one("42")?;
+```
+
+Use `Cache::set(...)`, `get(...)`, `remove(...)`, and `clear(...)` for direct
+operations. `Cache::get_or_insert_with(...)` caches computed values using the
+module default TTL. Add `.named("token")` to `CacheModule` when a module needs
+multiple cache providers, or `.global()` to make one cache visible to every
+module scope after registration.
+
 ## Middleware
 
 Middleware runs after route matching and path parameter decoding, but before
@@ -1533,6 +1618,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | WebSocket gateway | Event-based bidirectional message handlers |
 | Message transport | Adapter-neutral request-response and event-only message patterns |
 | Configuration | Optional ACL-backed typed providers through `ConfigModule` |
+| Cache | Optional typed cache provider through `CacheModule` |
 | Filter | Error mapping into HTTP responses |
 | Lifecycle hook | Startup and shutdown behavior for modules and providers |
 
@@ -1550,6 +1636,7 @@ The crate is split by framework concern:
 src/
 ├── adapters/     # Optional backend adapters such as Axum
 ├── app/          # Application instance, builder, and module registration
+├── cache.rs      # Optional typed cache module and in-memory store
 ├── config.rs     # Optional ACL-backed typed configuration module
 ├── http/         # Adapter-neutral request, response, methods, and query parsing
 ├── module/       # Module trait, dynamic modules, exports, and lifecycle hooks

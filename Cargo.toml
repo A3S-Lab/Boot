@@ -18,6 +18,7 @@ path = "src/lib.rs"
 [features]
 default = ["axum", "macros"]
 axum = ["dep:axum", "dep:http-body-util", "dep:tokio"]
+cache = []
 config = ["dep:a3s-acl"]
 macros = ["dep:a3s-boot-macros"]
 openapi-schemas = ["dep:schemars"]

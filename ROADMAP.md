@@ -65,6 +65,8 @@ Implemented today:
   interceptors, Nest-style message macros, and an in-process transport.
 - ACL-backed typed configuration modules with `ConfigModule`, named/global
   provider exports, environment/default function support, and validation hooks.
+- Typed cache modules with `CacheModule`, `Cache`, in-memory storage,
+  default TTLs, named/global provider exports, and cache-store abstraction.
 
 ## Priority Order
 
@@ -390,7 +392,7 @@ Acceptance:
 Nest equivalent areas:
 
 - configuration (implemented)
-- cache
+- cache (implemented)
 - task scheduling
 - queues
 - logging
@@ -414,6 +416,8 @@ Acceptance:
 - Modules compose through the same provider and lifecycle APIs.
 - Configuration can load ACL into typed providers, use environment defaults,
   and participate in module imports/exports. (Covered)
+- Cache can register typed providers, cache serde values with TTL, and
+  participate in module imports/exports. (Covered)
 
 ## Immediate Next Task
 
@@ -421,8 +425,8 @@ Start with Milestone 8 technique modules. Keep GraphQL out of scope.
 
 Suggested implementation sequence:
 
-1. Pick the next technique module with the smallest stable core surface,
-   likely logging or cache.
+1. Start task scheduling with a provider-backed scheduler abstraction and an
+   in-process scheduler suitable for tests.
 2. Define integration through providers, middleware, guards, interceptors, or
    adapters instead of adding one-off framework hooks.
 3. Add crate-local tests and README examples for the chosen technique module.
