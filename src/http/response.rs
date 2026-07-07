@@ -1,3 +1,4 @@
+use super::cookie::CookieOptions;
 use super::header::{
     get_header, is_json_media_type, matches_media_type, normalize_header_name, normalize_headers,
     parse_content_length, strict_content_length_values, validate_header_name,
@@ -208,6 +209,21 @@ impl BootResponse {
 
     pub fn append_www_authenticate(self, challenge: impl Into<String>) -> Self {
         self.append_header("www-authenticate", challenge)
+    }
+
+    pub fn with_cookie(
+        self,
+        name: impl AsRef<str>,
+        value: impl AsRef<str>,
+        options: CookieOptions,
+    ) -> Result<Self> {
+        let header = options.set_cookie_header(name.as_ref(), value.as_ref())?;
+        Ok(self.append_header("set-cookie", header))
+    }
+
+    pub fn delete_cookie(self, name: impl AsRef<str>, options: CookieOptions) -> Result<Self> {
+        let header = options.delete_cookie_header(name.as_ref())?;
+        Ok(self.append_header("set-cookie", header))
     }
 
     pub fn is_streaming(&self) -> bool {

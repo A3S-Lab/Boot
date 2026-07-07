@@ -76,7 +76,9 @@ pub use health::{
     HealthCheckService, HealthIndicator, HealthIndicatorResult, HealthModule, HealthReport,
     HealthStatus,
 };
-pub use http::{BootRequest, BootResponse, HttpMethod, SseEvent, SseStream};
+pub use http::{
+    BootRequest, BootResponse, CookieOptions, CookieSameSite, HttpMethod, SseEvent, SseStream,
+};
 #[cfg(feature = "logging")]
 pub use logging::{
     InMemoryLogSink, LogFields, LogLevel, LogRecord, LogSink, Logger, LoggingModule, NoopLogSink,

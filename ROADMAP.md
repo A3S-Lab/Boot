@@ -477,6 +477,8 @@ Acceptance:
 - Sessions can register a provider-backed `SessionManager`, bind session ids
   before handlers, persist session cookies after handlers, and support
   in-memory or custom stores. (Covered)
+- Response cookies can be written and expired through typed `BootResponse`
+  helpers instead of hand-built `Set-Cookie` strings. (Covered)
 
 ## Immediate Next Task
 

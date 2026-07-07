@@ -1,6 +1,9 @@
-use a3s_boot::{BootError, BootRequest, BootResponse, HttpMethod, SseEvent};
+use a3s_boot::{
+    BootError, BootRequest, BootResponse, CookieOptions, CookieSameSite, HttpMethod, SseEvent,
+};
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 #[test]
 fn http_methods_display_and_parse_canonical_names() {
@@ -572,6 +575,76 @@ fn response_header_helpers_validate_header_names_and_values() {
     assert!(matches!(
         invalid_value.validate_headers().unwrap_err(),
         BootError::Internal(message) if message == "invalid response header value for \"x-mode\": header value contains invalid characters"
+    ));
+}
+
+#[test]
+fn response_cookie_helpers_append_set_cookie_headers() {
+    let response = BootResponse::text("ok")
+        .with_cookie(
+            "session",
+            "abc123",
+            CookieOptions::new()
+                .with_path("/api")
+                .with_domain("example.com")
+                .with_max_age(Duration::from_secs(3600))
+                .with_http_only(true)
+                .with_secure(true)
+                .with_same_site(CookieSameSite::Lax),
+        )
+        .unwrap()
+        .with_cookie("theme", "dark", CookieOptions::new().without_path())
+        .unwrap();
+
+    assert_eq!(
+        response.header_values("set-cookie"),
+        [
+            "session=abc123; Path=/api; Domain=example.com; Max-Age=3600; HttpOnly; Secure; SameSite=Lax",
+            "theme=dark",
+        ]
+    );
+}
+
+#[test]
+fn response_cookie_helpers_delete_cookies_with_matching_attributes() {
+    let response = BootResponse::empty(204)
+        .delete_cookie(
+            "session",
+            CookieOptions::new()
+                .with_path("/api")
+                .with_domain("example.com")
+                .with_max_age_seconds(120)
+                .with_secure(true)
+                .with_same_site(CookieSameSite::None),
+        )
+        .unwrap();
+
+    assert_eq!(
+        response.header_values("set-cookie"),
+        ["session=; Path=/api; Domain=example.com; Max-Age=0; Secure; SameSite=None"]
+    );
+}
+
+#[test]
+fn response_cookie_helpers_reject_invalid_cookie_parts() {
+    let invalid_name =
+        BootResponse::text("ok").with_cookie("bad name", "abc", CookieOptions::new());
+    let invalid_value =
+        BootResponse::text("ok").with_cookie("session", "abc;def", CookieOptions::new());
+    let invalid_path =
+        BootResponse::text("ok").with_cookie("session", "abc", CookieOptions::new().with_path(""));
+
+    assert!(matches!(
+        invalid_name.unwrap_err(),
+        BootError::Internal(message) if message == "invalid cookie name \"bad name\": cookie name contains invalid characters"
+    ));
+    assert!(matches!(
+        invalid_value.unwrap_err(),
+        BootError::Internal(message) if message == "cookie value contains invalid characters"
+    ));
+    assert!(matches!(
+        invalid_path.unwrap_err(),
+        BootError::Internal(message) if message == "cookie path cannot be empty"
     ));
 }
 

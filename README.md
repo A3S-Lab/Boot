@@ -2173,7 +2173,8 @@ fn app() -> Result<BootApplication> {
 Header helpers normalize names for storage and lookup:
 
 ```rust
-use a3s_boot::{BootRequest, BootResponse, HttpMethod};
+use a3s_boot::{BootRequest, BootResponse, CookieOptions, CookieSameSite, HttpMethod};
+use std::time::Duration;
 
 let request = BootRequest::new(HttpMethod::Post, "/")
     .with_content_type("application/json")
@@ -2213,12 +2214,26 @@ let response = BootResponse::new(200, b"{}".to_vec())
     .with_content_type("application/json")
     .with_content_length(2)
     .with_location("/items/42")
-    .append_header("Set-Cookie", "session=abc; Path=/")
-    .append_header("Set-Cookie", "theme=dark; Path=/");
+    .with_cookie(
+        "session",
+        "abc",
+        CookieOptions::new()
+            .with_path("/")
+            .with_max_age(Duration::from_secs(3600))
+            .with_http_only(true)
+            .with_secure(true)
+            .with_same_site(CookieSameSite::Lax),
+    )
+    .unwrap()
+    .with_cookie("theme", "dark", CookieOptions::new())
+    .unwrap();
 
 assert_eq!(
     response.header_values("set-cookie"),
-    ["session=abc; Path=/", "theme=dark; Path=/"]
+    [
+        "session=abc; Path=/; Max-Age=3600; HttpOnly; Secure; SameSite=Lax",
+        "theme=dark; Path=/"
+    ]
 );
 assert_eq!(response.status(), 200);
 assert_eq!(response.body(), b"{}");
@@ -2237,6 +2252,15 @@ assert_eq!(unauthorized.www_authenticate(), Some(r#"Bearer realm="api""#));
 assert_eq!(
     unauthorized.www_authenticate_values(),
     [r#"Bearer realm="api""#, r#"Basic realm="legacy""#]
+);
+
+let logout = BootResponse::no_content()
+    .delete_cookie("session", CookieOptions::new().with_path("/"))
+    .unwrap();
+
+assert_eq!(
+    logout.header_values("set-cookie"),
+    ["session=; Path=/; Max-Age=0"]
 );
 ```
 
@@ -2387,6 +2411,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | File upload | Optional multipart form parsing through `BootRequest` helpers |
 | Security | Optional CORS, security headers, CSRF, and rate limiting helpers |
 | Session | Optional provider-backed session store, middleware, and cookie persistence |
+| Response cookies | Typed `Set-Cookie` and delete-cookie helpers on `BootResponse` |
 | API versioning | URI, header, or media type version matching through route metadata |
 | Serialization | JSON response shaping through `SerializationInterceptor` metadata |
 | Filter | Error mapping into HTTP responses |
