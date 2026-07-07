@@ -1,6 +1,7 @@
 use super::definition::RouteDefinition;
 use crate::routing::handler::RouteHandler;
-use crate::{BootRequest, BootResponse, HttpMethod, Result};
+use crate::{BootRequest, BootResponse, HttpMethod, Result, SseEvent};
+use futures_core::Stream;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::future::Future;
@@ -11,6 +12,45 @@ impl RouteDefinition {
         H: RouteHandler,
     {
         Self::new(HttpMethod::Get, path, handler)
+    }
+
+    pub fn get_json<H, Fut, R>(path: impl Into<String>, handler: H) -> Result<Self>
+    where
+        H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        Self::get_json_with_status(path, 200, handler)
+    }
+
+    pub fn get_json_with_status<H, Fut, R>(
+        path: impl Into<String>,
+        status: u16,
+        handler: H,
+    ) -> Result<Self>
+    where
+        H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        Self::json_response_with_status(HttpMethod::Get, path, status, handler)
+    }
+
+    pub fn sse<H, Fut, S>(path: impl Into<String>, handler: H) -> Result<Self>
+    where
+        H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<S>> + Send + 'static,
+        S: Stream<Item = Result<SseEvent>> + Send + 'static,
+    {
+        Self::new(HttpMethod::Get, path, move |request: BootRequest| {
+            let future = request
+                .require_accepts_event_stream()
+                .map(|()| handler(request));
+            async move {
+                let stream = future?.await?;
+                Ok(BootResponse::sse(stream))
+            }
+        })
     }
 
     pub fn post<H>(path: impl Into<String>, handler: H) -> Result<Self>
@@ -27,7 +67,21 @@ impl RouteDefinition {
         Fut: Future<Output = Result<R>> + Send + 'static,
         R: Serialize + Send + 'static,
     {
-        Self::json(HttpMethod::Post, path, handler)
+        Self::post_json_with_status(path, 200, handler)
+    }
+
+    pub fn post_json_with_status<T, H, Fut, R>(
+        path: impl Into<String>,
+        status: u16,
+        handler: H,
+    ) -> Result<Self>
+    where
+        T: DeserializeOwned + Send + 'static,
+        H: Fn(T) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        Self::json_with_status(HttpMethod::Post, path, status, handler)
     }
 
     pub fn put<H>(path: impl Into<String>, handler: H) -> Result<Self>
@@ -44,7 +98,21 @@ impl RouteDefinition {
         Fut: Future<Output = Result<R>> + Send + 'static,
         R: Serialize + Send + 'static,
     {
-        Self::json(HttpMethod::Put, path, handler)
+        Self::put_json_with_status(path, 200, handler)
+    }
+
+    pub fn put_json_with_status<T, H, Fut, R>(
+        path: impl Into<String>,
+        status: u16,
+        handler: H,
+    ) -> Result<Self>
+    where
+        T: DeserializeOwned + Send + 'static,
+        H: Fn(T) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        Self::json_with_status(HttpMethod::Put, path, status, handler)
     }
 
     pub fn patch<H>(path: impl Into<String>, handler: H) -> Result<Self>
@@ -61,7 +129,21 @@ impl RouteDefinition {
         Fut: Future<Output = Result<R>> + Send + 'static,
         R: Serialize + Send + 'static,
     {
-        Self::json(HttpMethod::Patch, path, handler)
+        Self::patch_json_with_status(path, 200, handler)
+    }
+
+    pub fn patch_json_with_status<T, H, Fut, R>(
+        path: impl Into<String>,
+        status: u16,
+        handler: H,
+    ) -> Result<Self>
+    where
+        T: DeserializeOwned + Send + 'static,
+        H: Fn(T) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        Self::json_with_status(HttpMethod::Patch, path, status, handler)
     }
 
     pub fn delete<H>(path: impl Into<String>, handler: H) -> Result<Self>
@@ -71,7 +153,48 @@ impl RouteDefinition {
         Self::new(HttpMethod::Delete, path, handler)
     }
 
-    fn json<T, H, Fut, R>(method: HttpMethod, path: impl Into<String>, handler: H) -> Result<Self>
+    pub fn delete_json<H, Fut, R>(path: impl Into<String>, handler: H) -> Result<Self>
+    where
+        H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        Self::delete_json_with_status(path, 200, handler)
+    }
+
+    pub fn delete_json_with_status<H, Fut, R>(
+        path: impl Into<String>,
+        status: u16,
+        handler: H,
+    ) -> Result<Self>
+    where
+        H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        Self::json_response_with_status(HttpMethod::Delete, path, status, handler)
+    }
+
+    pub fn options<H>(path: impl Into<String>, handler: H) -> Result<Self>
+    where
+        H: RouteHandler,
+    {
+        Self::new(HttpMethod::Options, path, handler)
+    }
+
+    pub fn head<H>(path: impl Into<String>, handler: H) -> Result<Self>
+    where
+        H: RouteHandler,
+    {
+        Self::new(HttpMethod::Head, path, handler)
+    }
+
+    fn json_with_status<T, H, Fut, R>(
+        method: HttpMethod,
+        path: impl Into<String>,
+        status: u16,
+        handler: H,
+    ) -> Result<Self>
     where
         T: DeserializeOwned + Send + 'static,
         H: Fn(T) -> Fut + Send + Sync + 'static,
@@ -79,10 +202,34 @@ impl RouteDefinition {
         R: Serialize + Send + 'static,
     {
         Self::new(method, path, move |request: BootRequest| {
-            let future = request.json::<T>().map(&handler);
+            let future = request
+                .require_json_content_type()
+                .and_then(|()| request.require_accepts_json())
+                .and_then(|()| request.json::<T>())
+                .map(&handler);
             async move {
                 let body = future?.await?;
-                BootResponse::json(&body)
+                BootResponse::json_with_status(status, &body)
+            }
+        })
+    }
+
+    fn json_response_with_status<H, Fut, R>(
+        method: HttpMethod,
+        path: impl Into<String>,
+        status: u16,
+        handler: H,
+    ) -> Result<Self>
+    where
+        H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        Self::new(method, path, move |request: BootRequest| {
+            let future = request.require_accepts_json().map(|()| handler(request));
+            async move {
+                let body = future?.await?;
+                BootResponse::json_with_status(status, &body)
             }
         })
     }

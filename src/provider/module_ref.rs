@@ -30,6 +30,9 @@ impl ModuleRef {
 
     pub fn register(&self, definition: ProviderDefinition) -> Result<()> {
         let token = definition.token().clone();
+        if self.read_providers()?.contains_key(&token) {
+            return Err(BootError::DuplicateProvider(token.to_string()));
+        }
         let value = definition.build(self)?;
         self.insert_any(token, value)
     }
@@ -62,8 +65,33 @@ impl ModuleRef {
         self.get_token::<T>(&ProviderToken::named(token))
     }
 
+    pub fn get_optional<T>(&self) -> Result<Option<Arc<T>>>
+    where
+        T: Send + Sync + 'static,
+    {
+        self.get_optional_token::<T>(&ProviderToken::of::<T>())
+    }
+
+    pub fn get_optional_named<T>(&self, token: &str) -> Result<Option<Arc<T>>>
+    where
+        T: Send + Sync + 'static,
+    {
+        self.get_optional_token::<T>(&ProviderToken::named(token))
+    }
+
     pub fn contains(&self, token: &ProviderToken) -> Result<bool> {
         Ok(self.read_providers()?.contains_key(token))
+    }
+
+    pub fn contains_provider<T>(&self) -> Result<bool>
+    where
+        T: Send + Sync + 'static,
+    {
+        self.contains(&ProviderToken::of::<T>())
+    }
+
+    pub fn contains_named(&self, token: &str) -> Result<bool> {
+        self.contains(&ProviderToken::named(token))
     }
 
     pub fn tokens(&self) -> Result<Vec<ProviderToken>> {
@@ -90,6 +118,19 @@ impl ModuleRef {
             .ok_or_else(|| BootError::MissingProvider(token.to_string()))?;
 
         Arc::downcast::<T>(value).map_err(|_| BootError::ProviderTypeMismatch(token.to_string()))
+    }
+
+    fn get_optional_token<T>(&self, token: &ProviderToken) -> Result<Option<Arc<T>>>
+    where
+        T: Send + Sync + 'static,
+    {
+        let value = self.read_providers()?.get(token).cloned();
+        match value {
+            Some(value) => Arc::downcast::<T>(value)
+                .map(Some)
+                .map_err(|_| BootError::ProviderTypeMismatch(token.to_string())),
+            None => Ok(None),
+        }
     }
 
     fn read_providers(

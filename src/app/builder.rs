@@ -2,7 +2,8 @@ use super::application::BootApplication;
 use super::registration::register_module;
 use crate::pipeline::PipelineComponents;
 use crate::{
-    ExceptionFilter, Guard, Interceptor, Module, ModuleRef, Pipe, Result, RouteDefinition,
+    BootError, ExceptionFilter, Guard, Interceptor, Module, ModuleRef, Pipe, Result,
+    RouteDefinition,
 };
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -13,6 +14,7 @@ pub struct BootApplicationBuilder {
     modules: Vec<Arc<dyn Module>>,
     routes: Vec<RouteDefinition>,
     global_pipeline: PipelineComponents,
+    global_prefix: Option<String>,
 }
 
 impl BootApplicationBuilder {
@@ -38,6 +40,12 @@ impl BootApplicationBuilder {
     /// Add a framework-neutral route directly to the application shell.
     pub fn route(mut self, route: RouteDefinition) -> Self {
         self.routes.push(route);
+        self
+    }
+
+    /// Prefix every route in the built application, for example `/api/v1`.
+    pub fn global_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.global_prefix = Some(prefix.into());
         self
     }
 
@@ -101,6 +109,9 @@ impl BootApplicationBuilder {
             )?;
         }
 
+        let routes = apply_global_prefix(routes, self.global_prefix.as_deref())?;
+        validate_unique_routes(&routes)?;
+
         Ok(BootApplication {
             routes,
             modules,
@@ -108,4 +119,34 @@ impl BootApplicationBuilder {
             module_instances,
         })
     }
+}
+
+fn apply_global_prefix(
+    routes: Vec<RouteDefinition>,
+    prefix: Option<&str>,
+) -> Result<Vec<RouteDefinition>> {
+    match prefix {
+        Some(prefix) => routes
+            .into_iter()
+            .map(|route| route.with_path_prefix(prefix))
+            .collect(),
+        None => Ok(routes),
+    }
+}
+
+fn validate_unique_routes(routes: &[RouteDefinition]) -> Result<()> {
+    let mut seen = BTreeSet::new();
+
+    for route in routes {
+        let key = (route.method(), route.path_shape_key());
+        if !seen.insert(key) {
+            return Err(BootError::DuplicateRoute(format!(
+                "{} {}",
+                route.method().as_str(),
+                route.path()
+            )));
+        }
+    }
+
+    Ok(())
 }

@@ -1,3 +1,5 @@
+use crate::percent::decode_percent_encoded;
+use crate::Result;
 use std::collections::BTreeMap;
 
 pub(super) fn split_path_query(
@@ -15,5 +17,27 @@ pub(super) fn split_path_query(
 }
 
 pub(super) fn parse_query(query: &str) -> BTreeMap<String, String> {
-    serde_urlencoded::from_str::<BTreeMap<String, String>>(query).unwrap_or_default()
+    parse_query_pairs(query)
+        .map(|pairs| pairs.into_iter().collect())
+        .unwrap_or_default()
+}
+
+pub(super) fn parse_query_pairs(query: &str) -> Result<Vec<(String, String)>> {
+    if query.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    query
+        .split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| {
+            let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+            Ok((decode_query_part(name)?, decode_query_part(value)?))
+        })
+        .collect()
+}
+
+fn decode_query_part(value: &str) -> Result<String> {
+    let value = value.replace('+', " ");
+    decode_percent_encoded(&value)
 }

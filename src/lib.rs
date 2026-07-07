@@ -14,15 +14,21 @@ mod app;
 mod error;
 mod http;
 mod module;
+mod percent;
 mod pipeline;
 mod provider;
 mod routing;
 
+#[cfg(feature = "macros")]
+pub use a3s_boot_macros::{
+    controller, delete, delete_json, get, get_json, head, injectable, options, patch, patch_json,
+    post, post_json, put, put_json, sse,
+};
 #[cfg(feature = "axum")]
 pub use adapters::AxumAdapter;
-pub use app::{BootApplication, BootApplicationBuilder};
+pub use app::{BootApplication, BootApplicationBuilder, RouteMatch};
 pub use error::BootError;
-pub use http::{BootRequest, BootResponse, HttpMethod};
+pub use http::{BootRequest, BootResponse, HttpMethod, SseEvent, SseStream};
 pub use module::Module;
 pub use pipeline::{ExceptionFilter, ExecutionContext, Guard, Interceptor, Pipe};
 pub use provider::{ModuleRef, ProviderDefinition, ProviderToken};

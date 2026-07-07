@@ -40,4 +40,9 @@ pub trait Module: Send + Sync + 'static {
     fn on_application_bootstrap(&self, _module_ref: ModuleRef) -> BoxFuture<'static, Result<()>> {
         Box::pin(async { Ok(()) })
     }
+
+    /// Async lifecycle hook called by hosts that need graceful shutdown cleanup.
+    fn on_application_shutdown(&self, _module_ref: ModuleRef) -> BoxFuture<'static, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
 }

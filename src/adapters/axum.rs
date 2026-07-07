@@ -2,13 +2,18 @@ use crate::{
     BootApplication, BootError, BootRequest, BootResponse, HttpAdapter, HttpMethod, Result,
     RouteDefinition,
 };
-use axum::body::{to_bytes, Body};
+use axum::body::{to_bytes, Body, HttpBody};
 use axum::extract::Request;
-use axum::http::{HeaderName, HeaderValue, Method, StatusCode};
+use axum::http::{
+    header::{ALLOW, CONTENT_TYPE},
+    response::Builder as ResponseBuilder,
+    HeaderName, HeaderValue, Method, StatusCode,
+};
 use axum::response::Response;
-use axum::routing::{delete, get, head, options, patch, post, put, MethodRouter};
+use axum::routing::{on, MethodFilter, MethodRouter};
 use axum::Router;
-use std::collections::BTreeMap;
+use futures_util::StreamExt;
+use std::error::Error;
 use std::net::SocketAddr;
 
 /// Axum-backed HTTP adapter.
@@ -43,12 +48,20 @@ impl HttpAdapter for AxumAdapter {
     type Output = Router;
 
     fn build(&self, app: BootApplication) -> Result<Self::Output> {
-        let mut router = Router::new();
+        let mut router = Router::new().fallback(not_found_fallback);
         for route in app.routes().iter().cloned() {
-            let path = route.path().to_string();
-            router = router.route(&path, route_to_method_router(route, self.body_limit));
+            let path = axum_route_path(route.path());
+            router = router.route(
+                &path,
+                route_to_method_router(route, app.clone(), self.body_limit),
+            );
         }
-        Ok(router)
+        let body_limit = self.body_limit;
+        let app = app.clone();
+        Ok(router.method_not_allowed_fallback(move |request: Request| {
+            let app = app.clone();
+            async move { dispatch_application(app, request, body_limit).await }
+        }))
     }
 
     fn serve(
@@ -66,102 +79,283 @@ impl HttpAdapter for AxumAdapter {
     }
 }
 
-fn route_to_method_router(route: RouteDefinition, body_limit: usize) -> MethodRouter {
+fn route_to_method_router(
+    route: RouteDefinition,
+    app: BootApplication,
+    body_limit: usize,
+) -> MethodRouter {
     let method = route.method();
     let dispatch = move |request: Request| {
         let route = route.clone();
-        async move { dispatch_route(route, request, body_limit).await }
+        let app = app.clone();
+        async move { dispatch_route(route, app, request, body_limit).await }
     };
 
+    on(method_filter(method), dispatch)
+}
+
+fn method_filter(method: HttpMethod) -> MethodFilter {
     match method {
-        HttpMethod::Get => get(dispatch),
-        HttpMethod::Post => post(dispatch),
-        HttpMethod::Put => put(dispatch),
-        HttpMethod::Patch => patch(dispatch),
-        HttpMethod::Delete => delete(dispatch),
-        HttpMethod::Options => options(dispatch),
-        HttpMethod::Head => head(dispatch),
+        HttpMethod::Get => MethodFilter::GET,
+        HttpMethod::Post => MethodFilter::POST,
+        HttpMethod::Put => MethodFilter::PUT,
+        HttpMethod::Patch => MethodFilter::PATCH,
+        HttpMethod::Delete => MethodFilter::DELETE,
+        HttpMethod::Options => MethodFilter::OPTIONS,
+        HttpMethod::Head => MethodFilter::HEAD,
     }
 }
 
-async fn dispatch_route(route: RouteDefinition, request: Request, body_limit: usize) -> Response {
-    let boot_request = match to_boot_request(route.method(), request, body_limit).await {
-        Ok(request) => request,
-        Err(err) => return error_response(StatusCode::BAD_REQUEST, err.to_string()),
-    };
-
-    match route.call(boot_request).await {
-        Ok(response) => to_axum_response(response),
-        Err(BootError::Forbidden(message)) => error_response(StatusCode::FORBIDDEN, message),
-        Err(BootError::BadRequest(message)) => error_response(StatusCode::BAD_REQUEST, message),
-        Err(err) => error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()),
+fn axum_route_path(path: &str) -> String {
+    let path = path.strip_prefix('/').unwrap_or(path);
+    if path.is_empty() {
+        return "/".to_string();
     }
+
+    let segments = path
+        .split('/')
+        .enumerate()
+        .map(|(index, segment)| {
+            if segment.starts_with('{') && segment.ends_with('}') {
+                format!("{{p{index}}}")
+            } else {
+                segment.to_string()
+            }
+        })
+        .collect::<Vec<_>>();
+
+    format!("/{}", segments.join("/"))
 }
 
-async fn to_boot_request(
-    method: HttpMethod,
+async fn dispatch_route(
+    route: RouteDefinition,
+    app: BootApplication,
     request: Request,
     body_limit: usize,
-) -> Result<BootRequest> {
+) -> Response {
     let path = request.uri().path().to_string();
-    let query_string = request.uri().query().map(str::to_string);
-    let headers = request
-        .headers()
-        .iter()
-        .filter_map(|(name, value)| {
-            value
-                .to_str()
-                .ok()
-                .map(|value| (name.as_str().to_string(), value.to_string()))
-        })
-        .collect::<BTreeMap<_, _>>();
-    let body = to_bytes(request.into_body(), body_limit)
+    let is_head = request.method() == Method::HEAD;
+    let boot_request = match to_boot_request(request, body_limit).await {
+        Ok(request) => request,
+        Err(err) => return finalize_response(&app, &path, boot_error_response(err), is_head),
+    };
+
+    let response = match route.call(boot_request).await {
+        Ok(response) => to_axum_response(response),
+        Err(err) => boot_error_response(err),
+    };
+    finalize_response(&app, &path, response, is_head)
+}
+
+async fn dispatch_application(
+    app: BootApplication,
+    request: Request,
+    body_limit: usize,
+) -> Response {
+    let path = request.uri().path().to_string();
+    let is_head = request.method() == Method::HEAD;
+    let boot_request = match to_boot_request(request, body_limit).await {
+        Ok(request) => request,
+        Err(err) => return finalize_response(&app, &path, boot_error_response(err), is_head),
+    };
+
+    let response = to_axum_response(app.handle(boot_request).await);
+    finalize_response(&app, &path, response, is_head)
+}
+
+async fn not_found_fallback(request: Request) -> Response {
+    let is_head = request.method() == Method::HEAD;
+    let response = boot_error_response(BootError::NotFound(format!(
+        "{} {}",
+        request.method(),
+        request.uri().path()
+    )));
+    strip_head_body(is_head, response)
+}
+
+async fn to_boot_request(axum_request: Request, body_limit: usize) -> Result<BootRequest> {
+    let path = axum_request.uri().path().to_string();
+    let method =
+        HttpMethod::try_from(axum_request.method().clone()).map_err(|error| match error {
+            BootError::MethodNotAllowed(method) => {
+                BootError::MethodNotAllowed(format!("{method} {path}"))
+            }
+            error => error,
+        })?;
+    let query_string = axum_request.uri().query().map(str::to_string);
+    let mut headers = Vec::new();
+    for (name, value) in axum_request.headers() {
+        let value = value.to_str().map_err(|err| {
+            BootError::BadRequest(format!("invalid request header value for {name}: {err}"))
+        })?;
+        headers.push((name.as_str().to_string(), value.to_string()));
+    }
+    let mut boot_request = BootRequest::new(method, path);
+    if let Some(query_string) = query_string {
+        boot_request = boot_request.with_query_string(query_string);
+    }
+    for (name, value) in headers {
+        boot_request = if boot_request.header(&name).is_some() {
+            boot_request.append_header(name, value)
+        } else {
+            boot_request.with_header(name, value)
+        };
+    }
+
+    boot_request.validate_headers()?;
+    boot_request.validate_body_limit(body_limit)?;
+
+    let body = axum_request.into_body();
+    if body.size_hint().lower() > body_limit as u64 {
+        return Err(BootError::PayloadTooLarge(format!(
+            "request body exceeds {body_limit} bytes"
+        )));
+    }
+    let body = to_bytes(body, body_limit)
         .await
-        .map_err(|err| BootError::Adapter(err.to_string()))?
+        .map_err(|err| map_body_error(err, body_limit))?
         .to_vec();
 
-    let mut request = BootRequest::new(method, path);
-    if let Some(query_string) = query_string {
-        request = request.with_query_string(query_string);
+    let boot_request = boot_request.with_body(body);
+    boot_request.validate_with_body_limit(body_limit)?;
+    Ok(boot_request)
+}
+
+fn map_body_error(error: axum::Error, body_limit: usize) -> BootError {
+    if error
+        .source()
+        .is_some_and(|source| source.is::<http_body_util::LengthLimitError>())
+    {
+        BootError::PayloadTooLarge(format!("request body exceeds {body_limit} bytes"))
+    } else {
+        BootError::Adapter(error.to_string())
     }
-    Ok(request.with_body(body).with_headers(headers))
 }
 
 fn to_axum_response(response: BootResponse) -> Response {
-    let status = StatusCode::from_u16(response.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-    let mut builder = Response::builder().status(status);
-    for (name, value) in response.headers {
-        if let (Ok(name), Ok(value)) = (
-            HeaderName::try_from(name.as_str()),
-            HeaderValue::try_from(value.as_str()),
-        ) {
-            builder = builder.header(name, value);
-        }
+    if let Err(error) = response.validate() {
+        return error_response(StatusCode::INTERNAL_SERVER_ERROR, internal_message(error));
     }
+    let is_streaming = response.is_streaming();
+    let status = match StatusCode::from_u16(response.status()) {
+        Ok(status) => status,
+        Err(err) => {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("invalid response status {}: {err}", response.status()),
+            );
+        }
+    };
+
+    let mut builder = Response::builder().status(status);
+    builder = match with_response_headers(builder, response.header_entries()) {
+        Ok(builder) => builder,
+        Err(message) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, message),
+    };
+
+    let body = if is_streaming {
+        let Some(stream) = response.into_sse_stream() else {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "streaming response body has already been consumed".to_string(),
+            );
+        };
+        Body::from_stream(stream.map(|event| event.map(|event| event.encode())))
+    } else {
+        Body::from(response.into_body())
+    };
 
     builder
-        .body(Body::from(response.body))
+        .body(body)
         .unwrap_or_else(|err| error_response(StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))
 }
 
-fn error_response(status: StatusCode, message: String) -> Response {
-    Response::builder()
-        .status(status)
-        .header("content-type", "text/plain; charset=utf-8")
-        .body(Body::from(message))
-        .expect("valid static error response")
+fn with_response_headers<I, N, V>(
+    mut builder: ResponseBuilder,
+    headers: I,
+) -> std::result::Result<ResponseBuilder, String>
+where
+    I: IntoIterator<Item = (N, V)>,
+    N: AsRef<str>,
+    V: AsRef<str>,
+{
+    for (name, value) in headers {
+        let name = name.as_ref();
+        let value = value.as_ref();
+        let header_name = HeaderName::try_from(name)
+            .map_err(|err| format!("invalid response header name {name:?}: {err}"))?;
+        let header_value = HeaderValue::try_from(value)
+            .map_err(|err| format!("invalid response header value for {name:?}: {err}"))?;
+        builder = builder.header(header_name, header_value);
+    }
+
+    Ok(builder)
 }
 
-impl From<Method> for HttpMethod {
-    fn from(method: Method) -> Self {
-        match method {
-            Method::POST => Self::Post,
-            Method::PUT => Self::Put,
-            Method::PATCH => Self::Patch,
-            Method::DELETE => Self::Delete,
-            Method::OPTIONS => Self::Options,
-            Method::HEAD => Self::Head,
-            _ => Self::Get,
+fn internal_message(error: BootError) -> String {
+    match error {
+        BootError::Internal(message) => message,
+        error => error.to_string(),
+    }
+}
+
+fn with_allow_header(app: &BootApplication, path: &str, mut response: Response) -> Response {
+    if response.status() != StatusCode::METHOD_NOT_ALLOWED {
+        return response;
+    }
+
+    let Some(allow) = app.allowed_methods_header(path) else {
+        return response;
+    };
+
+    match HeaderValue::try_from(allow) {
+        Ok(value) => {
+            response.headers_mut().insert(ALLOW, value);
+            response
         }
+        Err(err) => error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("invalid allow header value: {err}"),
+        ),
+    }
+}
+
+fn finalize_response(
+    app: &BootApplication,
+    path: &str,
+    response: Response,
+    is_head: bool,
+) -> Response {
+    strip_head_body(is_head, with_allow_header(app, path, response))
+}
+
+fn strip_head_body(is_head: bool, response: Response) -> Response {
+    if !is_head {
+        return response;
+    }
+
+    let (parts, _) = response.into_parts();
+    Response::from_parts(parts, Body::empty())
+}
+
+fn boot_error_response(error: BootError) -> Response {
+    to_axum_response(BootResponse::from_error(&error))
+}
+
+fn error_response(status: StatusCode, message: String) -> Response {
+    let mut response = Response::new(Body::from(message));
+    *response.status_mut() = status;
+    response.headers_mut().insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+    response
+}
+
+impl TryFrom<Method> for HttpMethod {
+    type Error = BootError;
+
+    fn try_from(method: Method) -> std::result::Result<Self, Self::Error> {
+        method.as_str().parse()
     }
 }

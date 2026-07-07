@@ -7,6 +7,12 @@ pub enum BootError {
     EmptyModuleName,
     #[error("route path must start with '/': {0}")]
     InvalidRoutePath(String),
+    #[error("route is already registered: {0}")]
+    DuplicateRoute(String),
+    #[error("route was not found: {0}")]
+    NotFound(String),
+    #[error("method is not allowed: {0}")]
+    MethodNotAllowed(String),
     #[error("provider token is already registered: {0}")]
     DuplicateProvider(String),
     #[error("provider token is not registered: {0}")]
@@ -15,12 +21,74 @@ pub enum BootError {
     ProviderTypeMismatch(String),
     #[error("request was forbidden: {0}")]
     Forbidden(String),
+    #[error("request was unauthorized: {0}")]
+    Unauthorized(String),
     #[error("bad request: {0}")]
     BadRequest(String),
+    #[error("payload is too large: {0}")]
+    PayloadTooLarge(String),
+    #[error("unsupported media type: {0}")]
+    UnsupportedMediaType(String),
+    #[error("not acceptable: {0}")]
+    NotAcceptable(String),
     #[error("adapter error: {0}")]
     Adapter(String),
     #[error("internal error: {0}")]
     Internal(String),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+impl BootError {
+    /// HTTP status code that adapters should use for this error.
+    pub fn http_status_code(&self) -> u16 {
+        match self {
+            Self::NotFound(_) => 404,
+            Self::MethodNotAllowed(_) => 405,
+            Self::Unauthorized(_) => 401,
+            Self::Forbidden(_) => 403,
+            Self::BadRequest(_) => 400,
+            Self::PayloadTooLarge(_) => 413,
+            Self::UnsupportedMediaType(_) => 415,
+            Self::NotAcceptable(_) => 406,
+            _ => 500,
+        }
+    }
+
+    /// Text response body that adapters should use for this error.
+    pub fn http_response_message(&self) -> String {
+        match self {
+            Self::NotFound(message)
+            | Self::MethodNotAllowed(message)
+            | Self::Unauthorized(message)
+            | Self::Forbidden(message)
+            | Self::BadRequest(message)
+            | Self::PayloadTooLarge(message)
+            | Self::UnsupportedMediaType(message)
+            | Self::NotAcceptable(message) => message.clone(),
+            error => error.to_string(),
+        }
+    }
+
+    pub(crate) fn clone_for_filter(&self) -> Self {
+        match self {
+            Self::EmptyModuleName => Self::EmptyModuleName,
+            Self::InvalidRoutePath(message) => Self::InvalidRoutePath(message.clone()),
+            Self::DuplicateRoute(message) => Self::DuplicateRoute(message.clone()),
+            Self::NotFound(message) => Self::NotFound(message.clone()),
+            Self::MethodNotAllowed(message) => Self::MethodNotAllowed(message.clone()),
+            Self::DuplicateProvider(message) => Self::DuplicateProvider(message.clone()),
+            Self::MissingProvider(message) => Self::MissingProvider(message.clone()),
+            Self::ProviderTypeMismatch(message) => Self::ProviderTypeMismatch(message.clone()),
+            Self::Forbidden(message) => Self::Forbidden(message.clone()),
+            Self::Unauthorized(message) => Self::Unauthorized(message.clone()),
+            Self::BadRequest(message) => Self::BadRequest(message.clone()),
+            Self::PayloadTooLarge(message) => Self::PayloadTooLarge(message.clone()),
+            Self::UnsupportedMediaType(message) => Self::UnsupportedMediaType(message.clone()),
+            Self::NotAcceptable(message) => Self::NotAcceptable(message.clone()),
+            Self::Adapter(message) => Self::Adapter(message.clone()),
+            Self::Internal(message) => Self::Internal(message.clone()),
+            Self::Io(error) => Self::Io(std::io::Error::new(error.kind(), error.to_string())),
+        }
+    }
 }

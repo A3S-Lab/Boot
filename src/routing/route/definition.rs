@@ -1,8 +1,11 @@
 use crate::{ExceptionFilter, Guard, HttpMethod, Interceptor, Pipe, Result};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::routing::handler::RouteHandler;
-use crate::routing::path::validate_route_path;
+use crate::routing::path::{
+    match_path_params, match_path_shape, route_param_names, route_shape_key, validate_route_path,
+};
 
 /// A framework-neutral route definition.
 #[derive(Clone)]
@@ -44,6 +47,30 @@ impl RouteDefinition {
 
     pub fn path(&self) -> &str {
         &self.path
+    }
+
+    pub fn path_shape(&self) -> String {
+        route_shape_key(&self.path)
+    }
+
+    pub fn path_param_names(&self) -> Vec<&str> {
+        route_param_names(&self.path)
+    }
+
+    pub fn matches_path(&self, path: &str) -> bool {
+        match_path_shape(&self.path, path)
+    }
+
+    pub fn path_params(&self, path: &str) -> Result<Option<BTreeMap<String, String>>> {
+        match_path_params(&self.path, path)
+    }
+
+    pub fn module_name(&self) -> Option<&str> {
+        self.module_name.as_deref()
+    }
+
+    pub fn controller_prefix(&self) -> Option<&str> {
+        self.controller_prefix.as_deref()
     }
 
     pub fn handler(&self) -> Arc<dyn RouteHandler> {

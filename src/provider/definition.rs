@@ -63,6 +63,14 @@ impl ProviderDefinition {
         Self::named_factory(ProviderToken::of::<T>().as_str(), factory)
     }
 
+    pub fn factory_arc<T, F>(factory: F) -> Self
+    where
+        T: Send + Sync + 'static,
+        F: Fn(&ModuleRef) -> Result<Arc<T>> + Send + Sync + 'static,
+    {
+        Self::named_factory_arc(ProviderToken::of::<T>().as_str(), factory)
+    }
+
     pub fn named_factory<T, F>(token: impl Into<String>, factory: F) -> Self
     where
         T: Send + Sync + 'static,
@@ -73,6 +81,17 @@ impl ProviderDefinition {
             factory: Arc::new(move |module_ref| {
                 Ok(Arc::new(factory(module_ref)?) as Arc<AnyProvider>)
             }),
+        }
+    }
+
+    pub fn named_factory_arc<T, F>(token: impl Into<String>, factory: F) -> Self
+    where
+        T: Send + Sync + 'static,
+        F: Fn(&ModuleRef) -> Result<Arc<T>> + Send + Sync + 'static,
+    {
+        Self {
+            token: ProviderToken::named(token),
+            factory: Arc::new(move |module_ref| Ok(factory(module_ref)? as Arc<AnyProvider>)),
         }
     }
 

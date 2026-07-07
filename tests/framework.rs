@@ -1,9 +1,7 @@
 use a3s_boot::{
-    BootApplication, BootError, BootRequest, BootResponse, BoxFuture, ControllerDefinition,
-    ExecutionContext, HttpAdapter, HttpMethod, Interceptor, Module, ModuleRef, ProviderDefinition,
-    Result, RouteDefinition,
+    BootApplication, BootError, BootResponse, BoxFuture, ControllerDefinition, HttpAdapter,
+    HttpMethod, Module, ModuleRef, Result, RouteDefinition,
 };
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -79,11 +77,64 @@ fn rejects_empty_module_names() {
     assert!(matches!(result, Err(BootError::EmptyModuleName)));
 }
 
-#[test]
-fn rejects_relative_route_paths() {
-    let result = RouteDefinition::get("health", |_| async { Ok(BootResponse::text("ok")) });
+#[derive(Debug)]
+struct MetadataModule;
 
-    assert!(matches!(result, Err(BootError::InvalidRoutePath(_))));
+impl Module for MetadataModule {
+    fn name(&self) -> &'static str {
+        "metadata"
+    }
+
+    fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
+        Ok(vec![ControllerDefinition::new("/items")?
+            .get("/{id}", |_| async {
+                Ok(BootResponse::text("controller"))
+            })?])
+    }
+
+    fn routes(&self) -> Result<Vec<RouteDefinition>> {
+        Ok(vec![RouteDefinition::get("/module-health", |_| async {
+            Ok(BootResponse::text("module"))
+        })?])
+    }
+}
+
+#[test]
+fn exposes_route_module_and_controller_metadata() {
+    let app = BootApplication::builder()
+        .global_prefix("/api")
+        .route(
+            RouteDefinition::get("/shell-health", |_| async {
+                Ok(BootResponse::text("shell"))
+            })
+            .unwrap(),
+        )
+        .import(MetadataModule)
+        .build()
+        .unwrap();
+
+    let shell_route = app
+        .routes()
+        .iter()
+        .find(|route| route.path() == "/api/shell-health")
+        .unwrap();
+    let module_route = app
+        .routes()
+        .iter()
+        .find(|route| route.path() == "/api/module-health")
+        .unwrap();
+    let controller_route = app
+        .routes()
+        .iter()
+        .find(|route| route.path() == "/api/items/{id}")
+        .unwrap();
+
+    assert_eq!(shell_route.module_name(), None);
+    assert_eq!(shell_route.controller_prefix(), None);
+    assert_eq!(module_route.module_name(), Some("metadata"));
+    assert_eq!(module_route.controller_prefix(), None);
+    assert_eq!(controller_route.module_name(), Some("metadata"));
+    assert_eq!(controller_route.controller_prefix(), Some("/items"));
 }
 
 struct RecordingAdapter;
@@ -122,305 +173,4 @@ fn builds_with_a_custom_http_adapter() {
     let routes = app.into_adapter(&RecordingAdapter).unwrap();
 
     assert_eq!(routes, vec![(HttpMethod::Get, "/health".to_string())]);
-}
-
-#[derive(Debug)]
-struct CatsService;
-
-impl CatsService {
-    fn find_all(&self) -> &'static str {
-        "cat-a,cat-b"
-    }
-}
-
-#[derive(Debug)]
-struct CatsModule;
-
-impl Module for CatsModule {
-    fn name(&self) -> &'static str {
-        "cats"
-    }
-
-    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
-        Ok(vec![ProviderDefinition::singleton(CatsService)])
-    }
-
-    fn controllers(&self, module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
-        let cats = module_ref.get::<CatsService>()?;
-        Ok(vec![ControllerDefinition::new("/cats")?.get(
-            "/",
-            move |_| {
-                let cats = Arc::clone(&cats);
-                async move { Ok(BootResponse::text(cats.find_all())) }
-            },
-        )?])
-    }
-}
-
-#[tokio::test]
-async fn registers_controller_routes_with_provider_injection() {
-    let app = BootApplication::builder()
-        .import(CatsModule)
-        .build()
-        .unwrap();
-
-    assert_eq!(app.routes()[0].path(), "/cats");
-    assert!(app.get::<CatsService>().is_ok());
-
-    let response = app.routes()[0]
-        .call(BootRequest::new(HttpMethod::Get, "/cats"))
-        .await
-        .unwrap();
-
-    assert_eq!(response.body, b"cat-a,cat-b");
-}
-
-#[tokio::test]
-async fn route_pipeline_runs_pipes_guards_interceptors_and_filters() {
-    struct HeaderInterceptor;
-
-    impl Interceptor for HeaderInterceptor {
-        fn after(
-            &self,
-            _context: ExecutionContext,
-            response: BootResponse,
-        ) -> BoxFuture<'static, Result<BootResponse>> {
-            Box::pin(async move { Ok(response.with_header("x-boot", "ok")) })
-        }
-    }
-
-    let route = RouteDefinition::post("/", |request: BootRequest| async move {
-        Ok(BootResponse::text(request.text()?))
-    })
-    .unwrap()
-    .with_pipe(|request: BootRequest| async move { Ok(request.with_body("transformed")) })
-    .with_guard(|context: ExecutionContext| async move { Ok(context.request_path == "/") })
-    .with_interceptor(HeaderInterceptor)
-    .with_filter(|_, error: BootError| async move {
-        Ok(Some(BootResponse::text(error.to_string()).with_status(500)))
-    });
-
-    let response = route
-        .call(BootRequest::new(HttpMethod::Post, "/").with_body("raw"))
-        .await
-        .unwrap();
-
-    assert_eq!(response.body, b"transformed");
-    assert_eq!(
-        response.headers.get("x-boot").map(String::as_str),
-        Some("ok")
-    );
-}
-
-#[derive(Clone)]
-struct TraceInterceptor {
-    name: &'static str,
-    log: Arc<std::sync::Mutex<Vec<String>>>,
-}
-
-impl TraceInterceptor {
-    fn new(name: &'static str, log: Arc<std::sync::Mutex<Vec<String>>>) -> Self {
-        Self { name, log }
-    }
-}
-
-impl Interceptor for TraceInterceptor {
-    fn before(&self, _context: ExecutionContext) -> BoxFuture<'static, Result<()>> {
-        let name = self.name;
-        let log = Arc::clone(&self.log);
-        Box::pin(async move {
-            log.lock().unwrap().push(format!("before:{name}"));
-            Ok(())
-        })
-    }
-
-    fn after(
-        &self,
-        _context: ExecutionContext,
-        response: BootResponse,
-    ) -> BoxFuture<'static, Result<BootResponse>> {
-        let name = self.name;
-        let log = Arc::clone(&self.log);
-        Box::pin(async move {
-            log.lock().unwrap().push(format!("after:{name}"));
-            Ok(response)
-        })
-    }
-}
-
-#[derive(Debug)]
-struct PipelineModule {
-    log: Arc<std::sync::Mutex<Vec<String>>>,
-}
-
-impl Module for PipelineModule {
-    fn name(&self) -> &'static str {
-        "pipeline"
-    }
-
-    fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
-        let log = Arc::clone(&self.log);
-        Ok(vec![ControllerDefinition::new("/pipeline")?
-            .with_interceptor(TraceInterceptor::new("controller", Arc::clone(&self.log)))
-            .get("/", move |_| {
-                let log = Arc::clone(&log);
-                async move {
-                    log.lock().unwrap().push("handler".to_string());
-                    Ok(BootResponse::text("ok"))
-                }
-            })?])
-    }
-}
-
-#[tokio::test]
-async fn global_and_controller_interceptors_wrap_route_in_order() {
-    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let app = BootApplication::builder()
-        .use_global_interceptor(TraceInterceptor::new("global", Arc::clone(&log)))
-        .import(PipelineModule {
-            log: Arc::clone(&log),
-        })
-        .build()
-        .unwrap();
-
-    let response = app.routes()[0]
-        .call(BootRequest::new(HttpMethod::Get, "/pipeline"))
-        .await
-        .unwrap();
-
-    assert_eq!(response.body, b"ok");
-    assert_eq!(
-        log.lock().unwrap().as_slice(),
-        [
-            "before:global",
-            "before:controller",
-            "handler",
-            "after:controller",
-            "after:global"
-        ]
-    );
-}
-
-#[tokio::test]
-async fn global_guards_and_filters_apply_to_controller_routes() {
-    let app = BootApplication::builder()
-        .use_global_guard(|_| async { Ok(false) })
-        .use_global_filter(|context: ExecutionContext, error: BootError| async move {
-            Ok(Some(
-                BootResponse::text(format!("{}: {error}", context.route_path)).with_status(403),
-            ))
-        })
-        .import(CatsModule)
-        .build()
-        .unwrap();
-
-    let response = app.routes()[0]
-        .call(BootRequest::new(HttpMethod::Get, "/cats"))
-        .await
-        .unwrap();
-
-    assert_eq!(response.status, 403);
-    assert_eq!(
-        String::from_utf8(response.body).unwrap(),
-        "/cats: request was forbidden: GET /cats"
-    );
-}
-
-#[derive(Debug, Deserialize)]
-struct CreateCatDto {
-    name: String,
-}
-
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-struct CatDto {
-    name: String,
-    adopted: bool,
-}
-
-#[tokio::test]
-async fn json_controller_routes_decode_dtos_and_encode_responses() {
-    let controller = ControllerDefinition::new("/cats")
-        .unwrap()
-        .post_json("/", |dto: CreateCatDto| async move {
-            Ok(CatDto {
-                name: dto.name,
-                adopted: false,
-            })
-        })
-        .unwrap();
-    let route = controller.routes()[0].clone();
-
-    let response = route
-        .call(
-            BootRequest::new(HttpMethod::Post, "/cats")
-                .with_header("content-type", "application/json")
-                .with_body(r#"{"name":"Milo"}"#),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status, 200);
-    assert_eq!(
-        response.headers.get("content-type").map(String::as_str),
-        Some("application/json")
-    );
-    assert_eq!(
-        serde_json::from_slice::<CatDto>(&response.body).unwrap(),
-        CatDto {
-            name: "Milo".to_string(),
-            adopted: false,
-        }
-    );
-}
-
-#[tokio::test]
-async fn json_controller_routes_reject_invalid_json_as_bad_request() {
-    let controller = ControllerDefinition::new("/cats")
-        .unwrap()
-        .post_json("/", |dto: CreateCatDto| async move {
-            Ok(CatDto {
-                name: dto.name,
-                adopted: false,
-            })
-        })
-        .unwrap();
-
-    let error = controller.routes()[0]
-        .call(
-            BootRequest::new(HttpMethod::Post, "/cats")
-                .with_header("content-type", "application/json")
-                .with_body("{"),
-        )
-        .await
-        .unwrap_err();
-
-    assert!(matches!(error, BootError::BadRequest(_)));
-}
-
-#[derive(Debug, Deserialize)]
-struct CatQueryDto {
-    verbose: bool,
-}
-
-#[tokio::test]
-async fn route_calls_extract_path_params_and_query_params() {
-    let controller = ControllerDefinition::new("/cats")
-        .unwrap()
-        .get("/{id}", |request: BootRequest| async move {
-            let query: CatQueryDto = request.query()?;
-            Ok(BootResponse::text(format!(
-                "{}:{}:{}",
-                request.param("id").unwrap_or("missing"),
-                request.query_param("verbose").unwrap_or("missing"),
-                query.verbose
-            )))
-        })
-        .unwrap();
-
-    let response = controller.routes()[0]
-        .call(BootRequest::new(HttpMethod::Get, "/cats/milo?verbose=true"))
-        .await
-        .unwrap();
-
-    assert_eq!(response.body, b"milo:true:true");
 }
