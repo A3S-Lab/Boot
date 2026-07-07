@@ -93,6 +93,8 @@ This repository contains the first framework slice:
   request logging middleware/interceptor helpers
 - adapter-neutral API versioning through URI segments, request headers, or
   media type parameters, with route-level and controller-level version metadata
+- `SerializationInterceptor` and `SerializationOptions` for Nest-style JSON
+  response shaping, including include fields, exclude fields, and null skipping
 - OpenAPI route metadata, schema-crate-neutral document generation, and
   optional `/openapi.json` serving through `serve_openapi(...)`, with
   Nest-style metadata macros such as `#[tag]`, `#[operation]`, `#[response]`,
@@ -1748,6 +1750,81 @@ fn cats_controller() -> Result<ControllerDefinition> {
 }
 ```
 
+## Serialization
+
+Boot serialization mirrors Nest's `ClassSerializerInterceptor` and
+`@SerializeOptions` shape, but works on adapter-neutral `BootResponse` values.
+Register `SerializationInterceptor` globally, then attach
+`SerializationOptions` to routes or controllers. The interceptor only rewrites
+JSON response bodies; text, raw bytes, redirects, empty responses, and SSE
+streams pass through unchanged.
+
+```rust
+use a3s_boot::{
+    BootApplication, BootRequest, ControllerDefinition, Result, RouteDefinition,
+    SerializationInterceptor, SerializationOptions,
+};
+use serde_json::json;
+
+let app = BootApplication::builder()
+    .use_global_serialization()
+    .route(
+        RouteDefinition::get_json("/users/{id}", |request: BootRequest| async move {
+            Ok(json!({
+                "id": request.param("id").unwrap_or("unknown"),
+                "email": "milo@example.com",
+                "password": "secret",
+                "nickname": null
+            }))
+        })?
+        .with_serialization(
+            SerializationOptions::new()
+                .exclude_field("password")
+                .skip_null_fields(),
+        ),
+    )
+    .build()?;
+```
+
+Controller-level serialization options are inherited by routes that do not set
+their own options:
+
+```rust
+use a3s_boot::{BootRequest, ControllerDefinition, Result, SerializationOptions};
+use serde_json::json;
+
+fn users_controller() -> Result<ControllerDefinition> {
+    ControllerDefinition::new("/users")?
+        .with_serialization(SerializationOptions::new().include_fields(["id", "email"]))
+        .get_json("/{id}", |request: BootRequest| async move {
+            Ok(json!({
+                "id": request.param("id").unwrap_or("unknown"),
+                "email": "milo@example.com",
+                "password": "secret"
+            }))
+        })
+}
+```
+
+Use `SerializationInterceptor::with_options(...)` when the same default policy
+should apply to every JSON response, even routes without explicit metadata:
+
+```rust
+use a3s_boot::{BootApplication, SerializationInterceptor, SerializationOptions};
+
+let app = BootApplication::builder()
+    .use_global_interceptor(SerializationInterceptor::with_options(
+        SerializationOptions::new().exclude_fields(["password", "token"]),
+    ))
+    .build()?;
+```
+
+`include_fields(...)` keeps only the named top-level fields on a JSON object or
+each object in a top-level JSON array. `exclude_fields(...)` removes named
+top-level fields, and `skip_null_fields()` drops null top-level fields. When a
+serialized response had a `Content-Length`, Boot updates it after rewriting the
+body.
+
 ## Params And Query
 
 Boot keeps route params adapter-neutral. Use whole `{name}` segments in routes
@@ -2028,6 +2105,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | Queue | Optional provider-backed background jobs through `QueueModule` |
 | Logger | Optional provider-backed structured logging through `LoggingModule` |
 | API versioning | URI, header, or media type version matching through route metadata |
+| Serialization | JSON response shaping through `SerializationInterceptor` metadata |
 | Filter | Error mapping into HTTP responses |
 | Lifecycle hook | Startup and shutdown behavior for modules and providers |
 
@@ -2055,6 +2133,7 @@ src/
 ├── queue.rs      # Optional provider-backed queue and in-process backend
 ├── routing/      # Route handlers, controllers, route execution, and path matching
 ├── schedule.rs   # Optional provider-backed scheduler and in-process backend
+├── serialization.rs # Adapter-neutral JSON response shaping interceptor
 ├── transport/    # Adapter-neutral microservice message patterns and transports
 ├── validation.rs # DTO validation trait and route validation hooks
 ├── versioning.rs # Adapter-neutral API versioning strategies and route metadata

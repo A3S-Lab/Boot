@@ -131,6 +131,7 @@ impl RouteDefinition {
             self.path.clone(),
             self.module_name.clone(),
             self.controller_prefix.clone(),
+            self.serialization.clone(),
         )
     }
 

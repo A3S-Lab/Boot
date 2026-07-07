@@ -1,6 +1,6 @@
 use crate::{
     ExceptionFilter, Guard, HttpMethod, Interceptor, Middleware, OpenApiRouteMetadata, Pipe,
-    RequestValidator, Result, RouteVersioning,
+    RequestValidator, Result, RouteVersioning, SerializationOptions,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -28,6 +28,7 @@ pub struct RouteDefinition {
     pub(super) controller_prefix: Option<String>,
     pub(super) openapi: OpenApiRouteMetadata,
     pub(super) versioning: RouteVersioning,
+    pub(super) serialization: SerializationOptions,
 }
 
 impl RouteDefinition {
@@ -53,6 +54,7 @@ impl RouteDefinition {
             controller_prefix: None,
             openapi: OpenApiRouteMetadata::default(),
             versioning: RouteVersioning::default(),
+            serialization: SerializationOptions::default(),
         })
     }
 
@@ -100,6 +102,10 @@ impl RouteDefinition {
         &self.versioning
     }
 
+    pub fn serialization(&self) -> &SerializationOptions {
+        &self.serialization
+    }
+
     pub fn validation_enabled(&self) -> bool {
         self.validation_enabled
     }
@@ -120,6 +126,11 @@ impl RouteDefinition {
 
     pub fn version_neutral(mut self) -> Self {
         self.versioning = RouteVersioning::neutral();
+        self
+    }
+
+    pub fn with_serialization(mut self, options: SerializationOptions) -> Self {
+        self.serialization = options;
         self
     }
 }

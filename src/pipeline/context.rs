@@ -1,4 +1,4 @@
-use crate::{BootRequest, HttpMethod};
+use crate::{BootRequest, HttpMethod, SerializationOptions};
 
 /// Request context visible to guards, interceptors, pipes, and filters.
 #[derive(Debug, Clone)]
@@ -8,6 +8,7 @@ pub struct ExecutionContext {
     pub route_path: String,
     pub module_name: Option<String>,
     pub controller_prefix: Option<String>,
+    pub serialization: SerializationOptions,
     pub request: BootRequest,
 }
 
@@ -17,6 +18,7 @@ impl ExecutionContext {
         route_path: String,
         module_name: Option<String>,
         controller_prefix: Option<String>,
+        serialization: SerializationOptions,
     ) -> Self {
         Self {
             method: request.method,
@@ -24,6 +26,7 @@ impl ExecutionContext {
             route_path,
             module_name,
             controller_prefix,
+            serialization,
             request,
         }
     }

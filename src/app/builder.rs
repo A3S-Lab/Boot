@@ -4,7 +4,7 @@ use crate::pipeline::PipelineComponents;
 use crate::{
     ApiVersioning, BootError, BootResponse, ExceptionFilter, Guard, Interceptor,
     MessagePatternDefinition, Middleware, Module, ModuleRef, OpenApiDocument, OpenApiInfo, Pipe,
-    Result, RouteDefinition, WebSocketGatewayDefinition,
+    Result, RouteDefinition, SerializationInterceptor, WebSocketGatewayDefinition,
 };
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -111,6 +111,13 @@ impl BootApplicationBuilder {
         I: Interceptor,
     {
         self.global_pipeline.push_interceptor(interceptor);
+        self
+    }
+
+    /// Add the default JSON response serialization interceptor.
+    pub fn use_global_serialization(mut self) -> Self {
+        self.global_pipeline
+            .push_interceptor(SerializationInterceptor::new());
         self
     }
 

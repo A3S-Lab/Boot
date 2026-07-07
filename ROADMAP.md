@@ -79,6 +79,9 @@ Implemented today:
 - API versioning with URI, header, and media type strategies; route-level and
   controller-level version metadata; default versions; and version-neutral
   routes.
+- JSON response serialization with `SerializationInterceptor`, route/controller
+  `SerializationOptions`, include/exclude field shaping, null skipping, and
+  content-length updates after body rewriting.
 
 ## Priority Order
 
@@ -409,7 +412,7 @@ Nest equivalent areas:
 - queues (implemented)
 - logging (implemented)
 - API versioning (implemented)
-- serialization
+- serialization (implemented)
 - compression
 - file upload
 - security helpers such as CORS, CSRF, helmet-like headers, and rate limiting
@@ -443,16 +446,19 @@ Acceptance:
   parameter; inherit controller versions; use default versions; expose
   version-neutral routes; and reject duplicate routes only when version metadata
   overlaps. (Covered)
+- Serialization can shape JSON response objects and arrays through global
+  interceptors plus route/controller metadata, leave non-JSON responses
+  unchanged, and keep content length valid after rewriting. (Covered)
 
 ## Immediate Next Task
 
-Continue Milestone 8 technique modules with serialization. Keep GraphQL out of
+Continue Milestone 8 technique modules with compression. Keep GraphQL out of
 scope.
 
 Suggested implementation sequence:
 
-1. Start serialization with response-shaping metadata and adapter-neutral
-   interceptor hooks.
+1. Start compression with adapter-neutral response middleware/interceptor hooks
+   and opt-in encoding negotiation.
 2. Define integration through providers, middleware, guards, interceptors, or
    adapters instead of adding one-off framework hooks.
 3. Add crate-local tests and README examples for the chosen technique module.

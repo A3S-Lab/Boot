@@ -4,7 +4,7 @@ use super::route::RouteDefinition;
 use crate::pipeline::PipelineComponents;
 use crate::{
     BootRequest, ExceptionFilter, Guard, Interceptor, Middleware, Pipe, Result, RouteVersioning,
-    SseEvent, Validate,
+    SerializationOptions, SseEvent, Validate,
 };
 use futures_core::Stream;
 use serde::de::DeserializeOwned;
@@ -19,6 +19,7 @@ pub struct ControllerDefinition {
     pipeline: PipelineComponents,
     openapi_tags: Vec<String>,
     versioning: RouteVersioning,
+    serialization: Option<SerializationOptions>,
 }
 
 impl ControllerDefinition {
@@ -30,6 +31,7 @@ impl ControllerDefinition {
             pipeline: PipelineComponents::default(),
             openapi_tags: Vec::new(),
             versioning: RouteVersioning::default(),
+            serialization: None,
         })
     }
 
@@ -41,6 +43,11 @@ impl ControllerDefinition {
                 RouteVersioning::Versions(versions) => route.with_versions(versions.clone()),
                 RouteVersioning::Neutral => route.version_neutral(),
             };
+        }
+        if route.serialization().is_empty() {
+            if let Some(serialization) = &self.serialization {
+                route = route.with_serialization(serialization.clone());
+            }
         }
         for tag in &self.openapi_tags {
             route = route.with_tag(tag.clone());
@@ -122,6 +129,11 @@ impl ControllerDefinition {
 
     pub fn version_neutral(mut self) -> Self {
         self.versioning = RouteVersioning::neutral();
+        self
+    }
+
+    pub fn with_serialization(mut self, options: SerializationOptions) -> Self {
+        self.serialization = Some(options);
         self
     }
 

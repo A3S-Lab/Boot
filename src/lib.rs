@@ -29,6 +29,7 @@ mod queue;
 mod routing;
 #[cfg(feature = "schedule")]
 mod schedule;
+mod serialization;
 mod transport;
 mod validation;
 mod versioning;
@@ -81,6 +82,7 @@ pub use schedule::{
     InProcessScheduler, ScheduleContext, ScheduleModule, ScheduleTrigger, ScheduledJob,
     ScheduledJobError, ScheduledJobInfo, ScheduledTask, Scheduler, SchedulerBackend,
 };
+pub use serialization::{SerializationInterceptor, SerializationOptions};
 pub use transport::{
     InProcessTransport, InProcessTransportClient, IntoTransportReply, MessagePatternDefinition,
     MessagePatternKind, MessageTransport, TransportContext, TransportGuard, TransportInterceptor,
