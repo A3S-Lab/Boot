@@ -479,6 +479,9 @@ Acceptance:
   in-memory or custom stores. (Covered)
 - Response cookies can be written and expired through typed `BootResponse`
   helpers instead of hand-built `Set-Cookie` strings. (Covered)
+- Testing utilities can compile Nest-style testing modules, override providers
+  before controllers are built, resolve providers, and dispatch in-process
+  requests. (Covered)
 
 ## Immediate Next Task
 

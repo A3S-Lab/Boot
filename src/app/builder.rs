@@ -4,7 +4,8 @@ use crate::pipeline::PipelineComponents;
 use crate::{
     ApiVersioning, BootError, BootResponse, ExceptionFilter, Guard, Interceptor,
     MessagePatternDefinition, Middleware, Module, ModuleRef, OpenApiDocument, OpenApiInfo, Pipe,
-    Result, RouteDefinition, SerializationInterceptor, WebSocketGatewayDefinition,
+    ProviderDefinition, ProviderToken, Result, RouteDefinition, SerializationInterceptor,
+    WebSocketGatewayDefinition,
 };
 #[cfg(feature = "compression")]
 use crate::{CompressionInterceptor, CompressionOptions};
@@ -16,7 +17,7 @@ use crate::{
 };
 #[cfg(feature = "session")]
 use crate::{SessionCookieInterceptor, SessionManager, SessionMiddleware, SessionModule};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 /// Builder for a [`BootApplication`].
@@ -30,6 +31,7 @@ pub struct BootApplicationBuilder {
     global_prefix: Option<String>,
     api_versioning: Option<ApiVersioning>,
     openapi_routes: Vec<(String, OpenApiInfo)>,
+    provider_overrides: BTreeMap<ProviderToken, ProviderDefinition>,
     #[cfg(feature = "security")]
     cors_preflight: Option<CorsPreflightRoute>,
 }
@@ -210,12 +212,22 @@ impl BootApplicationBuilder {
         self
     }
 
+    /// Replace matching module providers before modules build controllers.
+    ///
+    /// This is primarily used by testing utilities to swap provider
+    /// implementations while preserving the application module graph.
+    pub fn override_provider(mut self, provider: ProviderDefinition) -> Self {
+        self.provider_overrides
+            .insert(provider.token().clone(), provider);
+        self
+    }
+
     /// Resolve module imports, providers, controllers, and routes.
     pub fn build(self) -> Result<BootApplication> {
         let module_ref = ModuleRef::new();
         let global_ref = ModuleRef::new();
         module_ref.add_visible_scope(global_ref.clone())?;
-        let mut registry = ModuleRegistry::new(global_ref);
+        let mut registry = ModuleRegistry::new(global_ref, self.provider_overrides);
         let mut modules = Vec::new();
         let mut module_instances = Vec::new();
         let mut routes = self

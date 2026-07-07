@@ -1,0 +1,164 @@
+use crate::{
+    BootApplication, BootApplicationBuilder, BootError, BootRequest, BootResponse,
+    ControllerDefinition, DynamicModule, MessagePatternDefinition, Module, ModuleRef,
+    ProviderDefinition, ProviderToken, Result, RouteDefinition, WebSocketGatewayDefinition,
+};
+use std::sync::Arc;
+
+/// Compiled test module with an in-process [`BootApplication`].
+pub struct TestingModule {
+    app: BootApplication,
+}
+
+impl std::fmt::Debug for TestingModule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TestingModule")
+            .field("modules", &self.app.module_names())
+            .field("routes", &self.app.routes().len())
+            .field("gateways", &self.app.gateways().len())
+            .field("message_patterns", &self.app.message_patterns().len())
+            .finish()
+    }
+}
+
+impl TestingModule {
+    pub fn builder() -> TestingModuleBuilder {
+        TestingModuleBuilder::new()
+    }
+
+    pub fn app(&self) -> &BootApplication {
+        &self.app
+    }
+
+    pub fn into_app(self) -> BootApplication {
+        self.app
+    }
+
+    pub fn module_ref(&self) -> &ModuleRef {
+        self.app.module_ref()
+    }
+
+    pub fn get<T>(&self) -> Result<Arc<T>>
+    where
+        T: Send + Sync + 'static,
+    {
+        self.get_optional::<T>()?
+            .ok_or_else(|| BootError::MissingProvider(ProviderToken::of::<T>().to_string()))
+    }
+
+    pub fn get_named<T>(&self, token: &str) -> Result<Arc<T>>
+    where
+        T: Send + Sync + 'static,
+    {
+        self.get_optional_named::<T>(token)?
+            .ok_or_else(|| BootError::MissingProvider(ProviderToken::named(token).to_string()))
+    }
+
+    pub fn get_optional<T>(&self) -> Result<Option<Arc<T>>>
+    where
+        T: Send + Sync + 'static,
+    {
+        if let Some(value) = self.app.get_optional::<T>()? {
+            return Ok(Some(value));
+        }
+
+        for instance in &self.app.module_instances {
+            if let Some(value) = instance.module_ref.get_optional::<T>()? {
+                return Ok(Some(value));
+            }
+        }
+
+        Ok(None)
+    }
+
+    pub fn get_optional_named<T>(&self, token: &str) -> Result<Option<Arc<T>>>
+    where
+        T: Send + Sync + 'static,
+    {
+        if let Some(value) = self.app.get_optional_named::<T>(token)? {
+            return Ok(Some(value));
+        }
+
+        for instance in &self.app.module_instances {
+            if let Some(value) = instance.module_ref.get_optional_named::<T>(token)? {
+                return Ok(Some(value));
+            }
+        }
+
+        Ok(None)
+    }
+
+    pub async fn call(&self, request: BootRequest) -> Result<BootResponse> {
+        self.app.call(request).await
+    }
+}
+
+/// Builder for Nest-style test modules.
+pub struct TestingModuleBuilder {
+    app: BootApplicationBuilder,
+    module: DynamicModule,
+}
+
+impl Default for TestingModuleBuilder {
+    fn default() -> Self {
+        Self {
+            app: BootApplication::builder(),
+            module: DynamicModule::new("TestingModule"),
+        }
+    }
+}
+
+impl TestingModuleBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn import<M>(mut self, module: M) -> Self
+    where
+        M: Module,
+    {
+        self.module = self.module.import(module);
+        self
+    }
+
+    pub fn import_arc(mut self, module: Arc<dyn Module>) -> Self {
+        self.module = self.module.import_arc(module);
+        self
+    }
+
+    pub fn provider(mut self, provider: ProviderDefinition) -> Self {
+        self.module = self.module.provider(provider);
+        self
+    }
+
+    pub fn controller(mut self, controller: ControllerDefinition) -> Self {
+        self.module = self.module.controller(controller);
+        self
+    }
+
+    pub fn route(mut self, route: RouteDefinition) -> Self {
+        self.module = self.module.route(route);
+        self
+    }
+
+    pub fn gateway(mut self, gateway: WebSocketGatewayDefinition) -> Self {
+        self.module = self.module.gateway(gateway);
+        self
+    }
+
+    pub fn message_pattern(mut self, pattern: MessagePatternDefinition) -> Self {
+        self.module = self.module.message_pattern(pattern);
+        self
+    }
+
+    pub fn override_provider(mut self, provider: ProviderDefinition) -> Self {
+        self.app = self.app.override_provider(provider);
+        self
+    }
+
+    pub fn compile(self) -> Result<TestingModule> {
+        Ok(TestingModule {
+            app: self.app.import(self.module).build()?,
+        })
+    }
+}

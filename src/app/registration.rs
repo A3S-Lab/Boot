@@ -1,8 +1,8 @@
 use super::application::ModuleInstance;
 use crate::pipeline::PipelineComponents;
 use crate::{
-    BootError, ControllerDefinition, MessagePatternDefinition, Module, ModuleRef, Result,
-    RouteDefinition, WebSocketGatewayDefinition,
+    BootError, ControllerDefinition, MessagePatternDefinition, Module, ModuleRef,
+    ProviderDefinition, ProviderToken, Result, RouteDefinition, WebSocketGatewayDefinition,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -11,6 +11,7 @@ pub(super) struct ModuleRegistry {
     registered: BTreeMap<String, RegisteredModule>,
     visiting: BTreeSet<String>,
     global_ref: ModuleRef,
+    provider_overrides: BTreeMap<ProviderToken, ProviderDefinition>,
 }
 
 pub(super) struct ModuleRegistrationSink<'a> {
@@ -22,11 +23,15 @@ pub(super) struct ModuleRegistrationSink<'a> {
 }
 
 impl ModuleRegistry {
-    pub fn new(global_ref: ModuleRef) -> Self {
+    pub fn new(
+        global_ref: ModuleRef,
+        provider_overrides: BTreeMap<ProviderToken, ProviderDefinition>,
+    ) -> Self {
         Self {
             registered: BTreeMap::new(),
             visiting: BTreeSet::new(),
             global_ref,
+            provider_overrides,
         }
     }
 
@@ -63,6 +68,7 @@ impl ModuleRegistry {
         }
 
         for provider in module.providers()? {
+            let provider = self.provider_override_or(provider);
             module_ref.register(provider)?;
         }
 
@@ -124,6 +130,13 @@ impl ModuleRegistry {
         self.registered.insert(name.to_string(), registered.clone());
         self.visiting.remove(name);
         Ok(registered)
+    }
+
+    fn provider_override_or(&self, provider: ProviderDefinition) -> ProviderDefinition {
+        self.provider_overrides
+            .get(provider.token())
+            .cloned()
+            .unwrap_or(provider)
     }
 }
 

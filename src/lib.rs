@@ -42,6 +42,7 @@ mod security;
 mod serialization;
 #[cfg(feature = "session")]
 mod session;
+mod testing;
 mod transport;
 mod validation;
 mod versioning;
@@ -119,6 +120,7 @@ pub use session::{
     InMemorySessionStore, SessionCookieInterceptor, SessionCookieSameSite, SessionManager,
     SessionMiddleware, SessionModule, SessionOptions, SessionStore,
 };
+pub use testing::{TestingModule, TestingModuleBuilder};
 pub use transport::{
     InProcessTransport, InProcessTransportClient, IntoTransportReply, MessagePatternDefinition,
     MessagePatternKind, MessageTransport, TransportContext, TransportGuard, TransportInterceptor,

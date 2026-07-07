@@ -156,6 +156,9 @@ This repository contains the first framework slice:
 - `BootApplication::bootstrap`, `shutdown`, and `serve_with(...)` lifecycle entrypoints
 - `serve_with(...)` runs bootstrap before the adapter and shutdown after the adapter returns,
   including bootstrap and adapter errors
+- `TestingModule` and `TestingModuleBuilder` for Nest-style test module
+  compilation, provider overrides, in-process request calls, and provider
+  lookup
 
 ## Quick Start
 
@@ -1112,6 +1115,65 @@ fn inspect_app(app: &BootApplication) -> Result<()> {
     let _ = (repository, readonly, missing);
     Ok(())
 }
+```
+
+## Testing Modules
+
+`TestingModule` mirrors Nest's test-module workflow: assemble a module graph,
+override providers before controllers are built, compile it, resolve providers
+from the compiled graph, and call the app in process without binding a socket.
+
+```rust
+use std::sync::Arc;
+
+use a3s_boot::{
+    BootRequest, BootResponse, ControllerDefinition, HttpMethod, Module, ModuleRef,
+    ProviderDefinition, Result, RouteDefinition, TestingModule,
+};
+
+#[derive(Debug)]
+struct CatsService {
+    name: &'static str,
+}
+
+#[derive(Debug)]
+struct CatsModule;
+
+impl Module for CatsModule {
+    fn name(&self) -> &'static str {
+        "CatsModule"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::singleton(CatsService { name: "real" })])
+    }
+
+    fn controllers(&self, module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
+        let service = module_ref.get::<CatsService>()?;
+        Ok(vec![ControllerDefinition::new("/cats")?.route(
+            RouteDefinition::get("/", move |_| {
+                let service = Arc::clone(&service);
+                async move { BootResponse::json(&service.name) }
+            })?,
+        )?])
+    }
+}
+
+# async fn test() -> Result<()> {
+let module = TestingModule::builder()
+    .import(CatsModule)
+    .override_provider(ProviderDefinition::singleton(CatsService { name: "test-cat" }))
+    .compile()?;
+
+assert_eq!(module.get::<CatsService>()?.name, "test-cat");
+
+let response = module
+    .call(BootRequest::new(HttpMethod::Get, "/cats"))
+    .await?;
+
+assert_eq!(response.body_json::<String>()?, "test-cat");
+# Ok(())
+# }
 ```
 
 ## Module Encapsulation
@@ -2391,6 +2453,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | --- | --- |
 | Module | A named feature boundary with imports, providers, and routes |
 | ModuleRef | Typed provider container used by controllers and hosts |
+| Testing module | Test-only module compilation with provider overrides and in-process calls |
 | HTTP adapter | Replaceable backend adapter; Axum is the first implementation |
 | Controller | Typed request handlers grouped by route prefix |
 | Provider | Injectable service or repository dependency |
@@ -2447,6 +2510,7 @@ src/
 ├── security.rs   # Optional CORS, security headers, CSRF, and rate limiting helpers
 ├── serialization.rs # Adapter-neutral JSON response shaping interceptor
 ├── session.rs    # Optional provider-backed session store and cookie pipeline
+├── testing.rs    # Nest-style test module builder and compiled testing module
 ├── transport/    # Adapter-neutral microservice message patterns and transports
 ├── validation.rs # DTO validation trait and route validation hooks
 ├── versioning.rs # Adapter-neutral API versioning strategies and route metadata
