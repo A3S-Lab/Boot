@@ -4,10 +4,11 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use a3s_boot::{
-    controller, injectable, BootApplication, BootError, BootRequest, BootResponse,
-    ControllerDefinition, MessagePatternDefinition, Module, ModuleRef, OpenApiInfo,
-    ProviderDefinition, Result, SseEvent, SseStream, TransportMessage, TransportReply, Validate,
-    WebSocketGatewayDefinition, WebSocketMessage,
+    controller, injectable, BootApplication, BootError, BootRequest, BootResponse, BoxFuture,
+    ControllerDefinition, ExceptionFilter, ExecutionContext, Guard, Interceptor,
+    MessagePatternDefinition, Module, ModuleRef, OpenApiInfo, Pipe, ProviderDefinition, Result,
+    SseEvent, SseStream, TransportMessage, TransportReply, Validate, WebSocketGatewayDefinition,
+    WebSocketMessage,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -375,6 +376,90 @@ impl MacroRouteValidationController {
             id: "route".to_string(),
             name: dto.name,
         })
+    }
+}
+
+struct MacroControllerHeaderInterceptor;
+
+impl Interceptor for MacroControllerHeaderInterceptor {
+    fn after(
+        &self,
+        _context: ExecutionContext,
+        response: BootResponse,
+    ) -> BoxFuture<'static, Result<BootResponse>> {
+        Box::pin(async move { Ok(response.with_header("x-macro-controller", "yes")) })
+    }
+}
+
+struct MacroAllowGuard;
+
+impl Guard for MacroAllowGuard {
+    fn can_activate(&self, _context: ExecutionContext) -> BoxFuture<'static, Result<bool>> {
+        Box::pin(async { Ok(true) })
+    }
+}
+
+struct MacroRequestPipe;
+
+impl Pipe for MacroRequestPipe {
+    fn transform(&self, request: BootRequest) -> BoxFuture<'static, Result<BootRequest>> {
+        Box::pin(async move { Ok(request.with_header("x-macro-pipe", "yes")) })
+    }
+}
+
+struct MacroBadRequestFilter;
+
+impl ExceptionFilter for MacroBadRequestFilter {
+    fn catch(
+        &self,
+        context: ExecutionContext,
+        error: BootError,
+    ) -> BoxFuture<'static, Result<Option<BootResponse>>> {
+        Box::pin(async move {
+            Ok(Some(
+                BootResponse::text(format!("{}: {error}", context.route_path)).with_status(499),
+            ))
+        })
+    }
+}
+
+#[derive(Debug)]
+struct MacroPipelineController;
+
+#[controller("/macro-pipeline")]
+#[use_interceptor(MacroControllerHeaderInterceptor)]
+impl MacroPipelineController {
+    #[get("/guarded")]
+    #[use_guard(MacroAllowGuard)]
+    async fn guarded(&self) -> Result<String> {
+        Ok("guarded".to_string())
+    }
+
+    #[get("/piped", raw)]
+    #[use_pipe(MacroRequestPipe)]
+    async fn piped(&self, request: BootRequest) -> Result<BootResponse> {
+        Ok(BootResponse::text(
+            request.header("x-macro-pipe").unwrap_or("missing"),
+        ))
+    }
+
+    #[get("/filtered")]
+    #[use_filter(MacroBadRequestFilter)]
+    async fn filtered(&self) -> Result<String> {
+        Err(BootError::BadRequest("macro filter".to_string()))
+    }
+}
+
+#[derive(Debug)]
+struct MacroPipelineModule;
+
+impl Module for MacroPipelineModule {
+    fn name(&self) -> &'static str {
+        "macro-pipeline"
+    }
+
+    fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
+        Ok(vec![Arc::new(MacroPipelineController).controller()?])
     }
 }
 
@@ -749,6 +834,47 @@ fn has_openapi_parameter(
                 && parameter["required"] == required
                 && parameter["schema"] == schema
         })
+}
+
+#[tokio::test]
+async fn macro_pipeline_decorators_register_controller_and_route_hooks() {
+    let app = BootApplication::builder()
+        .import(MacroPipelineModule)
+        .build()
+        .unwrap();
+
+    let guarded = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-pipeline/guarded",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(guarded.body_json::<String>().unwrap(), "guarded");
+    assert_eq!(guarded.header("x-macro-controller"), Some("yes"));
+
+    let piped = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-pipeline/piped",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(piped.body_text().unwrap(), "yes");
+    assert_eq!(piped.header("x-macro-controller"), Some("yes"));
+
+    let filtered = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-pipeline/filtered",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(filtered.status(), 499);
+    assert_eq!(
+        filtered.body_text().unwrap(),
+        "/macro-pipeline/filtered: bad request: macro filter"
+    );
 }
 
 #[tokio::test]

@@ -40,6 +40,8 @@ Implemented today:
   Nest-style custom route/controller metadata and `#[http_code]` for
   Nest-style response status metadata, `#[header]` for response headers, and
   `#[redirect]` for redirect responses.
+- Nest-style generic pipeline macros: `#[use_guard]`, `#[use_interceptor]`,
+  `#[use_filter]`, and `#[use_pipe]` at controller and route scope.
 - JSON body and JSON response helpers.
 - SSE responses with `SseEvent`, `SseStream`, `BootResponse::sse(...)`,
   `RouteDefinition::sse(...)`, `ControllerDefinition::sse(...)`, and Axum

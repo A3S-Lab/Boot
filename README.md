@@ -59,7 +59,10 @@ This repository contains the first framework slice:
   `#[request]`, route metadata such as `#[metadata("roles", ["admin"])]`,
   response decorators such as `#[http_code(202)]`,
   `#[header("cache-control", "max-age=60")]`, and
-  `#[redirect("/new", status = 301)]`, and WebSocket macros such as
+  `#[redirect("/new", status = 301)]`, pipeline decorators such as
+  `#[use_guard(AuthGuard)]`, `#[use_interceptor(TraceInterceptor)]`,
+  `#[use_filter(HttpErrorFilter)]`, and `#[use_pipe(ParsePipe)]`, and
+  WebSocket macros such as
   `#[websocket_gateway]` and
   `#[subscribe_message]`, plus microservice macros such as
   `#[message_controller]`, `#[message_pattern]`, and `#[event_pattern]`
@@ -316,7 +319,11 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@MessagePattern("cat.find")` | `#[message_pattern("cat.find")]` on an async message method |
 | `@EventPattern("cat.created")` | `#[event_pattern("cat.created")]` on an async event method |
 | `@Payload()` | A typed message method argument deserialized from `TransportMessage::data` |
-| `@UsePipes(new ValidationPipe())` | `#[validate]` on a controller impl or route method |
+| `@UseGuards(AuthGuard)` | `#[use_guard(AuthGuard)]` on a controller impl or route method |
+| `@UseInterceptors(TraceInterceptor)` | `#[use_interceptor(TraceInterceptor)]` on a controller impl or route method |
+| `@UseFilters(HttpErrorFilter)` | `#[use_filter(HttpErrorFilter)]` on a controller impl or route method |
+| `@UsePipes(ParsePipe)` | `#[use_pipe(ParsePipe)]` on a controller impl or route method |
+| `@UsePipes(new ValidationPipe())` | `#[validate]` on a controller impl or route method for DTO validation |
 | `@SetMetadata("roles", ["admin"])` | `#[metadata("roles", ["admin"])]` below `#[controller]` or on a route method |
 | `@HttpCode(202)` | `#[http_code(202)]` on a JSON route method |
 | `@Header("cache-control", "max-age=60")` | `#[header("cache-control", "max-age=60")]` on a route method |

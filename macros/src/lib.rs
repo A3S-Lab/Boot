@@ -243,6 +243,26 @@ pub fn skip_validation(_attr: TokenStream, item: TokenStream) -> TokenStream {
     validation_attribute_outside_controller("skip_validation", item)
 }
 
+#[proc_macro_attribute]
+pub fn use_guard(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    pipeline_attribute_outside_controller("use_guard", item)
+}
+
+#[proc_macro_attribute]
+pub fn use_interceptor(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    pipeline_attribute_outside_controller("use_interceptor", item)
+}
+
+#[proc_macro_attribute]
+pub fn use_filter(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    pipeline_attribute_outside_controller("use_filter", item)
+}
+
+#[proc_macro_attribute]
+pub fn use_pipe(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    pipeline_attribute_outside_controller("use_pipe", item)
+}
+
 fn expand_injectable(item_struct: syn::ItemStruct) -> Result<proc_macro2::TokenStream> {
     let ident = &item_struct.ident;
     let (impl_generics, ty_generics, where_clause) = item_struct.generics.split_for_impl();
@@ -302,6 +322,8 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
         take_controller_openapi_attrs(&clean_impl_attrs);
     let (clean_impl_attrs, controller_metadata, controller_metadata_errors) =
         take_controller_metadata_attrs(&clean_impl_attrs);
+    let (clean_impl_attrs, controller_pipeline, controller_pipeline_errors) =
+        take_controller_pipeline_attrs(&clean_impl_attrs);
     item_impl.attrs = clean_impl_attrs;
     for error in controller_validation_errors {
         push_error(&mut errors, error);
@@ -312,8 +334,12 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
     for error in controller_metadata_errors {
         push_error(&mut errors, error);
     }
+    for error in controller_pipeline_errors {
+        push_error(&mut errors, error);
+    }
     let controller_openapi = controller_openapi.tokens();
     let controller_metadata = controller_metadata.tokens();
+    let controller_pipeline = controller_pipeline.tokens();
 
     for item in &mut item_impl.items {
         let ImplItem::Fn(method) = item else {
@@ -329,6 +355,8 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
         let (clean_attrs, http_code, http_code_errors) = take_route_http_code_attrs(&clean_attrs);
         let (clean_attrs, response_specs, response_errors) =
             take_route_response_attrs(&clean_attrs);
+        let (clean_attrs, pipeline_specs, pipeline_errors) =
+            take_route_pipeline_attrs(&clean_attrs);
         method.attrs = clean_attrs;
         for error in route_errors {
             push_error(&mut errors, error);
@@ -348,6 +376,9 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
         for error in response_errors {
             push_error(&mut errors, error);
         }
+        for error in pipeline_errors {
+            push_error(&mut errors, error);
+        }
         if method_routes.is_empty() && !openapi_specs.is_empty() {
             push_error(
                 &mut errors,
@@ -363,6 +394,15 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
                 syn::Error::new_spanned(
                     &method.sig.ident,
                     "response route attributes must be used on route methods",
+                ),
+            );
+        }
+        if method_routes.is_empty() && !pipeline_specs.is_empty() {
+            push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &method.sig.ident,
+                    "pipeline route attributes must be used on route methods",
                 ),
             );
         }
@@ -421,6 +461,7 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
                 &metadata_specs,
                 http_code.as_ref(),
                 &response_specs,
+                &pipeline_specs,
                 &openapi_specs,
             ) {
                 Ok(registration) => routes.push(registration),
@@ -447,6 +488,9 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
                 )*
                 #(
                     __a3s_boot_controller = __a3s_boot_controller.#controller_metadata?;
+                )*
+                #(
+                    __a3s_boot_controller = __a3s_boot_controller.#controller_pipeline;
                 )*
                 #(
                     __a3s_boot_controller = #routes;
@@ -933,6 +977,7 @@ fn route_registration(
     metadata_specs: &[MetadataSpec],
     http_code: Option<&LitInt>,
     response_specs: &[RouteResponseSpec],
+    pipeline_specs: &[PipelineSpec],
     openapi_specs: &[RouteOpenApiSpec],
 ) -> Result<proc_macro2::TokenStream> {
     if method.sig.asyncness.is_none() {
@@ -1058,6 +1103,8 @@ fn route_registration(
 
     let route_definition = metadata_route_definition(route_definition, metadata_specs);
 
+    let route_definition = pipeline_route_definition(route_definition, pipeline_specs);
+
     let route_definition = response_route_definition(route_definition, response_specs)?;
 
     let route_definition = openapi_route_definition(
@@ -1098,6 +1145,19 @@ fn response_route_definition(
         };
     }
     Ok(route_definition)
+}
+
+fn pipeline_route_definition(
+    mut route_definition: proc_macro2::TokenStream,
+    pipeline_specs: &[PipelineSpec],
+) -> proc_macro2::TokenStream {
+    for spec in pipeline_specs {
+        let token = spec.token();
+        route_definition = quote! {
+            (#route_definition).#token
+        };
+    }
+    route_definition
 }
 
 fn validation_route_definition(
@@ -1733,6 +1793,50 @@ fn take_route_response_attrs(
     (clean_attrs, specs, errors)
 }
 
+fn take_controller_pipeline_attrs(
+    attrs: &[Attribute],
+) -> (Vec<Attribute>, ControllerPipelineAttrs, Vec<syn::Error>) {
+    let mut clean_attrs = Vec::new();
+    let mut pipeline = ControllerPipelineAttrs::default();
+    let mut errors = Vec::new();
+
+    for attr in attrs {
+        let Some(kind) = PipelineAttrKind::from_attribute(attr) else {
+            clean_attrs.push(attr.clone());
+            continue;
+        };
+
+        match attr.parse_args::<Expr>() {
+            Ok(expr) => pipeline.specs.push(PipelineSpec { kind, expr }),
+            Err(error) => errors.push(error),
+        }
+    }
+
+    (clean_attrs, pipeline, errors)
+}
+
+fn take_route_pipeline_attrs(
+    attrs: &[Attribute],
+) -> (Vec<Attribute>, Vec<PipelineSpec>, Vec<syn::Error>) {
+    let mut clean_attrs = Vec::new();
+    let mut specs = Vec::new();
+    let mut errors = Vec::new();
+
+    for attr in attrs {
+        let Some(kind) = PipelineAttrKind::from_attribute(attr) else {
+            clean_attrs.push(attr.clone());
+            continue;
+        };
+
+        match attr.parse_args::<Expr>() {
+            Ok(expr) => specs.push(PipelineSpec { kind, expr }),
+            Err(error) => errors.push(error),
+        }
+    }
+
+    (clean_attrs, specs, errors)
+}
+
 fn is_metadata_attribute(attr: &Attribute) -> bool {
     attr.path()
         .segments
@@ -1789,6 +1893,56 @@ impl Parse for MetadataSpec {
         let value = input.parse::<Expr>()?;
         parse_optional_comma(input)?;
         Ok(Self { key, value })
+    }
+}
+
+#[derive(Default)]
+struct ControllerPipelineAttrs {
+    specs: Vec<PipelineSpec>,
+}
+
+impl ControllerPipelineAttrs {
+    fn tokens(&self) -> Vec<proc_macro2::TokenStream> {
+        self.specs.iter().map(PipelineSpec::token).collect()
+    }
+}
+
+#[derive(Clone)]
+struct PipelineSpec {
+    kind: PipelineAttrKind,
+    expr: Expr,
+}
+
+impl PipelineSpec {
+    fn token(&self) -> proc_macro2::TokenStream {
+        let expr = &self.expr;
+        match self.kind {
+            PipelineAttrKind::Guard => quote!(with_guard(#expr)),
+            PipelineAttrKind::Interceptor => quote!(with_interceptor(#expr)),
+            PipelineAttrKind::Filter => quote!(with_filter(#expr)),
+            PipelineAttrKind::Pipe => quote!(with_pipe(#expr)),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum PipelineAttrKind {
+    Guard,
+    Interceptor,
+    Filter,
+    Pipe,
+}
+
+impl PipelineAttrKind {
+    fn from_attribute(attr: &Attribute) -> Option<Self> {
+        let ident = attr.path().segments.last()?.ident.to_string();
+        match ident.as_str() {
+            "use_guard" => Some(Self::Guard),
+            "use_interceptor" => Some(Self::Interceptor),
+            "use_filter" => Some(Self::Filter),
+            "use_pipe" => Some(Self::Pipe),
+            _ => None,
+        }
     }
 }
 
@@ -2338,6 +2492,17 @@ fn websocket_attribute_outside_gateway(name: &str, item: TokenStream) -> TokenSt
 }
 
 fn validation_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
+    let item = proc_macro2::TokenStream::from(item);
+    let message =
+        format!("#[{name}] must be used inside an impl block annotated with #[controller]");
+    quote! {
+        compile_error!(#message);
+        #item
+    }
+    .into()
+}
+
+fn pipeline_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
     let item = proc_macro2::TokenStream::from(item);
     let message =
         format!("#[{name}] must be used inside an impl block annotated with #[controller]");
