@@ -23,6 +23,7 @@ services and expresses them in explicit, idiomatic Rust:
 - framework-neutral route definitions and requests
 - global, controller-level, and route-level pipes, guards, interceptors, and
   exception filters
+- protocol-neutral execution context for shared guards and observers
 - typed JSON DTO helpers for controller inputs and responses
 - replaceable HTTP adapters
 - a single application builder
@@ -1408,6 +1409,55 @@ let route = RouteDefinition::get("/admin", |_| async {
         .unwrap_or_default();
     Ok(roles.iter().any(|role| role == "admin"))
 });
+```
+
+`ExecutionContext` is protocol-neutral. HTTP guards receive it directly, and
+WebSocket gateways or microservice message patterns can reuse the same guard
+through `with_execution_guard(...)` or `use_global_execution_guard(...)`. Use
+`ExecutionInterceptor` when the hook only needs before/after observation and
+should work across HTTP, WebSocket, and transport handlers:
+
+```rust
+use a3s_boot::{
+    BootResponse, BoxFuture, ExecutionContext, ExecutionProtocol, Guard,
+    MessagePatternDefinition, Result, RouteDefinition, TransportMessage,
+    TransportReply, WebSocketGatewayDefinition, WebSocketMessage,
+};
+
+#[derive(Clone)]
+struct ProtocolGuard;
+
+impl Guard for ProtocolGuard {
+    fn can_activate(&self, context: ExecutionContext) -> BoxFuture<'static, Result<bool>> {
+        Box::pin(async move {
+            Ok(matches!(
+                context.protocol(),
+                ExecutionProtocol::Http
+                    | ExecutionProtocol::WebSocket
+                    | ExecutionProtocol::Transport
+            ))
+        })
+    }
+}
+
+let guard = ProtocolGuard;
+
+let route = RouteDefinition::get("/cats", |_| async {
+    Ok(BootResponse::text("cats"))
+})?
+.with_guard(guard.clone());
+
+let gateway = WebSocketGatewayDefinition::new("/cats/ws")?
+    .with_execution_guard(guard.clone())
+    .subscribe("ping", |_| async {
+        Ok(WebSocketMessage::text("pong", "ok"))
+    })?;
+
+let pattern = MessagePatternDefinition::request(
+    "cat.find",
+    |message: TransportMessage| async move { Ok(TransportReply::new(message.data)) },
+)?
+.with_execution_guard(guard);
 ```
 
 The macro form mirrors Nest's `@SetMetadata()` usage:

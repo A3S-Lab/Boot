@@ -1,11 +1,15 @@
 use crate::routing::path::{
     join_paths, match_path_params, match_path_shape, route_shape_key, validate_route_path,
 };
-use crate::{BootError, BootRequest, BoxFuture, HttpMethod, Result};
+use crate::{
+    BootError, BootRequest, BoxFuture, ExecutionContext, ExecutionInterceptor, Guard, HttpMethod,
+    Result,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::ops::Deref;
 use std::sync::Arc;
 
 /// Adapter-neutral WebSocket message used by gateways and adapters.
@@ -77,16 +81,43 @@ pub struct WebSocketContext {
     pub gateway_path: String,
     pub event: String,
     pub module_name: Option<String>,
+    execution_context: ExecutionContext,
 }
 
 impl WebSocketContext {
     fn new(gateway: &WebSocketGatewayDefinition, request: BootRequest, event: &str) -> Self {
+        let gateway_path = gateway.path.clone();
+        let event = event.to_string();
+        let module_name = gateway.module_name.clone();
+        let execution_context = ExecutionContext::websocket(
+            request.clone(),
+            gateway_path.clone(),
+            event.clone(),
+            module_name.clone(),
+        );
         Self {
             request,
-            gateway_path: gateway.path.clone(),
-            event: event.to_string(),
-            module_name: gateway.module_name.clone(),
+            gateway_path,
+            event,
+            module_name,
+            execution_context,
         }
+    }
+
+    pub fn execution_context(&self) -> &ExecutionContext {
+        &self.execution_context
+    }
+
+    pub fn into_execution_context(self) -> ExecutionContext {
+        self.execution_context
+    }
+}
+
+impl Deref for WebSocketContext {
+    type Target = ExecutionContext;
+
+    fn deref(&self) -> &Self::Target {
+        self.execution_context()
     }
 }
 
@@ -120,6 +151,19 @@ where
     }
 }
 
+struct ExecutionWebSocketGuard<G> {
+    inner: G,
+}
+
+impl<G> WebSocketGuard for ExecutionWebSocketGuard<G>
+where
+    G: Guard,
+{
+    fn can_activate(&self, context: WebSocketContext) -> BoxFuture<'static, Result<bool>> {
+        self.inner.can_activate(context.into_execution_context())
+    }
+}
+
 /// Around-handler hook for WebSocket gateway messages.
 pub trait WebSocketInterceptor: Send + Sync + 'static {
     fn before(&self, _context: WebSocketContext) -> BoxFuture<'static, Result<()>> {
@@ -132,6 +176,31 @@ pub trait WebSocketInterceptor: Send + Sync + 'static {
         reply: Option<WebSocketMessage>,
     ) -> BoxFuture<'static, Result<Option<WebSocketMessage>>> {
         Box::pin(async move { Ok(reply) })
+    }
+}
+
+struct ExecutionWebSocketInterceptor<I> {
+    inner: I,
+}
+
+impl<I> WebSocketInterceptor for ExecutionWebSocketInterceptor<I>
+where
+    I: ExecutionInterceptor,
+{
+    fn before(&self, context: WebSocketContext) -> BoxFuture<'static, Result<()>> {
+        self.inner.before(context.into_execution_context())
+    }
+
+    fn after(
+        &self,
+        context: WebSocketContext,
+        reply: Option<WebSocketMessage>,
+    ) -> BoxFuture<'static, Result<Option<WebSocketMessage>>> {
+        let future = self.inner.after(context.into_execution_context());
+        Box::pin(async move {
+            future.await?;
+            Ok(reply)
+        })
     }
 }
 
@@ -245,11 +314,41 @@ impl WebSocketGatewayDefinition {
         self
     }
 
+    pub fn with_execution_guard<G>(mut self, guard: G) -> Self
+    where
+        G: Guard,
+    {
+        self.guards
+            .push(Arc::new(ExecutionWebSocketGuard { inner: guard }));
+        self
+    }
+
+    pub(crate) fn with_execution_pipeline_prefix(
+        mut self,
+        guards: &[Arc<dyn Guard>],
+        interceptors: &[Arc<dyn ExecutionInterceptor>],
+    ) -> Self {
+        self.guards = prepend_execution_guards(guards, self.guards);
+        self.interceptors = prepend_execution_interceptors(interceptors, self.interceptors);
+        self
+    }
+
     pub fn with_interceptor<I>(mut self, interceptor: I) -> Self
     where
         I: WebSocketInterceptor,
     {
         self.interceptors.push(Arc::new(interceptor));
+        self
+    }
+
+    pub fn with_execution_interceptor<I>(mut self, interceptor: I) -> Self
+    where
+        I: ExecutionInterceptor,
+    {
+        self.interceptors
+            .push(Arc::new(ExecutionWebSocketInterceptor {
+                inner: interceptor,
+            }));
         self
     }
 
@@ -291,6 +390,35 @@ impl WebSocketGatewayDefinition {
         self.module_name = Some(module_name.to_string());
         self
     }
+}
+
+fn prepend_execution_guards(
+    prefix: &[Arc<dyn Guard>],
+    values: Vec<Arc<dyn WebSocketGuard>>,
+) -> Vec<Arc<dyn WebSocketGuard>> {
+    let mut merged = prefix
+        .iter()
+        .cloned()
+        .map(|guard| Arc::new(ExecutionWebSocketGuard { inner: guard }) as Arc<dyn WebSocketGuard>)
+        .collect::<Vec<_>>();
+    merged.extend(values);
+    merged
+}
+
+fn prepend_execution_interceptors(
+    prefix: &[Arc<dyn ExecutionInterceptor>],
+    values: Vec<Arc<dyn WebSocketInterceptor>>,
+) -> Vec<Arc<dyn WebSocketInterceptor>> {
+    let mut merged = prefix
+        .iter()
+        .cloned()
+        .map(|interceptor| {
+            Arc::new(ExecutionWebSocketInterceptor { inner: interceptor })
+                as Arc<dyn WebSocketInterceptor>
+        })
+        .collect::<Vec<_>>();
+    merged.extend(values);
+    merged
 }
 
 /// Adapter-neutral WebSocket connection.

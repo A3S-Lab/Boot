@@ -62,8 +62,9 @@ Implemented today:
   routes, automatic path-parameter documentation, and optional
   `serve_openapi(...)` JSON route registration.
 - Custom route/controller metadata through builders and `#[metadata]`,
-  route-level override semantics, `ExecutionContext` access for guards and
-  interceptors, and typed `Reflector` lookup from discovery snapshots.
+  route-level override semantics, protocol-neutral `ExecutionContext` access
+  for HTTP, WebSocket, and transport guards/interceptors, and typed `Reflector`
+  lookup from discovery snapshots.
 - DTO validation with `Validate`, body/query/params validation hooks, global,
   controller-level, route-level validation switches, and `#[validate]` /
   `#[skip_validation]` macros.

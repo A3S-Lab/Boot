@@ -1,5 +1,6 @@
 use a3s_boot::{
-    BootApplication, BootError, BoxFuture, InProcessTransport, MessagePatternDefinition,
+    BootApplication, BootError, BoxFuture, ExecutionContext, ExecutionInterceptor,
+    ExecutionProtocol, ExecutionTransportKind, Guard, InProcessTransport, MessagePatternDefinition,
     MessageTransport, Module, ModuleRef, ProviderDefinition, Result, TransportContext,
     TransportInterceptor, TransportMessage, TransportReply, Validate,
 };
@@ -248,6 +249,38 @@ async fn transport_pipeline_runs_in_order() {
 }
 
 #[tokio::test]
+async fn transport_patterns_can_use_shared_execution_hooks() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let pattern =
+        MessagePatternDefinition::request("ping", |message: TransportMessage| async move {
+            Ok(TransportReply::new(message.data))
+        })
+        .unwrap()
+        .with_execution_guard(SharedTransportExecutionPolicy {
+            log: Arc::clone(&log),
+        })
+        .with_execution_interceptor(SharedTransportExecutionPolicy {
+            log: Arc::clone(&log),
+        });
+
+    let reply = pattern
+        .dispatch(TransportMessage::new("ping", json!({ "ok": true })))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(reply.data(), &json!({ "ok": true }));
+    assert_eq!(
+        log.lock().unwrap().as_slice(),
+        [
+            "guard:transport:ping:request-response",
+            "before:transport:ping",
+            "after:transport:ping"
+        ]
+    );
+}
+
+#[tokio::test]
 async fn in_process_transport_builds_a_message_client() {
     let app = BootApplication::builder()
         .message_pattern(
@@ -301,6 +334,56 @@ impl Validate for CreateTransportCat {
             return Err(BootError::BadRequest("name is required".to_string()));
         }
         Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct SharedTransportExecutionPolicy {
+    log: Arc<Mutex<Vec<String>>>,
+}
+
+impl Guard for SharedTransportExecutionPolicy {
+    fn can_activate(&self, context: ExecutionContext) -> BoxFuture<'static, Result<bool>> {
+        let log = Arc::clone(&self.log);
+        Box::pin(async move {
+            let transport = context.transport_context().expect("transport context");
+            log.lock().unwrap().push(format!(
+                "guard:{}:{}:{}",
+                context.protocol().as_str(),
+                transport.pattern.as_str(),
+                transport.kind.as_str()
+            ));
+            Ok(context.protocol() == ExecutionProtocol::Transport
+                && transport.kind == ExecutionTransportKind::RequestResponse)
+        })
+    }
+}
+
+impl ExecutionInterceptor for SharedTransportExecutionPolicy {
+    fn before(&self, context: ExecutionContext) -> BoxFuture<'static, Result<()>> {
+        let log = Arc::clone(&self.log);
+        Box::pin(async move {
+            let transport = context.transport_context().expect("transport context");
+            log.lock().unwrap().push(format!(
+                "before:{}:{}",
+                context.protocol().as_str(),
+                transport.pattern.as_str()
+            ));
+            Ok(())
+        })
+    }
+
+    fn after(&self, context: ExecutionContext) -> BoxFuture<'static, Result<()>> {
+        let log = Arc::clone(&self.log);
+        Box::pin(async move {
+            let transport = context.transport_context().expect("transport context");
+            log.lock().unwrap().push(format!(
+                "after:{}:{}",
+                context.protocol().as_str(),
+                transport.pattern.as_str()
+            ));
+            Ok(())
+        })
     }
 }
 

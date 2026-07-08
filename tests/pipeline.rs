@@ -1,7 +1,9 @@
 use a3s_boot::{
     BootApplication, BootError, BootRequest, BootResponse, BoxFuture, ControllerDefinition,
-    ExecutionContext, HttpMethod, Interceptor, Middleware, MiddlewareOutcome, Module, ModuleRef,
-    Result, RouteDefinition,
+    ExecutionContext, ExecutionInterceptor, Guard, HttpMethod, Interceptor,
+    MessagePatternDefinition, Middleware, MiddlewareOutcome, Module, ModuleRef, Result,
+    RouteDefinition, TransportMessage, TransportReply, WebSocketGatewayDefinition,
+    WebSocketMessage,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -100,6 +102,97 @@ async fn middleware_can_short_circuit_before_guards() {
     assert_eq!(response.status(), 202);
     assert_eq!(response.body, b"middleware");
     assert_eq!(*guard_calls.lock().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn route_can_use_protocol_neutral_execution_interceptor() {
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let route = RouteDefinition::get("/", |_| async { Ok(BootResponse::text("ok")) })
+        .unwrap()
+        .with_execution_interceptor(SharedExecutionInterceptor {
+            log: Arc::clone(&log),
+        });
+
+    let response = route
+        .call(BootRequest::new(HttpMethod::Get, "/"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.body, b"ok");
+    assert_eq!(
+        log.lock().unwrap().as_slice(),
+        ["before:http:/", "after:http:/"]
+    );
+}
+
+#[tokio::test]
+async fn global_execution_interceptors_apply_to_http_websocket_and_transport() -> Result<()> {
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let guard_log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let app = BootApplication::builder()
+        .use_global_execution_guard(ProtocolLoggingGuard {
+            log: Arc::clone(&guard_log),
+        })
+        .use_global_execution_interceptor(SharedExecutionInterceptor {
+            log: Arc::clone(&log),
+        })
+        .route(RouteDefinition::get("/http", |_| async {
+            Ok(BootResponse::text("ok"))
+        })?)
+        .gateway(
+            WebSocketGatewayDefinition::new("/ws")?.subscribe("ping", |_| async {
+                Ok(WebSocketMessage::text("pong", "ok"))
+            })?,
+        )
+        .message_pattern(MessagePatternDefinition::request(
+            "transport",
+            |message: TransportMessage| async move { Ok(TransportReply::new(message.data)) },
+        )?)
+        .build()?;
+
+    let response = app.call(BootRequest::new(HttpMethod::Get, "/http")).await?;
+    assert_eq!(response.body, b"ok");
+
+    let reply = app
+        .gateway_for("/ws")
+        .unwrap()
+        .dispatch(
+            BootRequest::new(HttpMethod::Get, "/ws"),
+            WebSocketMessage::text("ping", "payload"),
+        )
+        .await?
+        .unwrap();
+    assert_eq!(reply, WebSocketMessage::text("pong", "ok"));
+
+    let reply = app
+        .dispatch_message(a3s_boot::TransportMessage::new(
+            "transport",
+            json!({ "ok": true }),
+        ))
+        .await?
+        .unwrap();
+    assert_eq!(reply.data(), &json!({ "ok": true }));
+
+    assert_eq!(
+        log.lock().unwrap().as_slice(),
+        [
+            "before:http:/http",
+            "after:http:/http",
+            "before:websocket:/ws",
+            "after:websocket:/ws",
+            "before:transport:transport",
+            "after:transport:transport"
+        ]
+    );
+    assert_eq!(
+        guard_log.lock().unwrap().as_slice(),
+        [
+            "guard:http:/http",
+            "guard:websocket:/ws",
+            "guard:transport:transport"
+        ]
+    );
+    Ok(())
 }
 
 #[tokio::test]
@@ -261,6 +354,56 @@ impl Interceptor for TraceInterceptor {
         Box::pin(async move {
             log.lock().unwrap().push(format!("after:{name}"));
             Ok(response)
+        })
+    }
+}
+
+#[derive(Clone)]
+struct SharedExecutionInterceptor {
+    log: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+#[derive(Clone)]
+struct ProtocolLoggingGuard {
+    log: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl Guard for ProtocolLoggingGuard {
+    fn can_activate(&self, context: ExecutionContext) -> BoxFuture<'static, Result<bool>> {
+        let log = Arc::clone(&self.log);
+        Box::pin(async move {
+            log.lock().unwrap().push(format!(
+                "guard:{}:{}",
+                context.protocol().as_str(),
+                context.route_path
+            ));
+            Ok(true)
+        })
+    }
+}
+
+impl ExecutionInterceptor for SharedExecutionInterceptor {
+    fn before(&self, context: ExecutionContext) -> BoxFuture<'static, Result<()>> {
+        let log = Arc::clone(&self.log);
+        Box::pin(async move {
+            log.lock().unwrap().push(format!(
+                "before:{}:{}",
+                context.protocol().as_str(),
+                context.route_path
+            ));
+            Ok(())
+        })
+    }
+
+    fn after(&self, context: ExecutionContext) -> BoxFuture<'static, Result<()>> {
+        let log = Arc::clone(&self.log);
+        Box::pin(async move {
+            log.lock().unwrap().push(format!(
+                "after:{}:{}",
+                context.protocol().as_str(),
+                context.route_path
+            ));
+            Ok(())
         })
     }
 }

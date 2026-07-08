@@ -1,4 +1,7 @@
-use super::{ExceptionFilter, Guard, Interceptor, Middleware, Pipe};
+use super::{
+    ExceptionFilter, ExecutionInterceptor, ExecutionInterceptorAdapter, Guard, Interceptor,
+    Middleware, Pipe,
+};
 use std::sync::Arc;
 
 #[derive(Clone, Default)]
@@ -37,11 +40,28 @@ impl PipelineComponents {
         self.guards.push(Arc::new(guard));
     }
 
+    pub fn push_guard_arc(&mut self, guard: Arc<dyn Guard>) {
+        self.guards.push(guard);
+    }
+
     pub fn push_interceptor<I>(&mut self, interceptor: I)
     where
         I: Interceptor,
     {
         self.interceptors.push(Arc::new(interceptor));
+    }
+
+    pub fn push_execution_interceptor<I>(&mut self, interceptor: I)
+    where
+        I: ExecutionInterceptor,
+    {
+        self.interceptors
+            .push(Arc::new(ExecutionInterceptorAdapter::new(interceptor)));
+    }
+
+    pub fn push_execution_interceptor_arc(&mut self, interceptor: Arc<dyn ExecutionInterceptor>) {
+        self.interceptors
+            .push(Arc::new(ExecutionInterceptorAdapter::new(interceptor)));
     }
 
     pub fn push_filter<F>(&mut self, filter: F)

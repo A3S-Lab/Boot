@@ -1,7 +1,7 @@
 use a3s_boot::{
-    BootApplication, BootError, BootRequest, BoxFuture, HttpMethod, Module, ModuleRef,
-    ProviderDefinition, Result, WebSocketContext, WebSocketGatewayDefinition, WebSocketInterceptor,
-    WebSocketMessage,
+    BootApplication, BootError, BootRequest, BoxFuture, ExecutionContext, ExecutionProtocol, Guard,
+    HttpMethod, Module, ModuleRef, ProviderDefinition, Result, WebSocketContext,
+    WebSocketGatewayDefinition, WebSocketInterceptor, WebSocketMessage,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -36,6 +36,27 @@ impl Module for WsModule {
                 async move { Ok(WebSocketMessage::text("hello.reply", service.greeting())) }
             },
         )?])
+    }
+}
+
+#[derive(Clone)]
+struct SharedExecutionGuard {
+    log: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl Guard for SharedExecutionGuard {
+    fn can_activate(&self, context: ExecutionContext) -> BoxFuture<'static, Result<bool>> {
+        let log = Arc::clone(&self.log);
+        Box::pin(async move {
+            let websocket = context.websocket_context().expect("websocket context");
+            log.lock().unwrap().push(format!(
+                "{}:{}:{}",
+                context.protocol().as_str(),
+                websocket.gateway_path.as_str(),
+                websocket.event.as_str()
+            ));
+            Ok(context.protocol() == ExecutionProtocol::WebSocket)
+        })
     }
 }
 
@@ -173,6 +194,32 @@ async fn websocket_gateway_pipeline_runs_in_order() {
             "after:gateway"
         ]
     );
+}
+
+#[tokio::test]
+async fn websocket_gateway_can_use_shared_execution_guard() {
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let gateway = WebSocketGatewayDefinition::new("/events")
+        .unwrap()
+        .with_execution_guard(SharedExecutionGuard {
+            log: Arc::clone(&log),
+        })
+        .subscribe("ping", |_| async {
+            Ok(WebSocketMessage::text("pong", "ok"))
+        })
+        .unwrap();
+
+    let reply = gateway
+        .dispatch(
+            BootRequest::new(HttpMethod::Get, "/events"),
+            WebSocketMessage::new("ping", json!(null)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(reply, WebSocketMessage::text("pong", "ok"));
+    assert_eq!(log.lock().unwrap().as_slice(), ["websocket:/events:ping"]);
 }
 
 #[tokio::test]

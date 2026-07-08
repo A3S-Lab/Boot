@@ -105,7 +105,9 @@ pub use openapi::{
     OpenApiSecurityRequirement, OpenApiTag,
 };
 pub use pipeline::{
-    ExceptionFilter, ExecutionContext, Guard, Interceptor, Middleware, MiddlewareOutcome, Pipe,
+    ExceptionFilter, ExecutionContext, ExecutionInterceptor, ExecutionProtocol,
+    ExecutionTransportKind, Guard, Interceptor, Middleware, MiddlewareOutcome, Pipe,
+    TransportExecutionContext, WebSocketExecutionContext,
 };
 pub use provider::{
     ModuleRef, ProviderDefinition, ProviderOnApplicationBootstrap, ProviderOnApplicationShutdown,

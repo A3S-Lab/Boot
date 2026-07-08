@@ -7,9 +7,13 @@ mod middleware;
 mod pipe;
 
 pub(crate) use components::PipelineComponents;
-pub use context::ExecutionContext;
+pub use context::{
+    ExecutionContext, ExecutionProtocol, ExecutionTransportKind, TransportExecutionContext,
+    WebSocketExecutionContext,
+};
 pub use filter::ExceptionFilter;
 pub use guard::Guard;
-pub use interceptor::Interceptor;
+pub(crate) use interceptor::ExecutionInterceptorAdapter;
+pub use interceptor::{ExecutionInterceptor, Interceptor};
 pub use middleware::{Middleware, MiddlewareOutcome};
 pub use pipe::Pipe;

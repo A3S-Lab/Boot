@@ -1,5 +1,6 @@
 use super::ExecutionContext;
 use crate::{BoxFuture, Result};
+use std::sync::Arc;
 
 /// Decides whether a route handler can run.
 pub trait Guard: Send + Sync + 'static {
@@ -13,5 +14,11 @@ where
 {
     fn can_activate(&self, context: ExecutionContext) -> BoxFuture<'static, Result<bool>> {
         Box::pin(self(context))
+    }
+}
+
+impl Guard for Arc<dyn Guard> {
+    fn can_activate(&self, context: ExecutionContext) -> BoxFuture<'static, Result<bool>> {
+        self.as_ref().can_activate(context)
     }
 }

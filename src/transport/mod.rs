@@ -1,8 +1,12 @@
-use crate::{validate_value, BootError, BoxFuture, Result, Validate};
+use crate::{
+    validate_value, BootError, BoxFuture, ExecutionContext, ExecutionInterceptor,
+    ExecutionTransportKind, Guard, Result, Validate,
+};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::future::Future;
+use std::ops::Deref;
 use std::sync::Arc;
 
 /// Adapter-neutral microservice transport message.
@@ -153,14 +157,49 @@ pub struct TransportContext {
     pub pattern: String,
     pub kind: MessagePatternKind,
     pub module_name: Option<String>,
+    execution_context: ExecutionContext,
 }
 
 impl TransportContext {
     fn new(definition: &MessagePatternDefinition, pattern: &str) -> Self {
+        let pattern = pattern.to_string();
+        let kind = definition.kind;
+        let module_name = definition.module_name.clone();
+        let execution_context = ExecutionContext::transport(
+            pattern.clone(),
+            ExecutionTransportKind::from(kind),
+            module_name.clone(),
+        );
         Self {
-            pattern: pattern.to_string(),
-            kind: definition.kind,
-            module_name: definition.module_name.clone(),
+            pattern,
+            kind,
+            module_name,
+            execution_context,
+        }
+    }
+
+    pub fn execution_context(&self) -> &ExecutionContext {
+        &self.execution_context
+    }
+
+    pub fn into_execution_context(self) -> ExecutionContext {
+        self.execution_context
+    }
+}
+
+impl Deref for TransportContext {
+    type Target = ExecutionContext;
+
+    fn deref(&self) -> &Self::Target {
+        self.execution_context()
+    }
+}
+
+impl From<MessagePatternKind> for ExecutionTransportKind {
+    fn from(kind: MessagePatternKind) -> Self {
+        match kind {
+            MessagePatternKind::RequestResponse => Self::RequestResponse,
+            MessagePatternKind::Event => Self::Event,
         }
     }
 }
@@ -195,6 +234,19 @@ where
     }
 }
 
+struct ExecutionTransportGuard<G> {
+    inner: G,
+}
+
+impl<G> TransportGuard for ExecutionTransportGuard<G>
+where
+    G: Guard,
+{
+    fn can_activate(&self, context: TransportContext) -> BoxFuture<'static, Result<bool>> {
+        self.inner.can_activate(context.into_execution_context())
+    }
+}
+
 /// Around-handler hook for transport message patterns.
 pub trait TransportInterceptor: Send + Sync + 'static {
     fn before(&self, _context: TransportContext) -> BoxFuture<'static, Result<()>> {
@@ -207,6 +259,31 @@ pub trait TransportInterceptor: Send + Sync + 'static {
         reply: Option<TransportReply>,
     ) -> BoxFuture<'static, Result<Option<TransportReply>>> {
         Box::pin(async move { Ok(reply) })
+    }
+}
+
+struct ExecutionTransportInterceptor<I> {
+    inner: I,
+}
+
+impl<I> TransportInterceptor for ExecutionTransportInterceptor<I>
+where
+    I: ExecutionInterceptor,
+{
+    fn before(&self, context: TransportContext) -> BoxFuture<'static, Result<()>> {
+        self.inner.before(context.into_execution_context())
+    }
+
+    fn after(
+        &self,
+        context: TransportContext,
+        reply: Option<TransportReply>,
+    ) -> BoxFuture<'static, Result<Option<TransportReply>>> {
+        let future = self.inner.after(context.into_execution_context());
+        Box::pin(async move {
+            future.await?;
+            Ok(reply)
+        })
     }
 }
 
@@ -379,11 +456,41 @@ impl MessagePatternDefinition {
         self
     }
 
+    pub fn with_execution_guard<G>(mut self, guard: G) -> Self
+    where
+        G: Guard,
+    {
+        self.guards
+            .push(Arc::new(ExecutionTransportGuard { inner: guard }));
+        self
+    }
+
+    pub(crate) fn with_execution_pipeline_prefix(
+        mut self,
+        guards: &[Arc<dyn Guard>],
+        interceptors: &[Arc<dyn ExecutionInterceptor>],
+    ) -> Self {
+        self.guards = prepend_execution_guards(guards, self.guards);
+        self.interceptors = prepend_execution_interceptors(interceptors, self.interceptors);
+        self
+    }
+
     pub fn with_interceptor<I>(mut self, interceptor: I) -> Self
     where
         I: TransportInterceptor,
     {
         self.interceptors.push(Arc::new(interceptor));
+        self
+    }
+
+    pub fn with_execution_interceptor<I>(mut self, interceptor: I) -> Self
+    where
+        I: ExecutionInterceptor,
+    {
+        self.interceptors
+            .push(Arc::new(ExecutionTransportInterceptor {
+                inner: interceptor,
+            }));
         self
     }
 
@@ -443,6 +550,35 @@ impl MessagePatternDefinition {
         self.module_name = Some(module_name.to_string());
         self
     }
+}
+
+fn prepend_execution_guards(
+    prefix: &[Arc<dyn Guard>],
+    values: Vec<Arc<dyn TransportGuard>>,
+) -> Vec<Arc<dyn TransportGuard>> {
+    let mut merged = prefix
+        .iter()
+        .cloned()
+        .map(|guard| Arc::new(ExecutionTransportGuard { inner: guard }) as Arc<dyn TransportGuard>)
+        .collect::<Vec<_>>();
+    merged.extend(values);
+    merged
+}
+
+fn prepend_execution_interceptors(
+    prefix: &[Arc<dyn ExecutionInterceptor>],
+    values: Vec<Arc<dyn TransportInterceptor>>,
+) -> Vec<Arc<dyn TransportInterceptor>> {
+    let mut merged = prefix
+        .iter()
+        .cloned()
+        .map(|interceptor| {
+            Arc::new(ExecutionTransportInterceptor { inner: interceptor })
+                as Arc<dyn TransportInterceptor>
+        })
+        .collect::<Vec<_>>();
+    merged.extend(values);
+    merged
 }
 
 /// Adapter trait for message transports such as in-process, Redis, NATS, or Kafka.

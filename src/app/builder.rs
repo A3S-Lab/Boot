@@ -2,10 +2,10 @@ use super::application::BootApplication;
 use super::registration::{ModuleRegistrationSink, ModuleRegistry};
 use crate::pipeline::PipelineComponents;
 use crate::{
-    ApiVersioning, BootError, BootResponse, ExceptionFilter, Guard, Interceptor,
-    MessagePatternDefinition, Middleware, Module, ModuleRef, OpenApiDocument, OpenApiInfo, Pipe,
-    ProviderDefinition, ProviderToken, Result, RouteDefinition, SerializationInterceptor,
-    WebSocketGatewayDefinition,
+    ApiVersioning, BootError, BootResponse, ExceptionFilter, ExecutionInterceptor, Guard,
+    Interceptor, MessagePatternDefinition, Middleware, Module, ModuleRef, OpenApiDocument,
+    OpenApiInfo, Pipe, ProviderDefinition, ProviderToken, Result, RouteDefinition,
+    SerializationInterceptor, WebSocketGatewayDefinition,
 };
 #[cfg(feature = "compression")]
 use crate::{CompressionInterceptor, CompressionOptions};
@@ -28,6 +28,8 @@ pub struct BootApplicationBuilder {
     gateways: Vec<WebSocketGatewayDefinition>,
     message_patterns: Vec<MessagePatternDefinition>,
     global_pipeline: PipelineComponents,
+    global_execution_guards: Vec<Arc<dyn Guard>>,
+    global_execution_interceptors: Vec<Arc<dyn ExecutionInterceptor>>,
     global_prefix: Option<String>,
     api_versioning: Option<ApiVersioning>,
     openapi_routes: Vec<(String, OpenApiInfo)>,
@@ -119,12 +121,35 @@ impl BootApplicationBuilder {
         self
     }
 
+    /// Add an application-wide protocol-neutral guard.
+    pub fn use_global_execution_guard<G>(mut self, guard: G) -> Self
+    where
+        G: Guard,
+    {
+        let guard: Arc<dyn Guard> = Arc::new(guard);
+        self.global_pipeline.push_guard_arc(Arc::clone(&guard));
+        self.global_execution_guards.push(guard);
+        self
+    }
+
     /// Add an application-wide interceptor, similar to Nest's global interceptors.
     pub fn use_global_interceptor<I>(mut self, interceptor: I) -> Self
     where
         I: Interceptor,
     {
         self.global_pipeline.push_interceptor(interceptor);
+        self
+    }
+
+    /// Add an application-wide protocol-neutral interceptor.
+    pub fn use_global_execution_interceptor<I>(mut self, interceptor: I) -> Self
+    where
+        I: ExecutionInterceptor,
+    {
+        let interceptor: Arc<dyn ExecutionInterceptor> = Arc::new(interceptor);
+        self.global_pipeline
+            .push_execution_interceptor_arc(Arc::clone(&interceptor));
+        self.global_execution_interceptors.push(interceptor);
         self
     }
 
@@ -258,7 +283,24 @@ impl BootApplicationBuilder {
         }
 
         let mut routes = apply_global_prefix(routes, self.global_prefix.as_deref())?;
-        let gateways = apply_global_gateway_prefix(gateways, self.global_prefix.as_deref())?;
+        let gateways = apply_global_gateway_prefix(gateways, self.global_prefix.as_deref())?
+            .into_iter()
+            .map(|gateway| {
+                gateway.with_execution_pipeline_prefix(
+                    &self.global_execution_guards,
+                    &self.global_execution_interceptors,
+                )
+            })
+            .collect::<Vec<_>>();
+        let message_patterns = message_patterns
+            .into_iter()
+            .map(|pattern| {
+                pattern.with_execution_pipeline_prefix(
+                    &self.global_execution_guards,
+                    &self.global_execution_interceptors,
+                )
+            })
+            .collect::<Vec<_>>();
         let documented_routes = routes.clone();
 
         for (path, info) in self.openapi_routes {

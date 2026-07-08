@@ -1,8 +1,8 @@
 use super::definition::RouteDefinition;
-use crate::pipeline::PipelineComponents;
+use crate::pipeline::{ExecutionInterceptorAdapter, PipelineComponents};
 use crate::{
-    body_validator, params_validator, query_validator, ExceptionFilter, Guard, Interceptor,
-    Middleware, Pipe, Validate,
+    body_validator, params_validator, query_validator, ExceptionFilter, ExecutionInterceptor,
+    Guard, Interceptor, Middleware, Pipe, Validate,
 };
 use serde::de::DeserializeOwned;
 use std::sync::Arc;
@@ -49,6 +49,15 @@ impl RouteDefinition {
         I: Interceptor,
     {
         self.interceptors.push(Arc::new(interceptor));
+        self
+    }
+
+    pub fn with_execution_interceptor<I>(mut self, interceptor: I) -> Self
+    where
+        I: ExecutionInterceptor,
+    {
+        self.interceptors
+            .push(Arc::new(ExecutionInterceptorAdapter::new(interceptor)));
         self
     }
 

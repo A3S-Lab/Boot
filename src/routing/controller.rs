@@ -4,8 +4,8 @@ use super::path::normalize_prefix;
 use super::route::RouteDefinition;
 use crate::pipeline::PipelineComponents;
 use crate::{
-    BootRequest, ExceptionFilter, Guard, Interceptor, Middleware, ModuleRef, Pipe, Result,
-    RouteVersioning, SerializationOptions, SseEvent, Validate,
+    BootRequest, ExceptionFilter, ExecutionInterceptor, Guard, Interceptor, Middleware, ModuleRef,
+    Pipe, Result, RouteVersioning, SerializationOptions, SseEvent, Validate,
 };
 use futures_core::Stream;
 use serde::de::DeserializeOwned;
@@ -98,6 +98,14 @@ impl ControllerDefinition {
         I: Interceptor,
     {
         self.pipeline.push_interceptor(interceptor);
+        self
+    }
+
+    pub fn with_execution_interceptor<I>(mut self, interceptor: I) -> Self
+    where
+        I: ExecutionInterceptor,
+    {
+        self.pipeline.push_execution_interceptor(interceptor);
         self
     }
 
