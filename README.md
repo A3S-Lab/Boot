@@ -63,7 +63,8 @@ This repository contains the first framework slice:
   `#[use_guard(AuthGuard)]`, `#[use_interceptor(TraceInterceptor)]`,
   `#[use_filter(HttpErrorFilter)]`, and `#[use_pipe(ParsePipe)]`, and
   API versioning macros such as `#[version("1")]`, `#[versions("1", "2")]`,
-  and `#[version_neutral]`, plus
+  and `#[version_neutral]`, serialization macros such as
+  `#[serialize(exclude = ["password"], skip_null)]`, plus
   WebSocket macros such as
   `#[websocket_gateway]` and
   `#[subscribe_message]`, plus microservice macros such as
@@ -335,6 +336,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@Version("1")` | `#[version("1")]` below `#[controller]` or on a route method |
 | `@Version(["1", "2"])` | `#[versions("1", "2")]` below `#[controller]` or on a route method |
 | `VERSION_NEUTRAL` | `#[version_neutral]` below `#[controller]` or on a route method |
+| `@SerializeOptions(...)` | `#[serialize(include = ["id"], exclude = ["password"], skip_null)]` below `#[controller]` or on a route method |
 | `@HttpCode(202)` | `#[http_code(202)]` on a JSON route method |
 | `@Header("cache-control", "max-age=60")` | `#[header("cache-control", "max-age=60")]` on a route method |
 | `@Redirect("/new", 301)` | `#[redirect("/new", status = 301)]` on a route method |
@@ -2353,6 +2355,41 @@ fn users_controller() -> Result<ControllerDefinition> {
                 "password": "secret"
             }))
         })
+}
+```
+
+The macro form mirrors Nest's `@SerializeOptions()`. Use `include`, `exclude`,
+and `skip_null` on a controller impl or on an individual route:
+
+```rust
+use a3s_boot::{controller, get, Result};
+use serde_json::{json, Value};
+
+#[derive(Debug)]
+struct UsersController;
+
+#[controller("/users")]
+#[serialize(exclude = ["password"], skip_null)]
+impl UsersController {
+    #[get("/{id}")]
+    async fn user(&self) -> Result<Value> {
+        Ok(json!({
+            "id": "u1",
+            "email": "milo@example.com",
+            "password": "secret",
+            "nickname": null
+        }))
+    }
+
+    #[get("/{id}/public")]
+    #[serialize(include = ["id", "email"])]
+    async fn public_user(&self) -> Result<Value> {
+        Ok(json!({
+            "id": "u1",
+            "email": "milo@example.com",
+            "password": "secret"
+        }))
+    }
 }
 ```
 

@@ -45,6 +45,8 @@ Implemented today:
   `ControllerDefinition::with_host(...)` for Nest-style host-based controllers.
 - API versioning macros: `#[version]`, `#[versions]`, and
   `#[version_neutral]` at controller and route scope.
+- Serialization macros with `#[serialize(include = [...], exclude = [...],
+  skip_null)]` at controller and route scope.
 - Nest-style generic pipeline macros: `#[use_guard]`, `#[use_interceptor]`,
   `#[use_filter]`, and `#[use_pipe]` at controller and route scope.
 - JSON body and JSON response helpers.
@@ -529,7 +531,8 @@ Acceptance:
   overlaps; and expose Nest-style version macros. (Covered)
 - Serialization can shape JSON response objects and arrays through global
   interceptors plus route/controller metadata, leave non-JSON responses
-  unchanged, and keep content length valid after rewriting. (Covered)
+  unchanged, keep content length valid after rewriting, and expose Nest-style
+  serialization macros. (Covered)
 - Compression can gzip eligible responses when requested by `Accept-Encoding`,
   skip too-small, streaming, and already-encoded responses, set `Vary`, and keep
   content length valid after rewriting. (Covered)

@@ -54,9 +54,9 @@ pub use a3s_boot_macros::{
     bearer_auth, body, controller, delete, delete_json, event_pattern, get, get_json, head, header,
     headers, hide_from_openapi, host, host_param, http_code, injectable, ip, message_controller,
     message_pattern, metadata, operation, options, param, params, patch, patch_json, post,
-    post_json, put, put_json, query, redirect, request, request_body, response, skip_validation,
-    sse, subscribe_message, tag, use_filter, use_guard, use_interceptor, use_pipe, validate,
-    version, version_neutral, versions, websocket_gateway,
+    post_json, put, put_json, query, redirect, request, request_body, response, serialize,
+    skip_validation, sse, subscribe_message, tag, use_filter, use_guard, use_interceptor, use_pipe,
+    validate, version, version_neutral, versions, websocket_gateway,
 };
 #[cfg(feature = "axum")]
 pub use adapters::AxumAdapter;

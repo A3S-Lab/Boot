@@ -547,6 +547,46 @@ impl Module for MacroVersionModule {
     }
 }
 
+#[derive(Debug)]
+struct MacroSerializationController;
+
+#[controller("/macro-serialization")]
+#[serialize(exclude = ["password"], skip_null)]
+impl MacroSerializationController {
+    #[get("/user")]
+    async fn user(&self) -> Result<serde_json::Value> {
+        Ok(json!({
+            "id": "u1",
+            "email": "milo@example.com",
+            "password": "secret",
+            "nickname": null
+        }))
+    }
+
+    #[get("/public")]
+    #[serialize(include = ["id", "email"])]
+    async fn public_user(&self) -> Result<serde_json::Value> {
+        Ok(json!({
+            "id": "u1",
+            "email": "milo@example.com",
+            "password": "secret"
+        }))
+    }
+}
+
+#[derive(Debug)]
+struct MacroSerializationModule;
+
+impl Module for MacroSerializationModule {
+    fn name(&self) -> &'static str {
+        "macro-serialization"
+    }
+
+    fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
+        Ok(vec![Arc::new(MacroSerializationController).controller()?])
+    }
+}
+
 #[tokio::test]
 async fn macros_register_injectable_services_and_controller_routes() {
     let app = BootApplication::builder()
@@ -1047,6 +1087,45 @@ async fn macro_version_decorators_register_controller_and_route_versions() {
     assert_eq!(v2.body_json::<String>().unwrap(), "v2");
     assert_eq!(neutral.body_json::<String>().unwrap(), "ok");
     assert_eq!(multi.body_json::<String>().unwrap(), "multi");
+}
+
+#[tokio::test]
+async fn macro_serialize_decorators_register_controller_and_route_options() {
+    let app = BootApplication::builder()
+        .use_global_serialization()
+        .import(MacroSerializationModule)
+        .build()
+        .unwrap();
+
+    let user = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-serialization/user",
+        ))
+        .await
+        .unwrap();
+    let public = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-serialization/public",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        user.body_json::<serde_json::Value>().unwrap(),
+        json!({
+            "id": "u1",
+            "email": "milo@example.com"
+        })
+    );
+    assert_eq!(
+        public.body_json::<serde_json::Value>().unwrap(),
+        json!({
+            "id": "u1",
+            "email": "milo@example.com"
+        })
+    );
 }
 
 #[tokio::test]

@@ -220,6 +220,11 @@ pub fn version_neutral(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
+pub fn serialize(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    serialization_attribute_outside_controller("serialize", item)
+}
+
+#[proc_macro_attribute]
 pub fn tag(_attr: TokenStream, item: TokenStream) -> TokenStream {
     openapi_attribute_outside_controller("tag", item)
 }
@@ -359,6 +364,8 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
         take_controller_host_attrs(&clean_impl_attrs);
     let (clean_impl_attrs, controller_version, controller_version_errors) =
         take_controller_version_attrs(&clean_impl_attrs);
+    let (clean_impl_attrs, controller_serialization, controller_serialization_errors) =
+        take_controller_serialization_attrs(&clean_impl_attrs);
     item_impl.attrs = clean_impl_attrs;
     for error in controller_validation_errors {
         push_error(&mut errors, error);
@@ -378,11 +385,15 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
     for error in controller_version_errors {
         push_error(&mut errors, error);
     }
+    for error in controller_serialization_errors {
+        push_error(&mut errors, error);
+    }
     let controller_openapi = controller_openapi.tokens();
     let controller_metadata = controller_metadata.tokens();
     let controller_pipeline = controller_pipeline.tokens();
     let controller_host = controller_host.tokens();
     let controller_version = controller_version.tokens();
+    let controller_serialization = controller_serialization.tokens();
 
     for item in &mut item_impl.items {
         let ImplItem::Fn(method) = item else {
@@ -402,6 +413,8 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
             take_route_pipeline_attrs(&clean_attrs);
         let (clean_attrs, host_specs, host_errors) = take_route_host_attrs(&clean_attrs);
         let (clean_attrs, version_specs, version_errors) = take_route_version_attrs(&clean_attrs);
+        let (clean_attrs, serialization_specs, serialization_errors) =
+            take_route_serialization_attrs(&clean_attrs);
         method.attrs = clean_attrs;
         for error in route_errors {
             push_error(&mut errors, error);
@@ -428,6 +441,9 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
             push_error(&mut errors, error);
         }
         for error in version_errors {
+            push_error(&mut errors, error);
+        }
+        for error in serialization_errors {
             push_error(&mut errors, error);
         }
         if method_routes.is_empty() && !openapi_specs.is_empty() {
@@ -472,6 +488,15 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
                 syn::Error::new_spanned(
                     &method.sig.ident,
                     "version route attributes must be used on route methods",
+                ),
+            );
+        }
+        if method_routes.is_empty() && serialization_specs.is_some() {
+            push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &method.sig.ident,
+                    "serialization route attributes must be used on route methods",
                 ),
             );
         }
@@ -533,6 +558,7 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
                 &pipeline_specs,
                 host_specs.as_ref(),
                 version_specs.as_ref(),
+                serialization_specs.as_ref(),
                 &openapi_specs,
             ) {
                 Ok(registration) => routes.push(registration),
@@ -568,6 +594,9 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
                 )*
                 #(
                     __a3s_boot_controller = __a3s_boot_controller.#controller_version;
+                )*
+                #(
+                    __a3s_boot_controller = __a3s_boot_controller.#controller_serialization;
                 )*
                 #(
                     __a3s_boot_controller = #routes;
@@ -1057,6 +1086,7 @@ fn route_registration(
     pipeline_specs: &[PipelineSpec],
     host_spec: Option<&HostSpec>,
     version_spec: Option<&VersionSpec>,
+    serialization_spec: Option<&SerializationSpec>,
     openapi_specs: &[RouteOpenApiSpec],
 ) -> Result<proc_macro2::TokenStream> {
     if method.sig.asyncness.is_none() {
@@ -1188,6 +1218,8 @@ fn route_registration(
 
     let route_definition = version_route_definition(route_definition, version_spec);
 
+    let route_definition = serialization_route_definition(route_definition, serialization_spec);
+
     let route_definition = response_route_definition(route_definition, response_specs)?;
 
     let route_definition = openapi_route_definition(
@@ -1261,6 +1293,19 @@ fn version_route_definition(
     version_spec: Option<&VersionSpec>,
 ) -> proc_macro2::TokenStream {
     let Some(spec) = version_spec else {
+        return route_definition;
+    };
+    let token = spec.token();
+    quote! {
+        (#route_definition).#token
+    }
+}
+
+fn serialization_route_definition(
+    route_definition: proc_macro2::TokenStream,
+    serialization_spec: Option<&SerializationSpec>,
+) -> proc_macro2::TokenStream {
+    let Some(spec) = serialization_spec else {
         return route_definition;
     };
     let token = spec.token();
@@ -2110,6 +2155,79 @@ fn take_route_version_attrs(
     (clean_attrs, spec, errors)
 }
 
+fn take_controller_serialization_attrs(
+    attrs: &[Attribute],
+) -> (
+    Vec<Attribute>,
+    ControllerSerializationAttrs,
+    Vec<syn::Error>,
+) {
+    let mut clean_attrs = Vec::new();
+    let mut serialization = ControllerSerializationAttrs::default();
+    let mut errors = Vec::new();
+
+    for attr in attrs {
+        if !is_serialization_attribute(attr) {
+            clean_attrs.push(attr.clone());
+            continue;
+        }
+
+        match attr.parse_args::<SerializationSpec>() {
+            Ok(spec) => {
+                if serialization.spec.is_some() {
+                    errors.push(syn::Error::new_spanned(
+                        attr,
+                        "controller impl blocks can use at most one #[serialize] attribute",
+                    ));
+                } else {
+                    serialization.spec = Some(spec);
+                }
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+
+    (clean_attrs, serialization, errors)
+}
+
+fn take_route_serialization_attrs(
+    attrs: &[Attribute],
+) -> (Vec<Attribute>, Option<SerializationSpec>, Vec<syn::Error>) {
+    let mut clean_attrs = Vec::new();
+    let mut spec = None;
+    let mut errors = Vec::new();
+
+    for attr in attrs {
+        if !is_serialization_attribute(attr) {
+            clean_attrs.push(attr.clone());
+            continue;
+        }
+
+        match attr.parse_args::<SerializationSpec>() {
+            Ok(parsed) => {
+                if spec.is_some() {
+                    errors.push(syn::Error::new_spanned(
+                        attr,
+                        "route methods can use at most one #[serialize] attribute",
+                    ));
+                } else {
+                    spec = Some(parsed);
+                }
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+
+    (clean_attrs, spec, errors)
+}
+
+fn is_serialization_attribute(attr: &Attribute) -> bool {
+    attr.path()
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == "serialize")
+}
+
 fn is_metadata_attribute(attr: &Attribute) -> bool {
     attr.path()
         .segments
@@ -2330,6 +2448,102 @@ impl Parse for VersionList {
             .collect();
         Ok(Self(values))
     }
+}
+
+#[derive(Default)]
+struct ControllerSerializationAttrs {
+    spec: Option<SerializationSpec>,
+}
+
+impl ControllerSerializationAttrs {
+    fn tokens(&self) -> Vec<proc_macro2::TokenStream> {
+        self.spec.iter().map(SerializationSpec::token).collect()
+    }
+}
+
+#[derive(Clone, Default)]
+struct SerializationSpec {
+    include_fields: Vec<LitStr>,
+    exclude_fields: Vec<LitStr>,
+    skip_null_fields: bool,
+}
+
+impl SerializationSpec {
+    fn token(&self) -> proc_macro2::TokenStream {
+        let mut options = quote!(::a3s_boot::SerializationOptions::new());
+
+        if !self.include_fields.is_empty() {
+            let fields = &self.include_fields;
+            options = quote! {
+                (#options).include_fields([#(#fields),*])
+            };
+        }
+
+        if !self.exclude_fields.is_empty() {
+            let fields = &self.exclude_fields;
+            options = quote! {
+                (#options).exclude_fields([#(#fields),*])
+            };
+        }
+
+        if self.skip_null_fields {
+            options = quote! {
+                (#options).skip_null_fields()
+            };
+        }
+
+        quote!(with_serialization(#options))
+    }
+}
+
+impl Parse for SerializationSpec {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let mut spec = Self::default();
+
+        while !input.is_empty() {
+            let name = input.parse::<Ident>()?;
+            let key = name.to_string();
+            match key.as_str() {
+                "include" => {
+                    input.parse::<Token![=]>()?;
+                    spec.include_fields.extend(parse_lit_str_array(input)?);
+                }
+                "exclude" => {
+                    input.parse::<Token![=]>()?;
+                    spec.exclude_fields.extend(parse_lit_str_array(input)?);
+                }
+                "skip_null" => {
+                    if input.peek(Token![=]) {
+                        input.parse::<Token![=]>()?;
+                        spec.skip_null_fields = input.parse::<LitBool>()?.value;
+                    } else {
+                        spec.skip_null_fields = true;
+                    }
+                }
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        name,
+                        "expected `include`, `exclude`, or `skip_null`",
+                    ));
+                }
+            }
+
+            if input.is_empty() {
+                break;
+            }
+            input.parse::<Token![,]>()?;
+        }
+
+        Ok(spec)
+    }
+}
+
+fn parse_lit_str_array(input: ParseStream<'_>) -> Result<Vec<LitStr>> {
+    let content;
+    syn::bracketed!(content in input);
+    Ok(Punctuated::<LitStr, Token![,]>::parse_terminated(&content)?
+        .into_iter()
+        .collect())
 }
 
 #[derive(Clone, Copy)]
@@ -2911,6 +3125,17 @@ fn host_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStre
 }
 
 fn version_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
+    let item = proc_macro2::TokenStream::from(item);
+    let message =
+        format!("#[{name}] must be used inside an impl block annotated with #[controller]");
+    quote! {
+        compile_error!(#message);
+        #item
+    }
+    .into()
+}
+
+fn serialization_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
     let item = proc_macro2::TokenStream::from(item);
     let message =
         format!("#[{name}] must be used inside an impl block annotated with #[controller]");
