@@ -1,4 +1,4 @@
-use super::{AnyProvider, ProviderDefinition, ProviderScope, ProviderToken};
+use super::{AnyProvider, FromModuleRef, ProviderDefinition, ProviderScope, ProviderToken};
 use crate::{BootError, Result};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -423,6 +423,58 @@ impl ModuleRef {
         self.get_optional_token::<T>(&ProviderToken::named(token))
     }
 
+    /// Resolve a typed provider in a fresh resolution context.
+    ///
+    /// This mirrors Nest's `ModuleRef.resolve(...)`: singleton providers reuse
+    /// their application instance, while request-scoped dependencies share one
+    /// temporary context for this resolution and transient providers are rebuilt.
+    pub fn resolve<T>(&self) -> Result<Arc<T>>
+    where
+        T: Send + Sync + 'static,
+    {
+        self.resolve_token::<T>(&ProviderToken::of::<T>())
+    }
+
+    /// Resolve a named provider in a fresh resolution context.
+    pub fn resolve_named<T>(&self, token: &str) -> Result<Arc<T>>
+    where
+        T: Send + Sync + 'static,
+    {
+        self.resolve_token::<T>(&ProviderToken::named(token))
+    }
+
+    /// Resolve a typed provider in a fresh resolution context when it exists.
+    pub fn resolve_optional<T>(&self) -> Result<Option<Arc<T>>>
+    where
+        T: Send + Sync + 'static,
+    {
+        self.resolve_optional_token::<T>(&ProviderToken::of::<T>())
+    }
+
+    /// Resolve a named provider in a fresh resolution context when it exists.
+    pub fn resolve_optional_named<T>(&self, token: &str) -> Result<Option<Arc<T>>>
+    where
+        T: Send + Sync + 'static,
+    {
+        self.resolve_optional_token::<T>(&ProviderToken::named(token))
+    }
+
+    /// Create an injectable value without registering it in the provider graph.
+    pub fn create<T>(&self) -> Result<T>
+    where
+        T: FromModuleRef,
+    {
+        T::from_module_ref(self)
+    }
+
+    /// Create an injectable `Arc<T>` without registering it in the provider graph.
+    pub fn create_arc<T>(&self) -> Result<Arc<T>>
+    where
+        T: FromModuleRef,
+    {
+        Ok(Arc::new(self.create::<T>()?))
+    }
+
     pub fn contains(&self, token: &ProviderToken) -> Result<bool> {
         Ok(self.get_entry(token)?.is_some())
     }
@@ -562,6 +614,20 @@ impl ModuleRef {
                 .map_err(|_| BootError::ProviderTypeMismatch(token.to_string())),
             None => Ok(None),
         }
+    }
+
+    fn resolve_token<T>(&self, token: &ProviderToken) -> Result<Arc<T>>
+    where
+        T: Send + Sync + 'static,
+    {
+        self.request_scope().get_token(token)
+    }
+
+    fn resolve_optional_token<T>(&self, token: &ProviderToken) -> Result<Option<Arc<T>>>
+    where
+        T: Send + Sync + 'static,
+    {
+        self.request_scope().get_optional_token(token)
     }
 
     fn get_any(&self, token: &ProviderToken) -> Result<Option<Arc<AnyProvider>>> {

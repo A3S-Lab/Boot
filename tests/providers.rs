@@ -856,6 +856,85 @@ fn transient_injectable_providers_are_rebuilt_per_resolution() {
 }
 
 #[test]
+fn module_ref_can_create_unregistered_injectables() {
+    let module_ref = ModuleRef::new();
+    module_ref
+        .register(ProviderDefinition::singleton(SharedConfig {
+            value: "created",
+        }))
+        .unwrap();
+
+    let first = module_ref.create_arc::<AutoRepository>().unwrap();
+    let second = module_ref.create_arc::<AutoRepository>().unwrap();
+
+    assert_eq!(first.config.value, "created");
+    assert!(first.missing_items.is_none());
+    assert!(Arc::ptr_eq(&first.config, &second.config));
+    assert!(!Arc::ptr_eq(&first, &second));
+    assert!(!module_ref.contains_provider::<AutoRepository>().unwrap());
+}
+
+#[test]
+fn module_ref_resolve_uses_a_fresh_request_resolution_context() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let module_ref = ModuleRef::new();
+    let counter_calls = Arc::clone(&calls);
+    module_ref
+        .register(ProviderDefinition::request_scoped::<ScopedCounter, _>(
+            move |_| {
+                Ok(ScopedCounter {
+                    id: counter_calls.fetch_add(1, Ordering::SeqCst) + 1,
+                })
+            },
+        ))
+        .unwrap();
+    module_ref
+        .register(ProviderDefinition::request_scoped::<ScopedConsumer, _>(
+            |module_ref| {
+                Ok(ScopedConsumer {
+                    first: module_ref.get::<ScopedCounter>()?,
+                    second: module_ref.get::<ScopedCounter>()?,
+                })
+            },
+        ))
+        .unwrap();
+
+    let first = module_ref.resolve::<ScopedConsumer>().unwrap();
+    let second = module_ref.resolve::<ScopedConsumer>().unwrap();
+
+    assert_eq!(first.first.id, 1);
+    assert_eq!(first.second.id, 1);
+    assert!(Arc::ptr_eq(&first.first, &first.second));
+    assert_eq!(second.first.id, 2);
+    assert_eq!(second.second.id, 2);
+    assert!(Arc::ptr_eq(&second.first, &second.second));
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn module_ref_resolve_supports_named_and_optional_lookup() {
+    let module_ref = ModuleRef::new();
+    module_ref
+        .register(ProviderDefinition::named_singleton(
+            "named-config",
+            SharedConfig { value: "named" },
+        ))
+        .unwrap();
+
+    let resolved = module_ref
+        .resolve_named::<SharedConfig>("named-config")
+        .unwrap();
+    let optional = module_ref.resolve_optional::<SharedConfig>().unwrap();
+    let optional_named = module_ref
+        .resolve_optional_named::<SharedConfig>("named-config")
+        .unwrap();
+
+    assert_eq!(resolved.value, "named");
+    assert!(optional.is_none());
+    assert!(Arc::ptr_eq(&resolved, &optional_named.unwrap()));
+}
+
+#[test]
 fn provider_aliases_resolve_existing_singletons() {
     let app = BootApplication::builder()
         .import(AliasModule)

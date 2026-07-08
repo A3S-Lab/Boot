@@ -1695,10 +1695,12 @@ let providers = vec![
 
 fn inspect(module_ref: &ModuleRef) -> Result<()> {
     let maybe_client = module_ref.get_optional::<Client>()?;
+    let request_context = module_ref.resolve::<RequestContext>()?;
+    let dynamic_formatter = module_ref.create::<Formatter>()?;
     let has_client = module_ref.contains_provider::<Client>()?;
     let tokens = module_ref.tokens()?;
 
-    let _ = (maybe_client, has_client, tokens);
+    let _ = (maybe_client, request_context, dynamic_formatter, has_client, tokens);
     Ok(())
 }
 
@@ -1712,6 +1714,14 @@ fn inspect_app(app: &BootApplication) -> Result<()> {
     Ok(())
 }
 ```
+
+`ModuleRef::get(...)` reads from the current provider graph. Use
+`resolve(...)`, `resolve_named(...)`, or the optional variants when you want a
+fresh Nest-style resolution context: singleton providers keep their cached
+instance, transient providers are rebuilt, and request-scoped dependencies share
+one temporary context for that resolution. Use `create::<T>()` or
+`create_arc::<T>()` to instantiate a `FromModuleRef` type without registering or
+caching that type as a provider.
 
 Async provider factories mirror Nest's async providers. They are awaited while
 the application graph is built, before controllers and routes resolve their

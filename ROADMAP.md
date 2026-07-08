@@ -35,7 +35,8 @@ Implemented today:
 - `ProviderDefinition` and `ModuleRef` for typed provider registration,
   singleton/request/transient lifecycle scopes, async singleton provider
   factories, singleton provider lifecycle hooks, lookup, `FromModuleRef`
-  auto-wired provider factories, and named or optional dependency resolution.
+  auto-wired provider factories, named or optional dependency resolution,
+  fresh resolution contexts, and dynamic injectable creation.
 - `TestingModule` with provider overrides, async provider-aware
   `compile_async`, and typed route pipeline overrides for guards,
   interceptors, exception filters, and pipes.
@@ -368,7 +369,9 @@ graph builds. Singleton provider factories are initialized after all module
 provider tokens are registered, so factories can depend on providers declared
 later in the same module. `LazyModuleLoader` can load provider-only module
 graphs on demand, reuse eagerly registered modules, and resolve async singleton
-factories through `load_async(...)`.
+factories through `load_async(...)`. `ModuleRef` can resolve providers in a
+fresh temporary request context and dynamically create unregistered
+`FromModuleRef` values.
 
 Tasks:
 
@@ -392,6 +395,8 @@ Tasks:
   (Implemented)
 - Add request-scoped route/controller handler factories. (Implemented)
 - Add provider aliases comparable to Nest `useExisting`. (Implemented)
+- Add Nest-style `ModuleRef::resolve(...)` and `ModuleRef::create(...)`
+  runtime APIs. (Implemented)
 - Add contextual diagnostics for transient and request-scoped provider
   dependency cycles. (Implemented)
 - Add contextual diagnostics for module import cycles. (Implemented)
@@ -416,6 +421,9 @@ Acceptance:
   same request-scoped provider cache as `BootRequest::get(...)`. (Covered)
 - Provider aliases resolve the same singleton instance, preserve request-scoped
   resolution, and reject alias cycles with contextual errors. (Covered)
+- `ModuleRef::resolve(...)` creates a fresh resolution context for
+  request-scoped dependency caches, and `ModuleRef::create(...)` can instantiate
+  `FromModuleRef` values without registering them. (Covered)
 - Transient and request-scoped provider cycles report the active token chain.
   (Covered)
 - Module import cycles report the active module chain during sync and async
