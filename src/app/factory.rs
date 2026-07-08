@@ -211,11 +211,22 @@ impl BootApplicationHandle {
     }
 
     pub async fn close(&mut self) -> Result<()> {
+        self.close_inner(None).await
+    }
+
+    pub async fn close_with_signal(&mut self, signal: impl Into<String>) -> Result<()> {
+        self.close_inner(Some(signal.into())).await
+    }
+
+    async fn close_inner(&mut self, signal: Option<String>) -> Result<()> {
         if !self.initialized {
             return Ok(());
         }
 
-        self.app.shutdown().await?;
+        match signal {
+            Some(signal) => self.app.shutdown_with_signal(signal).await?,
+            None => self.app.shutdown().await?,
+        }
         self.initialized = false;
         Ok(())
     }
@@ -315,6 +326,10 @@ impl BootApplicationContext {
     pub async fn close(&mut self) -> Result<()> {
         self.handle.close().await
     }
+
+    pub async fn close_with_signal(&mut self, signal: impl Into<String>) -> Result<()> {
+        self.handle.close_with_signal(signal).await
+    }
 }
 
 /// Managed standalone microservice built from Boot message patterns.
@@ -371,11 +386,22 @@ where
     }
 
     pub async fn close(&mut self) -> Result<()> {
+        self.close_inner(None).await
+    }
+
+    pub async fn close_with_signal(&mut self, signal: impl Into<String>) -> Result<()> {
+        self.close_inner(Some(signal.into())).await
+    }
+
+    async fn close_inner(&mut self, signal: Option<String>) -> Result<()> {
         if !self.initialized {
             return Ok(());
         }
 
-        self.app.shutdown().await?;
+        match signal {
+            Some(signal) => self.app.shutdown_with_signal(signal).await?,
+            None => self.app.shutdown().await?,
+        }
         self.initialized = false;
         Ok(())
     }

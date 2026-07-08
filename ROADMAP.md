@@ -13,6 +13,7 @@ pipelines, generated API documentation, and transport integrations.
 Official Nest.js areas used as reference:
 
 - Modules: https://docs.nestjs.com/modules
+- Lifecycle events: https://docs.nestjs.com/fundamentals/lifecycle-events
 - Providers: https://docs.nestjs.com/providers
 - Controllers: https://docs.nestjs.com/controllers
 - Middleware: https://docs.nestjs.com/middleware
@@ -32,7 +33,8 @@ Implemented today:
 - `BootFactory` with NestFactory-style `create`, `create_application_context`,
   `create_microservice`, async provider-aware `create_async`,
   `create_application_context_async`, and `create_microservice_async`, managed
-  `init`/`close`, `listen_with`, and hybrid microservice startup helpers.
+  `init`/`close`, signal-aware shutdown helpers, `listen_with`, and hybrid
+  microservice startup helpers.
 - `ProviderDefinition` and `ModuleRef` for typed provider registration,
   singleton/request/transient lifecycle scopes, async singleton provider
   factories, singleton provider lifecycle hooks, lookup, `FromModuleRef`
@@ -122,7 +124,8 @@ Implemented today:
   build, order-independent singleton provider graph initialization,
   request-time lookup through `BootRequest`, singleton/transient/request-scoped
   provider dependency cycle diagnostics, and singleton provider startup/shutdown
-  hooks.
+  hooks for module init, application bootstrap, module destroy, before
+  application shutdown, and application shutdown.
 - Provider aliases that mirror Nest custom provider `useExisting` semantics and
   preserve target provider scope.
 - Lazy `ProviderRef<T>` handles that mirror the useful part of Nest
@@ -395,7 +398,7 @@ Nest equivalent:
 - global modules
 - dynamic modules
 - provider scopes: singleton, request, transient
-- singleton provider lifecycle hooks
+- singleton provider lifecycle hooks, including shutdown phases
 - request-scoped controllers
 - provider aliases / `useExisting`
 - forward-reference-style provider dependencies
@@ -409,7 +412,8 @@ its own providers plus exported providers from imports and global modules.
 Dynamic modules can produce imports, providers, exports, controllers, and routes
 from runtime configuration. Provider definitions can also choose singleton,
 request-scoped, or transient lifecycle behavior. Singleton providers can opt
-into module init, application bootstrap, and application shutdown hooks.
+into module init, application bootstrap, module destroy, before application
+shutdown, and application shutdown hooks.
 Request-scoped handler factories rebuild route/controller state from the current
 request's module context. Provider aliases let one token delegate to an existing
 provider token without changing the target provider's lifecycle scope. Module
@@ -446,8 +450,8 @@ Tasks:
 - Make request-scoped providers reuse one instance per request context,
   including dependencies resolved inside request-scoped provider factories.
   (Implemented)
-- Add singleton provider lifecycle hooks for init, bootstrap, and shutdown.
-  (Implemented)
+- Add singleton provider lifecycle hooks for init, bootstrap, module destroy,
+  before application shutdown, and application shutdown. (Implemented)
 - Add request-scoped route/controller handler factories. (Implemented)
 - Add provider aliases comparable to Nest `useExisting`. (Implemented)
 - Add lazy provider handles comparable to the useful provider side of Nest
@@ -472,8 +476,9 @@ Acceptance:
 - Transient providers are rebuilt for every resolution. (Covered)
 - Request-scoped providers are cached per request and are isolated from other
   requests. (Covered)
-- Singleton provider lifecycle hooks run with module lifecycle hooks and reject
-  request/transient provider scopes. (Covered)
+- Singleton provider lifecycle hooks run with module lifecycle hooks, reject
+  request/transient provider scopes, and receive explicit shutdown signal labels
+  through signal-aware close helpers. (Covered)
 - Request-scoped controller handlers are rebuilt for each request and share the
   same request-scoped provider cache as `BootRequest::get(...)`. (Covered)
 - Provider aliases resolve the same singleton instance, preserve request-scoped

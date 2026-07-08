@@ -5,8 +5,9 @@ mod token;
 use std::any::Any;
 
 pub use definition::{
-    FromModuleRef, ProviderDefinition, ProviderOnApplicationBootstrap,
-    ProviderOnApplicationShutdown, ProviderOnModuleInit, ProviderScope,
+    FromModuleRef, ProviderBeforeApplicationShutdown, ProviderDefinition,
+    ProviderOnApplicationBootstrap, ProviderOnApplicationShutdown, ProviderOnModuleDestroy,
+    ProviderOnModuleInit, ProviderScope,
 };
 pub use module_ref::{ModuleRef, ProviderRef};
 pub use token::ProviderToken;

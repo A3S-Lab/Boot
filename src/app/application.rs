@@ -341,12 +341,44 @@ impl BootApplication {
 
     /// Run async shutdown hooks in reverse registration order.
     pub async fn shutdown(&self) -> Result<()> {
+        self.shutdown_inner(None).await
+    }
+
+    /// Run async shutdown hooks with a signal label visible to signal-aware hooks.
+    pub async fn shutdown_with_signal(&self, signal: impl Into<String>) -> Result<()> {
+        self.shutdown_inner(Some(signal.into())).await
+    }
+
+    async fn shutdown_inner(&self, signal: Option<String>) -> Result<()> {
         for instance in self.module_instances.iter().rev() {
             instance
                 .module
-                .on_application_shutdown(instance.module_ref.clone())
+                .on_module_destroy(instance.module_ref.clone(), signal.clone())
                 .await?;
-            instance.module_ref.shutdown_local_providers().await?;
+            instance
+                .module_ref
+                .destroy_local_providers(signal.clone())
+                .await?;
+        }
+        for instance in self.module_instances.iter().rev() {
+            instance
+                .module
+                .before_application_shutdown(instance.module_ref.clone(), signal.clone())
+                .await?;
+            instance
+                .module_ref
+                .before_application_shutdown_local_providers(signal.clone())
+                .await?;
+        }
+        for instance in self.module_instances.iter().rev() {
+            instance
+                .module
+                .on_application_shutdown_with_signal(instance.module_ref.clone(), signal.clone())
+                .await?;
+            instance
+                .module_ref
+                .shutdown_local_providers(signal.clone())
+                .await?;
         }
         Ok(())
     }

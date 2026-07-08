@@ -1,6 +1,7 @@
 use a3s_boot::{
     BootApplication, BootError, BootFactory, BoxFuture, HttpAdapter, MessageTransport, Module,
-    ModuleRef, ProviderDefinition, ProviderOnApplicationBootstrap, ProviderOnApplicationShutdown,
+    ModuleRef, ProviderBeforeApplicationShutdown, ProviderDefinition,
+    ProviderOnApplicationBootstrap, ProviderOnApplicationShutdown, ProviderOnModuleDestroy,
     ProviderOnModuleInit, Result,
 };
 use std::sync::Arc;
@@ -116,6 +117,8 @@ impl Module for ProviderLifecycleModule {
         })
         .with_on_module_init::<LifecycleProvider>()
         .with_on_application_bootstrap::<LifecycleProvider>()
+        .with_on_module_destroy::<LifecycleProvider>()
+        .with_before_application_shutdown::<LifecycleProvider>()
         .with_on_application_shutdown::<LifecycleProvider>()])
     }
 
@@ -132,6 +135,32 @@ impl Module for ProviderLifecycleModule {
         })
     }
 
+    fn on_module_destroy(
+        &self,
+        _module_ref: ModuleRef,
+        _signal: Option<String>,
+    ) -> BoxFuture<'static, Result<()>> {
+        let log = Arc::clone(&self.log);
+        Box::pin(async move {
+            log.lock().unwrap().push("module-destroy".to_string());
+            Ok(())
+        })
+    }
+
+    fn before_application_shutdown(
+        &self,
+        _module_ref: ModuleRef,
+        _signal: Option<String>,
+    ) -> BoxFuture<'static, Result<()>> {
+        let log = Arc::clone(&self.log);
+        Box::pin(async move {
+            log.lock()
+                .unwrap()
+                .push("module-before-shutdown".to_string());
+            Ok(())
+        })
+    }
+
     fn on_application_shutdown(&self, _module_ref: ModuleRef) -> BoxFuture<'static, Result<()>> {
         let log = Arc::clone(&self.log);
         Box::pin(async move {
@@ -139,6 +168,167 @@ impl Module for ProviderLifecycleModule {
             Ok(())
         })
     }
+}
+
+impl ProviderOnModuleDestroy for LifecycleProvider {
+    fn on_module_destroy(
+        &self,
+        _module_ref: ModuleRef,
+        _signal: Option<String>,
+    ) -> BoxFuture<'static, Result<()>> {
+        let name = self.name;
+        let log = Arc::clone(&self.log);
+        Box::pin(async move {
+            log.lock().unwrap().push(format!("provider-destroy:{name}"));
+            Ok(())
+        })
+    }
+}
+
+impl ProviderBeforeApplicationShutdown for LifecycleProvider {
+    fn before_application_shutdown(
+        &self,
+        _module_ref: ModuleRef,
+        _signal: Option<String>,
+    ) -> BoxFuture<'static, Result<()>> {
+        let name = self.name;
+        let log = Arc::clone(&self.log);
+        Box::pin(async move {
+            log.lock()
+                .unwrap()
+                .push(format!("provider-before-shutdown:{name}"));
+            Ok(())
+        })
+    }
+}
+
+struct SignalLifecycleProvider {
+    log: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl ProviderOnModuleDestroy for SignalLifecycleProvider {
+    fn on_module_destroy(
+        &self,
+        _module_ref: ModuleRef,
+        signal: Option<String>,
+    ) -> BoxFuture<'static, Result<()>> {
+        let log = Arc::clone(&self.log);
+        Box::pin(async move {
+            log.lock()
+                .unwrap()
+                .push(format!("provider-destroy:{}", signal_label(signal)));
+            Ok(())
+        })
+    }
+}
+
+impl ProviderBeforeApplicationShutdown for SignalLifecycleProvider {
+    fn before_application_shutdown(
+        &self,
+        _module_ref: ModuleRef,
+        signal: Option<String>,
+    ) -> BoxFuture<'static, Result<()>> {
+        let log = Arc::clone(&self.log);
+        Box::pin(async move {
+            log.lock()
+                .unwrap()
+                .push(format!("provider-before:{}", signal_label(signal)));
+            Ok(())
+        })
+    }
+}
+
+impl ProviderOnApplicationShutdown for SignalLifecycleProvider {
+    fn on_application_shutdown(&self, _module_ref: ModuleRef) -> BoxFuture<'static, Result<()>> {
+        let log = Arc::clone(&self.log);
+        Box::pin(async move {
+            log.lock()
+                .unwrap()
+                .push("provider-shutdown:none".to_string());
+            Ok(())
+        })
+    }
+
+    fn on_application_shutdown_with_signal(
+        &self,
+        _module_ref: ModuleRef,
+        signal: Option<String>,
+    ) -> BoxFuture<'static, Result<()>> {
+        let log = Arc::clone(&self.log);
+        Box::pin(async move {
+            log.lock()
+                .unwrap()
+                .push(format!("provider-shutdown:{}", signal_label(signal)));
+            Ok(())
+        })
+    }
+}
+
+struct SignalLifecycleModule {
+    log: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl Module for SignalLifecycleModule {
+    fn name(&self) -> &'static str {
+        "signal-lifecycle"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::singleton(
+            SignalLifecycleProvider {
+                log: Arc::clone(&self.log),
+            },
+        )
+        .with_on_module_destroy::<SignalLifecycleProvider>()
+        .with_before_application_shutdown::<SignalLifecycleProvider>()
+        .with_on_application_shutdown::<SignalLifecycleProvider>()])
+    }
+
+    fn on_module_destroy(
+        &self,
+        _module_ref: ModuleRef,
+        signal: Option<String>,
+    ) -> BoxFuture<'static, Result<()>> {
+        let log = Arc::clone(&self.log);
+        Box::pin(async move {
+            log.lock()
+                .unwrap()
+                .push(format!("module-destroy:{}", signal_label(signal)));
+            Ok(())
+        })
+    }
+
+    fn before_application_shutdown(
+        &self,
+        _module_ref: ModuleRef,
+        signal: Option<String>,
+    ) -> BoxFuture<'static, Result<()>> {
+        let log = Arc::clone(&self.log);
+        Box::pin(async move {
+            log.lock()
+                .unwrap()
+                .push(format!("module-before:{}", signal_label(signal)));
+            Ok(())
+        })
+    }
+
+    fn on_application_shutdown_with_signal(
+        &self,
+        _module_ref: ModuleRef,
+        signal: Option<String>,
+    ) -> BoxFuture<'static, Result<()>> {
+        let log = Arc::clone(&self.log);
+        Box::pin(async move {
+            log.lock()
+                .unwrap()
+                .push(format!("module-shutdown:{}", signal_label(signal)));
+            Ok(())
+        })
+    }
+}
+
+fn signal_label(signal: Option<String>) -> String {
+    signal.unwrap_or_else(|| "none".to_string())
 }
 
 struct RequestScopedLifecycleModule {
@@ -216,6 +406,10 @@ async fn singleton_provider_lifecycle_hooks_run_with_module_lifecycle() {
             "module-init",
             "provider-bootstrap:service",
             "module-bootstrap",
+            "module-destroy",
+            "provider-destroy:service",
+            "module-before-shutdown",
+            "provider-before-shutdown:service",
             "module-shutdown",
             "provider-shutdown:service",
         ]
@@ -234,6 +428,30 @@ fn provider_lifecycle_hooks_require_singleton_scope() {
         Err(BootError::Internal(message))
             if message.contains("provider lifecycle hooks require singleton scope")
     ));
+}
+
+#[tokio::test]
+async fn close_with_signal_passes_signal_to_shutdown_lifecycle_hooks() {
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut context = BootFactory::create_application_context(SignalLifecycleModule {
+        log: Arc::clone(&log),
+    })
+    .unwrap();
+
+    context.init().await.unwrap();
+    context.close_with_signal("SIGTERM").await.unwrap();
+
+    assert_eq!(
+        log.lock().unwrap().as_slice(),
+        [
+            "module-destroy:SIGTERM",
+            "provider-destroy:SIGTERM",
+            "module-before:SIGTERM",
+            "provider-before:SIGTERM",
+            "module-shutdown:SIGTERM",
+            "provider-shutdown:SIGTERM"
+        ]
+    );
 }
 
 #[tokio::test]

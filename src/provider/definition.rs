@@ -10,6 +10,9 @@ type AsyncProviderFactory =
 type ProviderModuleInitHook = dyn Fn(Arc<AnyProvider>, &ModuleRef) -> Result<()> + Send + Sync;
 type ProviderApplicationHook =
     dyn Fn(Arc<AnyProvider>, ModuleRef) -> BoxFuture<'static, Result<()>> + Send + Sync;
+type ProviderShutdownHook = dyn Fn(Arc<AnyProvider>, ModuleRef, Option<String>) -> BoxFuture<'static, Result<()>>
+    + Send
+    + Sync;
 
 /// Lifecycle hook for singleton providers that need synchronous module init work.
 pub trait ProviderOnModuleInit: Send + Sync + 'static {
@@ -25,10 +28,40 @@ pub trait ProviderOnApplicationBootstrap: Send + Sync + 'static {
     }
 }
 
+/// Lifecycle hook for singleton providers that need async teardown before shutdown starts.
+pub trait ProviderOnModuleDestroy: Send + Sync + 'static {
+    fn on_module_destroy(
+        &self,
+        _module_ref: ModuleRef,
+        _signal: Option<String>,
+    ) -> BoxFuture<'static, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// Lifecycle hook for singleton providers that need async work before listeners close.
+pub trait ProviderBeforeApplicationShutdown: Send + Sync + 'static {
+    fn before_application_shutdown(
+        &self,
+        _module_ref: ModuleRef,
+        _signal: Option<String>,
+    ) -> BoxFuture<'static, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
 /// Lifecycle hook for singleton providers that need async shutdown cleanup.
 pub trait ProviderOnApplicationShutdown: Send + Sync + 'static {
     fn on_application_shutdown(&self, _module_ref: ModuleRef) -> BoxFuture<'static, Result<()>> {
         Box::pin(async { Ok(()) })
+    }
+
+    fn on_application_shutdown_with_signal(
+        &self,
+        module_ref: ModuleRef,
+        _signal: Option<String>,
+    ) -> BoxFuture<'static, Result<()>> {
+        self.on_application_shutdown(module_ref)
     }
 }
 
@@ -65,13 +98,17 @@ enum ProviderFactoryKind {
 pub(super) struct ProviderLifecycleHooks {
     on_module_init: Option<Arc<ProviderModuleInitHook>>,
     on_application_bootstrap: Option<Arc<ProviderApplicationHook>>,
-    on_application_shutdown: Option<Arc<ProviderApplicationHook>>,
+    on_module_destroy: Option<Arc<ProviderShutdownHook>>,
+    before_application_shutdown: Option<Arc<ProviderShutdownHook>>,
+    on_application_shutdown: Option<Arc<ProviderShutdownHook>>,
 }
 
 impl ProviderLifecycleHooks {
     pub(super) fn has_hooks(&self) -> bool {
         self.on_module_init.is_some()
             || self.on_application_bootstrap.is_some()
+            || self.on_module_destroy.is_some()
+            || self.before_application_shutdown.is_some()
             || self.on_application_shutdown.is_some()
     }
 
@@ -83,7 +120,15 @@ impl ProviderLifecycleHooks {
         self.on_application_bootstrap.as_ref()
     }
 
-    pub(super) fn on_application_shutdown(&self) -> Option<&Arc<ProviderApplicationHook>> {
+    pub(super) fn on_module_destroy(&self) -> Option<&Arc<ProviderShutdownHook>> {
+        self.on_module_destroy.as_ref()
+    }
+
+    pub(super) fn before_application_shutdown(&self) -> Option<&Arc<ProviderShutdownHook>> {
+        self.before_application_shutdown.as_ref()
+    }
+
+    pub(super) fn on_application_shutdown(&self) -> Option<&Arc<ProviderShutdownHook>> {
         self.on_application_shutdown.as_ref()
     }
 }
@@ -404,14 +449,43 @@ impl ProviderDefinition {
         self
     }
 
+    pub fn with_on_module_destroy<T>(mut self) -> Self
+    where
+        T: ProviderOnModuleDestroy,
+    {
+        self.lifecycle.on_module_destroy =
+            Some(Arc::new(
+                |provider, module_ref, signal| match downcast_lifecycle_provider::<T>(provider) {
+                    Ok(provider) => provider.on_module_destroy(module_ref, signal),
+                    Err(error) => Box::pin(async move { Err(error) }),
+                },
+            ));
+        self
+    }
+
+    pub fn with_before_application_shutdown<T>(mut self) -> Self
+    where
+        T: ProviderBeforeApplicationShutdown,
+    {
+        self.lifecycle.before_application_shutdown = Some(Arc::new(
+            |provider, module_ref, signal| match downcast_lifecycle_provider::<T>(provider) {
+                Ok(provider) => provider.before_application_shutdown(module_ref, signal),
+                Err(error) => Box::pin(async move { Err(error) }),
+            },
+        ));
+        self
+    }
+
     pub fn with_on_application_shutdown<T>(mut self) -> Self
     where
         T: ProviderOnApplicationShutdown,
     {
         self.lifecycle.on_application_shutdown =
             Some(Arc::new(
-                |provider, module_ref| match downcast_lifecycle_provider::<T>(provider) {
-                    Ok(provider) => provider.on_application_shutdown(module_ref),
+                |provider, module_ref, signal| match downcast_lifecycle_provider::<T>(provider) {
+                    Ok(provider) => {
+                        provider.on_application_shutdown_with_signal(module_ref, signal)
+                    }
                     Err(error) => Box::pin(async move { Err(error) }),
                 },
             ));

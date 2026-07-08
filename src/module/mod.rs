@@ -82,8 +82,35 @@ pub trait Module: Send + Sync + 'static {
         Box::pin(async { Ok(()) })
     }
 
+    /// Async lifecycle hook called when shutdown begins.
+    fn on_module_destroy(
+        &self,
+        _module_ref: ModuleRef,
+        _signal: Option<String>,
+    ) -> BoxFuture<'static, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    /// Async lifecycle hook called after module destroy hooks and before final shutdown hooks.
+    fn before_application_shutdown(
+        &self,
+        _module_ref: ModuleRef,
+        _signal: Option<String>,
+    ) -> BoxFuture<'static, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+
     /// Async lifecycle hook called by hosts that need graceful shutdown cleanup.
     fn on_application_shutdown(&self, _module_ref: ModuleRef) -> BoxFuture<'static, Result<()>> {
         Box::pin(async { Ok(()) })
+    }
+
+    /// Signal-aware variant of [`Module::on_application_shutdown`].
+    fn on_application_shutdown_with_signal(
+        &self,
+        module_ref: ModuleRef,
+        _signal: Option<String>,
+    ) -> BoxFuture<'static, Result<()>> {
+        self.on_application_shutdown(module_ref)
     }
 }

@@ -155,8 +155,9 @@ pub use pipeline::{
     WebSocketExecutionContext,
 };
 pub use provider::{
-    FromModuleRef, ModuleRef, ProviderDefinition, ProviderOnApplicationBootstrap,
-    ProviderOnApplicationShutdown, ProviderOnModuleInit, ProviderRef, ProviderScope, ProviderToken,
+    FromModuleRef, ModuleRef, ProviderBeforeApplicationShutdown, ProviderDefinition,
+    ProviderOnApplicationBootstrap, ProviderOnApplicationShutdown, ProviderOnModuleDestroy,
+    ProviderOnModuleInit, ProviderRef, ProviderScope, ProviderToken,
 };
 #[cfg(feature = "queue")]
 pub use queue::{

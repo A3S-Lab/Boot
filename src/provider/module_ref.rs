@@ -307,14 +307,42 @@ impl ProviderEntry {
         hook(value, module_ref).await
     }
 
-    async fn on_application_shutdown(&self, module_ref: ModuleRef) -> Result<()> {
+    async fn on_module_destroy(&self, module_ref: ModuleRef, signal: Option<String>) -> Result<()> {
+        let Some(hook) = self.definition.lifecycle().on_module_destroy() else {
+            return Ok(());
+        };
+
+        let resolution_stack = new_resolution_stack();
+        let value = self.resolve_singleton(&module_ref, &resolution_stack)?;
+        hook(value, module_ref, signal).await
+    }
+
+    async fn before_application_shutdown(
+        &self,
+        module_ref: ModuleRef,
+        signal: Option<String>,
+    ) -> Result<()> {
+        let Some(hook) = self.definition.lifecycle().before_application_shutdown() else {
+            return Ok(());
+        };
+
+        let resolution_stack = new_resolution_stack();
+        let value = self.resolve_singleton(&module_ref, &resolution_stack)?;
+        hook(value, module_ref, signal).await
+    }
+
+    async fn on_application_shutdown(
+        &self,
+        module_ref: ModuleRef,
+        signal: Option<String>,
+    ) -> Result<()> {
         let Some(hook) = self.definition.lifecycle().on_application_shutdown() else {
             return Ok(());
         };
 
         let resolution_stack = new_resolution_stack();
         let value = self.resolve_singleton(&module_ref, &resolution_stack)?;
-        hook(value, module_ref).await
+        hook(value, module_ref, signal).await
     }
 
     fn factory_ref(
@@ -677,11 +705,38 @@ impl ModuleRef {
         Ok(())
     }
 
-    pub(crate) async fn shutdown_local_providers(&self) -> Result<()> {
+    pub(crate) async fn destroy_local_providers(&self, signal: Option<String>) -> Result<()> {
         let mut entries = self.local_entries()?;
         entries.reverse();
         for entry in entries {
-            entry.on_application_shutdown(self.clone()).await?;
+            entry
+                .on_module_destroy(self.clone(), signal.clone())
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn before_application_shutdown_local_providers(
+        &self,
+        signal: Option<String>,
+    ) -> Result<()> {
+        let mut entries = self.local_entries()?;
+        entries.reverse();
+        for entry in entries {
+            entry
+                .before_application_shutdown(self.clone(), signal.clone())
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn shutdown_local_providers(&self, signal: Option<String>) -> Result<()> {
+        let mut entries = self.local_entries()?;
+        entries.reverse();
+        for entry in entries {
+            entry
+                .on_application_shutdown(self.clone(), signal.clone())
+                .await?;
         }
         Ok(())
     }

@@ -2169,8 +2169,9 @@ Singleton providers can opt into Nest-style lifecycle hooks:
 
 ```rust
 use a3s_boot::{
-    BoxFuture, ModuleRef, ProviderDefinition, ProviderOnApplicationShutdown,
-    ProviderOnModuleInit, Result,
+    BoxFuture, ModuleRef, ProviderBeforeApplicationShutdown, ProviderDefinition,
+    ProviderOnApplicationShutdown, ProviderOnModuleDestroy, ProviderOnModuleInit,
+    Result,
 };
 
 #[derive(Debug)]
@@ -2182,6 +2183,26 @@ impl ProviderOnModuleInit for CatsService {
     }
 }
 
+impl ProviderOnModuleDestroy for CatsService {
+    fn on_module_destroy(
+        &self,
+        _module_ref: ModuleRef,
+        _signal: Option<String>,
+    ) -> BoxFuture<'static, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+impl ProviderBeforeApplicationShutdown for CatsService {
+    fn before_application_shutdown(
+        &self,
+        _module_ref: ModuleRef,
+        _signal: Option<String>,
+    ) -> BoxFuture<'static, Result<()>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
 impl ProviderOnApplicationShutdown for CatsService {
     fn on_application_shutdown(&self, _module_ref: ModuleRef) -> BoxFuture<'static, Result<()>> {
         Box::pin(async { Ok(()) })
@@ -2190,12 +2211,22 @@ impl ProviderOnApplicationShutdown for CatsService {
 
 let provider = ProviderDefinition::singleton(CatsService)
     .with_on_module_init::<CatsService>()
+    .with_on_module_destroy::<CatsService>()
+    .with_before_application_shutdown::<CatsService>()
     .with_on_application_shutdown::<CatsService>();
 ```
 
 Lifecycle hooks require singleton scope. Request-scoped and transient providers
 are created for request or resolution contexts, so they do not participate in
 application startup or shutdown hooks.
+
+Shutdown runs in Nest-style phases: `on_module_destroy(...)`,
+`before_application_shutdown(...)`, then `on_application_shutdown(...)`.
+`BootApplication::shutdown_with_signal("SIGTERM")`,
+`BootApplicationHandle::close_with_signal("SIGTERM")`,
+`BootApplicationContext::close_with_signal("SIGTERM")`, and
+`BootMicroservice::close_with_signal("SIGTERM")` pass the signal label to
+signal-aware shutdown hooks.
 
 ## Testing Modules
 
