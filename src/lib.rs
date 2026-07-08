@@ -78,6 +78,8 @@ pub use a3s_boot_macros::{cron, interval, schedule, timeout};
 pub use a3s_boot_macros::{event_listener, on_event};
 #[cfg(feature = "axum")]
 pub use adapters::AxumAdapter;
+#[cfg(feature = "shutdown-hooks")]
+pub use app::{wait_for_shutdown_signal, ShutdownSignal};
 pub use app::{
     BootApplication, BootApplicationBuilder, BootApplicationContext, BootApplicationHandle,
     BootFactory, BootMicroservice, LazyLoadedModule, LazyModuleLoader, RouteMatch,

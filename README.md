@@ -354,6 +354,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | `NestFactory.create(AppModule)` | `BootFactory::create(AppModule)?` |
 | `app.listen(3000)` | `app.listen_with(&AxumAdapter::new(), addr).await` |
 | `app.close()` | `app.close().await` |
+| `app.enableShutdownHooks([ShutdownSignal.SIGTERM])` | `app.enable_shutdown_hooks([ShutdownSignal::Sigterm])` |
 | `NestFactory.createApplicationContext(...)` | `BootFactory::create_application_context(...)` |
 | `NestFactory.createMicroservice(...)` | `BootFactory::create_microservice(...)` |
 
@@ -619,18 +620,20 @@ but typical code should use `#[get]` and `#[post]` directly.
 
 `BootFactory` is the NestFactory-style entrypoint for managed startup and
 shutdown. `create(...)` returns an application handle with `init()`,
-`listen_with(...)`, `close()`, and provider lookup helpers. Use
-`create_application_context(...)` for provider-only workers, and
+`listen_with(...)`, `close()`, `enable_shutdown_hooks(...)`, and provider
+lookup helpers. Use `create_application_context(...)` for provider-only workers,
+and
 `create_microservice(...)` for standalone message transports. When a module
 registers async provider factories, use the async variants:
 `create_async(...)`, `create_application_context_async(...)`, or
 `create_microservice_async(...)`.
 
 ```rust
-use a3s_boot::{AxumAdapter, BootFactory, InProcessTransport, Result};
+use a3s_boot::{AxumAdapter, BootFactory, InProcessTransport, Result, ShutdownSignal};
 
 async fn run() -> Result<()> {
     let mut app = BootFactory::create(AppModule)?;
+    app.enable_shutdown_hooks([ShutdownSignal::Sigterm, ShutdownSignal::Sigint]);
     app.connect_microservice(InProcessTransport::new());
     app.start_all_microservices().await?;
     app.listen_with(&AxumAdapter::new(), ([127, 0, 0, 1], 3000).into()).await?;
@@ -2226,7 +2229,10 @@ Shutdown runs in Nest-style phases: `on_module_destroy(...)`,
 `BootApplicationHandle::close_with_signal("SIGTERM")`,
 `BootApplicationContext::close_with_signal("SIGTERM")`, and
 `BootMicroservice::close_with_signal("SIGTERM")` pass the signal label to
-signal-aware shutdown hooks.
+signal-aware shutdown hooks. With the default `shutdown-hooks` feature,
+`enable_shutdown_hooks(...)` makes `listen_with(...)` and microservice
+`listen()` wait for operating-system signals such as `SIGTERM` and `SIGINT`,
+then close through the same signal-aware lifecycle phases.
 
 ## Testing Modules
 

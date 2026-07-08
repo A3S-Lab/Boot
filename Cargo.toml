@@ -16,7 +16,7 @@ name = "a3s_boot"
 path = "src/lib.rs"
 
 [features]
-default = ["axum", "macros"]
+default = ["axum", "macros", "shutdown-hooks"]
 auth = []
 axum = ["dep:axum", "dep:http-body-util", "dep:tokio"]
 cache = []
@@ -42,6 +42,7 @@ redis-transport = ["dep:redis", "dep:tokio"]
 schedule = ["dep:chrono", "dep:cron", "dep:tokio"]
 security = []
 session = ["dep:getrandom"]
+shutdown-hooks = ["dep:tokio", "tokio/macros", "tokio/signal"]
 static = ["dep:tokio"]
 tcp-transport = ["dep:tokio"]
 

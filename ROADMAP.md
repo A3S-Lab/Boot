@@ -33,8 +33,9 @@ Implemented today:
 - `BootFactory` with NestFactory-style `create`, `create_application_context`,
   `create_microservice`, async provider-aware `create_async`,
   `create_application_context_async`, and `create_microservice_async`, managed
-  `init`/`close`, signal-aware shutdown helpers, `listen_with`, and hybrid
-  microservice startup helpers.
+  `init`/`close`, signal-aware shutdown helpers, Nest-style
+  `enable_shutdown_hooks`, `listen_with`, and hybrid microservice startup
+  helpers.
 - `ProviderDefinition` and `ModuleRef` for typed provider registration,
   singleton/request/transient lifecycle scopes, async singleton provider
   factories, singleton provider lifecycle hooks, lookup, `FromModuleRef`
@@ -125,7 +126,8 @@ Implemented today:
   request-time lookup through `BootRequest`, singleton/transient/request-scoped
   provider dependency cycle diagnostics, and singleton provider startup/shutdown
   hooks for module init, application bootstrap, module destroy, before
-  application shutdown, and application shutdown.
+  application shutdown, and application shutdown, including OS signal labels
+  from shutdown hooks.
 - Provider aliases that mirror Nest custom provider `useExisting` semantics and
   preserve target provider scope.
 - Lazy `ProviderRef<T>` handles that mirror the useful part of Nest
@@ -399,6 +401,7 @@ Nest equivalent:
 - dynamic modules
 - provider scopes: singleton, request, transient
 - singleton provider lifecycle hooks, including shutdown phases
+- `enableShutdownHooks`
 - request-scoped controllers
 - provider aliases / `useExisting`
 - forward-reference-style provider dependencies
@@ -413,7 +416,9 @@ Dynamic modules can produce imports, providers, exports, controllers, and routes
 from runtime configuration. Provider definitions can also choose singleton,
 request-scoped, or transient lifecycle behavior. Singleton providers can opt
 into module init, application bootstrap, module destroy, before application
-shutdown, and application shutdown hooks.
+shutdown, and application shutdown hooks. Managed HTTP and microservice hosts
+can enable Nest-style shutdown hooks so OS signals close the application through
+the same signal-aware lifecycle phases.
 Request-scoped handler factories rebuild route/controller state from the current
 request's module context. Provider aliases let one token delegate to an existing
 provider token without changing the target provider's lifecycle scope. Module
@@ -452,6 +457,9 @@ Tasks:
   (Implemented)
 - Add singleton provider lifecycle hooks for init, bootstrap, module destroy,
   before application shutdown, and application shutdown. (Implemented)
+- Add Nest-style shutdown hook enabling for managed HTTP and microservice
+  hosts. (Implemented with `enable_shutdown_hooks(...)` and default
+  `SIGINT`/`SIGTERM` support)
 - Add request-scoped route/controller handler factories. (Implemented)
 - Add provider aliases comparable to Nest `useExisting`. (Implemented)
 - Add lazy provider handles comparable to the useful provider side of Nest
@@ -479,6 +487,8 @@ Acceptance:
 - Singleton provider lifecycle hooks run with module lifecycle hooks, reject
   request/transient provider scopes, and receive explicit shutdown signal labels
   through signal-aware close helpers. (Covered)
+- Managed HTTP and microservice hosts can close through signal-aware lifecycle
+  hooks when a configured shutdown signal wins the serve race. (Covered)
 - Request-scoped controller handlers are rebuilt for each request and share the
   same request-scoped provider cache as `BootRequest::get(...)`. (Covered)
 - Provider aliases resolve the same singleton instance, preserve request-scoped
