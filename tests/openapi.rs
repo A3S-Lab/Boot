@@ -183,6 +183,58 @@ fn openapi_documents_catch_all_routes_with_valid_path_parameters() {
     ));
 }
 
+#[test]
+fn openapi_documents_include_request_and_response_examples() {
+    let route = RouteDefinition::post_json_with_status(
+        "/cats",
+        201,
+        |dto: OpenApiCreateCatDto| async move {
+            Ok(OpenApiCatDto {
+                id: "generated".to_string(),
+                name: dto.name,
+            })
+        },
+    )
+    .unwrap()
+    .try_with_json_request_body_example(
+        OpenApiSchema::reference("OpenApiCreateCatDto"),
+        json!({ "name": "Milo" }),
+    )
+    .unwrap()
+    .try_with_json_response_example(
+        201,
+        "Cat created",
+        OpenApiSchema::reference("OpenApiCatDto"),
+        json!({ "id": "generated", "name": "Milo" }),
+    )
+    .unwrap();
+
+    let document = BootApplication::builder()
+        .route(route)
+        .build()
+        .unwrap()
+        .openapi(OpenApiInfo::new("Cats API", "1.0.0"));
+    let value = serde_json::to_value(document).unwrap();
+    let operation = &value["paths"]["/cats"]["post"];
+
+    assert_eq!(
+        operation["requestBody"]["content"]["application/json"]["schema"],
+        json!({ "$ref": "#/components/schemas/OpenApiCreateCatDto" })
+    );
+    assert_eq!(
+        operation["requestBody"]["content"]["application/json"]["example"],
+        json!({ "name": "Milo" })
+    );
+    assert_eq!(
+        operation["responses"]["201"]["content"]["application/json"]["schema"],
+        json!({ "$ref": "#/components/schemas/OpenApiCatDto" })
+    );
+    assert_eq!(
+        operation["responses"]["201"]["content"]["application/json"]["example"],
+        json!({ "id": "generated", "name": "Milo" })
+    );
+}
+
 #[cfg(feature = "openapi-schemas")]
 #[test]
 fn openapi_schema_components_can_be_generated_from_schemars() {

@@ -1,4 +1,4 @@
-use crate::{HttpMethod, RouteDefinition};
+use crate::{BootError, HttpMethod, Result, RouteDefinition};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -281,6 +281,13 @@ impl OpenApiRequestBody {
         }
     }
 
+    pub fn try_json_example<T>(schema: OpenApiSchema, example: T) -> Result<Self>
+    where
+        T: Serialize,
+    {
+        Self::json(schema).try_with_json_example(example)
+    }
+
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self
@@ -289,6 +296,18 @@ impl OpenApiRequestBody {
     pub fn optional(mut self) -> Self {
         self.required = false;
         self
+    }
+
+    pub fn try_with_json_example<T>(mut self, example: T) -> Result<Self>
+    where
+        T: Serialize,
+    {
+        let example = serialize_openapi_example(example)?;
+        self.content
+            .entry("application/json".to_string())
+            .or_insert_with(|| OpenApiMediaType::new(OpenApiSchema::object()))
+            .example = Some(example);
+        Ok(self)
     }
 }
 
@@ -319,18 +338,67 @@ impl OpenApiResponse {
             content,
         }
     }
+
+    pub fn try_json_example<T>(
+        description: impl Into<String>,
+        schema: OpenApiSchema,
+        example: T,
+    ) -> Result<Self>
+    where
+        T: Serialize,
+    {
+        Self::json(description, schema).try_with_json_example(example)
+    }
+
+    pub fn try_with_json_example<T>(mut self, example: T) -> Result<Self>
+    where
+        T: Serialize,
+    {
+        let example = serialize_openapi_example(example)?;
+        self.content
+            .entry("application/json".to_string())
+            .or_insert_with(|| OpenApiMediaType::new(OpenApiSchema::object()))
+            .example = Some(example);
+        Ok(self)
+    }
 }
 
 /// OpenAPI media type metadata.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct OpenApiMediaType {
     pub schema: OpenApiSchema,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub example: Option<Value>,
 }
 
 impl OpenApiMediaType {
     pub fn new(schema: OpenApiSchema) -> Self {
-        Self { schema }
+        Self {
+            schema,
+            example: None,
+        }
     }
+
+    pub fn with_example_value(mut self, example: Value) -> Self {
+        self.example = Some(example);
+        self
+    }
+
+    pub fn try_with_example<T>(self, example: T) -> Result<Self>
+    where
+        T: Serialize,
+    {
+        Ok(self.with_example_value(serialize_openapi_example(example)?))
+    }
+}
+
+fn serialize_openapi_example<T>(example: T) -> Result<Value>
+where
+    T: Serialize,
+{
+    serde_json::to_value(example).map_err(|error| {
+        BootError::Internal(format!("OpenAPI example could not be serialized: {error}"))
+    })
 }
 
 /// OpenAPI schema value. This intentionally stays schema-crate neutral.

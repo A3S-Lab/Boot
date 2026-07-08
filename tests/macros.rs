@@ -405,8 +405,17 @@ impl MacroCatsController {
 
     #[post("/", status = 201)]
     #[operation(summary = "Create a macro cat", operation_id = "createMacroCat")]
-    #[request_body(schema = MacroCreateCatDto, description = "Cat creation payload")]
-    #[response(status = 201, description = "Cat created", schema = MacroCatDto)]
+    #[request_body(
+        schema = MacroCreateCatDto,
+        description = "Cat creation payload",
+        example = json!({ "name": "Milo" })
+    )]
+    #[response(
+        status = 201,
+        description = "Cat created",
+        schema = MacroCatDto,
+        example = json!({ "id": "generated", "name": "Milo" })
+    )]
     async fn create(&self, dto: MacroCreateCatDto) -> Result<MacroCatDto> {
         Ok(self.cats.create(dto))
     }
@@ -1486,8 +1495,16 @@ async fn macros_register_injectable_services_and_controller_routes() {
         json!({ "$ref": "#/components/schemas/MacroCreateCatDto" })
     );
     assert_eq!(
+        create_operation["requestBody"]["content"]["application/json"]["example"],
+        json!({ "name": "Milo" })
+    );
+    assert_eq!(
         create_operation["responses"]["201"]["content"]["application/json"]["schema"],
         json!({ "$ref": "#/components/schemas/MacroCatDto" })
+    );
+    assert_eq!(
+        create_operation["responses"]["201"]["content"]["application/json"]["example"],
+        json!({ "id": "generated", "name": "Milo" })
     );
 
     let adopt_operation = &document["paths"]["/macro-cats/{id}/adoptions"]["post"];

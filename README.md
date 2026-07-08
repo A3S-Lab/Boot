@@ -348,6 +348,8 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@ApiTags("cats")` | `#[tag("cats")]` below `#[controller]` |
 | `@ApiOperation(...)` | `#[operation(summary = "...", operation_id = "...")]` on a route method |
 | `@ApiResponse(...)` | `#[response(status = 200, description = "...", schema = CatDto)]` |
+| `@ApiResponse({ example: ... })` | `#[response(status = 200, schema = CatDto, example = serde_json::json!(...))]` |
+| `@ApiBody({ example: ... })` | `#[request_body(schema = CreateCatDto, example = serde_json::json!(...))]` |
 | `@ApiBearerAuth()` | `#[bearer_auth]` on a route method |
 | Constructor injection | `#[injectable]` fields such as `cats: Arc<CatsService>` plus `CatsController::provider()` |
 | `@Inject("TOKEN")` | `#[inject("token")]` on an `Arc<T>`, `Option<Arc<T>>`, or `ProviderRef<T>` field |
@@ -1040,7 +1042,12 @@ let route = RouteDefinition::get_json("/cats/{id}", |request: BootRequest| async
 .with_operation_id("findCat")
 .with_summary("Find a cat")
 .with_query_parameter("include_toys", false, OpenApiSchema::boolean())
-.with_json_response(200, "Cat found", OpenApiSchema::object())
+.try_with_json_response_example(
+    200,
+    "Cat found",
+    OpenApiSchema::object(),
+    serde_json::json!({ "id": "cat-1", "name": "Milo" }),
+)?
 .with_response(404, OpenApiResponse::description("Cat not found"))
 .with_schema_component("CatDto", OpenApiSchema::object());
 
@@ -1073,6 +1080,10 @@ parameter schema. `ControllerDefinition::with_tag("cats")` applies a tag to all
 routes registered after it, similar to Nest Swagger's `@ApiTags`. In macro
 controllers, `#[param("id")]`, `#[query("name")]`, `#[header("name")]`, and
 `#[body]` also add matching OpenAPI parameter or request-body metadata.
+Use `try_with_json_request_body_example(...)`,
+`try_with_json_response_example(...)`, `#[request_body(example = ...)]`, and
+`#[response(example = ...)]` to mirror Nest Swagger request and response
+examples.
 
 With `openapi-schemas`, routes can collect component schemas directly from
 types that derive `schemars::JsonSchema`:

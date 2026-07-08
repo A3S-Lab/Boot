@@ -1,10 +1,11 @@
 use super::definition::RouteDefinition;
 #[cfg(feature = "openapi-schemas")]
-use crate::{openapi_schema_name, BootError, Result};
+use crate::{openapi_schema_name, BootError};
 use crate::{
     OpenApiParameter, OpenApiRequestBody, OpenApiResponse, OpenApiRouteMetadata, OpenApiSchema,
-    OpenApiSecurityRequirement,
+    OpenApiSecurityRequirement, Result,
 };
+use serde::Serialize;
 
 impl RouteDefinition {
     pub fn with_openapi(mut self, metadata: OpenApiRouteMetadata) -> Self {
@@ -81,6 +82,17 @@ impl RouteDefinition {
         self.with_request_body(OpenApiRequestBody::json(schema))
     }
 
+    pub fn try_with_json_request_body_example<T>(
+        self,
+        schema: OpenApiSchema,
+        example: T,
+    ) -> Result<Self>
+    where
+        T: Serialize,
+    {
+        Ok(self.with_request_body(OpenApiRequestBody::try_json_example(schema, example)?))
+    }
+
     pub fn with_response(mut self, status: u16, response: OpenApiResponse) -> Self {
         self.openapi.responses.insert(status.to_string(), response);
         self
@@ -100,6 +112,22 @@ impl RouteDefinition {
         schema: OpenApiSchema,
     ) -> Self {
         self.with_response(status, OpenApiResponse::json(description, schema))
+    }
+
+    pub fn try_with_json_response_example<T>(
+        self,
+        status: u16,
+        description: impl Into<String>,
+        schema: OpenApiSchema,
+        example: T,
+    ) -> Result<Self>
+    where
+        T: Serialize,
+    {
+        Ok(self.with_response(
+            status,
+            OpenApiResponse::try_json_example(description, schema, example)?,
+        ))
     }
 
     pub fn with_security_requirement(mut self, requirement: OpenApiSecurityRequirement) -> Self {

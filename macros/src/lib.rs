@@ -4813,6 +4813,7 @@ struct ResponseArgs {
     status: LitInt,
     description: Option<LitStr>,
     schema: Option<Type>,
+    example: Option<Expr>,
 }
 
 impl ResponseArgs {
@@ -4823,12 +4824,19 @@ impl ResponseArgs {
             None => quote!("Success"),
         };
 
-        Ok(match &self.schema {
-            Some(schema) => {
+        Ok(match (&self.schema, &self.example) {
+            (schema, Some(example)) => {
+                let schema = schema
+                    .as_ref()
+                    .map(openapi_schema_tokens)
+                    .unwrap_or_else(|| quote!(::a3s_boot::OpenApiSchema::object()));
+                quote!(try_with_json_response_example(#status, #description, #schema, #example)?)
+            }
+            (Some(schema), None) => {
                 let schema = openapi_schema_tokens(schema);
                 quote!(with_json_response(#status, #description, #schema))
             }
-            None => quote! {
+            (None, None) => quote! {
                 with_response(
                     #status,
                     ::a3s_boot::OpenApiResponse::description(#description)
@@ -4843,6 +4851,7 @@ impl Parse for ResponseArgs {
         let mut status = None;
         let mut description = None;
         let mut schema = None;
+        let mut example = None;
 
         while !input.is_empty() {
             let name = input.parse::<Ident>()?;
@@ -4853,10 +4862,12 @@ impl Parse for ResponseArgs {
                 set_once(&mut description, input.parse::<LitStr>()?, name)?;
             } else if name == "schema" || name == "ty" || name == "body" {
                 set_once(&mut schema, input.parse::<Type>()?, name)?;
+            } else if name == "example" {
+                set_once(&mut example, input.parse::<Expr>()?, name)?;
             } else {
                 return Err(syn::Error::new_spanned(
                     name,
-                    "expected `status`, `description`, or `schema`",
+                    "expected `status`, `description`, `schema`, or `example`",
                 ));
             }
             parse_optional_comma(input)?;
@@ -4870,6 +4881,7 @@ impl Parse for ResponseArgs {
             status,
             description,
             schema,
+            example,
         })
     }
 }
@@ -4879,6 +4891,7 @@ struct RequestBodyArgs {
     schema: Option<Type>,
     description: Option<LitStr>,
     required: Option<LitBool>,
+    example: Option<Expr>,
 }
 
 impl RequestBodyArgs {
@@ -4888,7 +4901,12 @@ impl RequestBodyArgs {
             .as_ref()
             .map(openapi_schema_tokens)
             .unwrap_or_else(|| quote!(::a3s_boot::OpenApiSchema::object()));
-        let mut request_body = quote!(::a3s_boot::OpenApiRequestBody::json(#schema));
+        let mut request_body = match &self.example {
+            Some(example) => {
+                quote!(::a3s_boot::OpenApiRequestBody::try_json_example(#schema, #example)?)
+            }
+            None => quote!(::a3s_boot::OpenApiRequestBody::json(#schema)),
+        };
 
         if let Some(description) = &self.description {
             request_body = quote!((#request_body).with_description(#description));
@@ -4919,10 +4937,12 @@ impl Parse for RequestBodyArgs {
                 set_once(&mut args.description, input.parse::<LitStr>()?, name)?;
             } else if name == "required" {
                 set_once(&mut args.required, input.parse::<LitBool>()?, name)?;
+            } else if name == "example" {
+                set_once(&mut args.example, input.parse::<Expr>()?, name)?;
             } else {
                 return Err(syn::Error::new_spanned(
                     name,
-                    "expected `schema`, `description`, or `required`",
+                    "expected `schema`, `description`, `required`, or `example`",
                 ));
             }
             parse_optional_comma(input)?;
