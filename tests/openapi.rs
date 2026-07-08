@@ -282,6 +282,97 @@ async fn openapi_endpoint_uses_final_global_prefix_paths() {
         .contains_key("/api/v1/openapi.json"));
 }
 
+#[tokio::test]
+async fn openapi_ui_serves_html_and_document_route() {
+    let app = BootApplication::builder()
+        .route(
+            RouteDefinition::get_json("/cats", |_| async {
+                Ok(OpenApiCatDto {
+                    id: "cat-1".to_string(),
+                    name: "Milo".to_string(),
+                })
+            })
+            .unwrap()
+            .with_tag("cats"),
+        )
+        .serve_openapi_ui(
+            "/docs",
+            "/docs/openapi.json",
+            OpenApiInfo::new("Cats <API>", "1.0.0"),
+        )
+        .build()
+        .unwrap();
+
+    let html = app
+        .call(BootRequest::new(HttpMethod::Get, "/docs"))
+        .await
+        .unwrap();
+    let document = app
+        .call(BootRequest::new(HttpMethod::Get, "/docs/openapi.json"))
+        .await
+        .unwrap()
+        .body_json::<Value>()
+        .unwrap();
+
+    assert_eq!(
+        html.header("content-type"),
+        Some("text/html; charset=utf-8")
+    );
+    let html = html.body_text().unwrap();
+    assert!(html.contains("SwaggerUIBundle"));
+    assert!(html.contains(r#"url: "/docs/openapi.json""#));
+    assert!(html.contains("Cats &lt;API&gt;"));
+    assert!(document["paths"].as_object().unwrap().contains_key("/cats"));
+    assert!(!document["paths"].as_object().unwrap().contains_key("/docs"));
+    assert!(!document["paths"]
+        .as_object()
+        .unwrap()
+        .contains_key("/docs/openapi.json"));
+}
+
+#[tokio::test]
+async fn openapi_ui_uses_global_prefix_for_html_and_document_urls() {
+    let app = BootApplication::builder()
+        .global_prefix("/api")
+        .route(RouteDefinition::get("/health", |_| async { Ok(BootResponse::text("ok")) }).unwrap())
+        .serve_openapi_ui(
+            "/docs",
+            "/docs/openapi.json",
+            OpenApiInfo::new("Cats API", "1.0.0"),
+        )
+        .build()
+        .unwrap();
+
+    assert!(app.routes().iter().any(|route| route.path() == "/api/docs"));
+    assert!(app
+        .routes()
+        .iter()
+        .any(|route| route.path() == "/api/docs/openapi.json"));
+
+    let html = app
+        .call(BootRequest::new(HttpMethod::Get, "/api/docs"))
+        .await
+        .unwrap()
+        .body_text()
+        .unwrap();
+    let document = app
+        .call(BootRequest::new(HttpMethod::Get, "/api/docs/openapi.json"))
+        .await
+        .unwrap()
+        .body_json::<Value>()
+        .unwrap();
+
+    assert!(html.contains(r#"url: "/api/docs/openapi.json""#));
+    assert!(document["paths"]
+        .as_object()
+        .unwrap()
+        .contains_key("/api/health"));
+    assert!(!document["paths"]
+        .as_object()
+        .unwrap()
+        .contains_key("/api/docs"));
+}
+
 #[derive(Debug, serde::Deserialize)]
 struct OpenApiCreateCatDto {
     name: String,

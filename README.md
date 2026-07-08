@@ -867,10 +867,11 @@ default version when one is set with `.with_default_version("1")`.
 
 Boot can generate an OpenAPI 3 document from resolved routes. Route metadata is
 adapter-neutral and can be added with builder methods or Nest-style metadata
-macros. `serve_openapi(...)` mounts a generated JSON document without including
-that document route in its own output. Schema components can be registered
-manually, or generated from `schemars::JsonSchema` when the `openapi-schemas`
-feature is enabled.
+macros. `serve_openapi(...)` mounts a generated JSON document, and
+`serve_openapi_ui(...)` mounts both that JSON document and a Swagger UI page
+without including either helper route in its own output. Schema components can
+be registered manually, or generated from `schemars::JsonSchema` when the
+`openapi-schemas` feature is enabled.
 
 ```rust
 use a3s_boot::{
@@ -906,6 +907,20 @@ let app = BootApplication::builder()
 
 let document = app.openapi(OpenApiInfo::new("Cats API", "1.0.0"));
 let json = serde_json::to_value(document)?;
+```
+
+Use `serve_openapi_ui("/docs", "/docs/openapi.json", info)` for a Swagger UI
+route backed by the generated JSON document:
+
+```rust
+let app = BootApplication::builder()
+    .route(route)
+    .serve_openapi_ui(
+        "/docs",
+        "/docs/openapi.json",
+        OpenApiInfo::new("Cats API", "1.0.0"),
+    )
+    .build()?;
 ```
 
 Path parameters are inferred from `{name}` route segments and documented as

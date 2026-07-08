@@ -2,6 +2,7 @@ use super::application::BootApplication;
 use super::lazy::LazyModuleLoader;
 use super::registration::{ModuleRegistrationSink, ModuleRegistry};
 use crate::pipeline::PipelineComponents;
+use crate::routing::path::join_paths;
 #[cfg(feature = "auth")]
 use crate::AuthGuard;
 use crate::{
@@ -36,6 +37,7 @@ pub struct BootApplicationBuilder {
     global_prefix: Option<String>,
     api_versioning: Option<ApiVersioning>,
     openapi_routes: Vec<(String, OpenApiInfo)>,
+    openapi_ui_routes: Vec<OpenApiUiRoute>,
     provider_overrides: BTreeMap<ProviderToken, ProviderDefinition>,
     #[cfg(feature = "security")]
     cors_preflight: Option<CorsPreflightRoute>,
@@ -82,6 +84,21 @@ impl BootApplicationBuilder {
     /// Serve a generated OpenAPI document at the given path.
     pub fn serve_openapi(mut self, path: impl Into<String>, info: OpenApiInfo) -> Self {
         self.openapi_routes.push((path.into(), info));
+        self
+    }
+
+    /// Serve a generated OpenAPI document and a Swagger UI page for it.
+    pub fn serve_openapi_ui(
+        mut self,
+        path: impl Into<String>,
+        document_path: impl Into<String>,
+        info: OpenApiInfo,
+    ) -> Self {
+        self.openapi_ui_routes.push(OpenApiUiRoute {
+            path: path.into(),
+            document_path: document_path.into(),
+            info,
+        });
         self
     }
 
@@ -346,6 +363,15 @@ impl BootApplicationBuilder {
             };
             routes.push(route);
         }
+        for ui in self.openapi_ui_routes {
+            add_openapi_ui_routes(
+                &mut routes,
+                ui,
+                &documented_routes,
+                self.global_prefix.as_deref(),
+                &self.global_pipeline,
+            )?;
+        }
 
         #[cfg(feature = "security")]
         if let Some(cors_preflight) = &self.cors_preflight {
@@ -442,6 +468,15 @@ impl BootApplicationBuilder {
             };
             routes.push(route);
         }
+        for ui in self.openapi_ui_routes {
+            add_openapi_ui_routes(
+                &mut routes,
+                ui,
+                &documented_routes,
+                self.global_prefix.as_deref(),
+                &self.global_pipeline,
+            )?;
+        }
 
         #[cfg(feature = "security")]
         if let Some(cors_preflight) = &self.cors_preflight {
@@ -470,6 +505,13 @@ impl BootApplicationBuilder {
     }
 }
 
+#[derive(Clone)]
+struct OpenApiUiRoute {
+    path: String,
+    document_path: String,
+    info: OpenApiInfo,
+}
+
 fn apply_global_gateway_prefix(
     gateways: Vec<WebSocketGatewayDefinition>,
     prefix: Option<&str>,
@@ -489,6 +531,97 @@ fn openapi_json_route(path: String, document: OpenApiDocument) -> Result<RouteDe
         async move { BootResponse::json(&document) }
     })
     .map(RouteDefinition::hide_from_openapi)
+}
+
+fn add_openapi_ui_routes(
+    routes: &mut Vec<RouteDefinition>,
+    ui: OpenApiUiRoute,
+    documented_routes: &[RouteDefinition],
+    global_prefix: Option<&str>,
+    pipeline: &PipelineComponents,
+) -> Result<()> {
+    let document = OpenApiDocument::from_routes(ui.info.clone(), documented_routes);
+    let document_path = ui.document_path;
+    let ui_path = ui.path;
+    let public_document_path = prefixed_public_path(global_prefix, &document_path)?;
+    let json_route = openapi_json_route(document_path, document)?.with_pipeline_prefix(pipeline);
+    let ui_route =
+        openapi_ui_route(ui_path, public_document_path, ui.info)?.with_pipeline_prefix(pipeline);
+
+    let json_route = match global_prefix {
+        Some(prefix) => json_route.with_path_prefix(prefix)?,
+        None => json_route,
+    };
+    let ui_route = match global_prefix {
+        Some(prefix) => ui_route.with_path_prefix(prefix)?,
+        None => ui_route,
+    };
+    routes.push(json_route);
+    routes.push(ui_route);
+    Ok(())
+}
+
+fn openapi_ui_route(
+    path: String,
+    document_path: String,
+    info: OpenApiInfo,
+) -> Result<RouteDefinition> {
+    RouteDefinition::get(path, move |_| {
+        let document_path = document_path.clone();
+        let title = info.title.clone();
+        async move { Ok(openapi_ui_response(&title, &document_path)) }
+    })
+    .map(RouteDefinition::hide_from_openapi)
+}
+
+fn openapi_ui_response(title: &str, document_path: &str) -> BootResponse {
+    BootResponse::text_with_status(200, openapi_ui_html(title, document_path))
+        .with_header("content-type", "text/html; charset=utf-8")
+}
+
+fn openapi_ui_html(title: &str, document_path: &str) -> String {
+    format!(
+        r##"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>{title}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    window.ui = SwaggerUIBundle({{
+      url: {document_path:?},
+      dom_id: "#swagger-ui",
+      deepLinking: true,
+      presets: [SwaggerUIBundle.presets.apis],
+      layout: "BaseLayout"
+    }});
+  </script>
+</body>
+</html>"##,
+        title = escape_html(title),
+        document_path = document_path
+    )
+}
+
+fn prefixed_public_path(global_prefix: Option<&str>, path: &str) -> Result<String> {
+    match global_prefix {
+        Some(prefix) => join_paths(prefix, path),
+        None => Ok(path.to_string()),
+    }
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
 }
 
 #[cfg(feature = "security")]
