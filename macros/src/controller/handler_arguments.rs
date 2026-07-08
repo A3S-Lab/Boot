@@ -1,4 +1,4 @@
-use super::input::{Extractor, MethodArg, RouteMethodInput, SingleValueExtractor};
+use super::input::{BodyExtractor, Extractor, MethodArg, RouteMethodInput, SingleValueExtractor};
 use crate::file_upload;
 use crate::option_inner_type;
 use quote::quote;
@@ -12,7 +12,8 @@ pub(super) struct ExtractedArguments {
 }
 
 pub(super) fn extracted_arguments(input: RouteMethodInput) -> Result<ExtractedArguments> {
-    let mut body_arg: Option<Ident> = None;
+    let mut whole_body_arg: Option<Ident> = None;
+    let mut body_field_arg: Option<Ident> = None;
     let mut multipart_arg: Option<Ident> = None;
     let mut response_arg: Option<Ident> = None;
     let mut extractors = Vec::new();
@@ -26,26 +27,45 @@ pub(super) fn extracted_arguments(input: RouteMethodInput) -> Result<ExtractedAr
             )
         })?;
 
-        if matches!(extractor, Extractor::Body) {
+        if let Extractor::Body(body) = &extractor {
             if multipart_arg.is_some() {
                 return Err(syn::Error::new_spanned(
                     arg.ident,
                     "route methods cannot combine #[body] with multipart upload extractors",
                 ));
             }
-            if let Some(existing) = body_arg {
-                return Err(syn::Error::new_spanned(
-                    existing,
-                    "route methods can accept at most one #[body] argument",
-                ));
+            match body {
+                BodyExtractor::Whole => {
+                    if let Some(existing) = whole_body_arg {
+                        return Err(syn::Error::new_spanned(
+                            existing,
+                            "route methods can accept at most one whole #[body] argument",
+                        ));
+                    }
+                    if let Some(existing) = &body_field_arg {
+                        return Err(syn::Error::new_spanned(
+                            existing,
+                            "route methods cannot combine whole #[body] arguments with #[body(\"field\")] arguments",
+                        ));
+                    }
+                    whole_body_arg = Some(arg.ident.clone());
+                }
+                BodyExtractor::Field(_) => {
+                    if let Some(existing) = &whole_body_arg {
+                        return Err(syn::Error::new_spanned(
+                            existing,
+                            "route methods cannot combine whole #[body] arguments with #[body(\"field\")] arguments",
+                        ));
+                    }
+                    body_field_arg.get_or_insert_with(|| arg.ident.clone());
+                }
             }
-            body_arg = Some(arg.ident.clone());
         }
         if matches!(
             extractor,
             Extractor::UploadedFile(_) | Extractor::UploadedFiles(_)
         ) {
-            if body_arg.is_some() {
+            if whole_body_arg.is_some() || body_field_arg.is_some() {
                 return Err(syn::Error::new_spanned(
                     arg.ident,
                     "route methods cannot combine multipart upload extractors with #[body]",
@@ -97,10 +117,11 @@ pub(super) fn extracted_arguments(input: RouteMethodInput) -> Result<ExtractedAr
 fn extractor_tokens(arg: MethodArg, extractor: Extractor) -> proc_macro2::TokenStream {
     let MethodArg { ident, ty, .. } = arg;
     match extractor {
-        Extractor::Body => quote! {
+        Extractor::Body(BodyExtractor::Whole) => quote! {
             __a3s_boot_request.require_json_content_type()?;
             let #ident: #ty = __a3s_boot_request.json::<#ty>()?;
         },
+        Extractor::Body(BodyExtractor::Field(spec)) => body_field_extractor_tokens(ident, ty, spec),
         Extractor::Request => quote! {
             let #ident: #ty = __a3s_boot_request.clone();
         },
@@ -224,6 +245,39 @@ fn extractor_tokens(arg: MethodArg, extractor: Extractor) -> proc_macro2::TokenS
             let #ident: #ty = ::a3s_boot::extract_request_value::<#ty, _>(&__a3s_boot_request, #extractor)?;
         },
     }
+}
+
+fn body_field_extractor_tokens(
+    ident: Ident,
+    ty: Box<Type>,
+    spec: SingleValueExtractor,
+) -> proc_macro2::TokenStream {
+    let SingleValueExtractor {
+        name,
+        pipe,
+        default,
+    } = spec;
+    let uses_pipe = pipe.is_some();
+    single_value_extractor_tokens(
+        ident,
+        ty,
+        pipe,
+        default,
+        |value_ty| {
+            if uses_pipe {
+                quote!(__a3s_boot_request.body_field_string(#name))
+            } else {
+                quote!(__a3s_boot_request.body_field_as::<#value_ty>(#name))
+            }
+        },
+        |value_ty| {
+            if uses_pipe {
+                quote!(__a3s_boot_request.optional_body_field_string(#name))
+            } else {
+                quote!(__a3s_boot_request.optional_body_field_as::<#value_ty>(#name))
+            }
+        },
+    )
 }
 
 fn single_value_extractor_tokens<Required, Optional>(

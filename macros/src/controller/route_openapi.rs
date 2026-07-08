@@ -1,4 +1,4 @@
-use super::input::{Extractor, RouteMethodInput};
+use super::input::{BodyExtractor, Extractor, RouteMethodInput};
 use super::routing::RouteFlavor;
 use crate::file_upload;
 use crate::openapi::schema_tokens as openapi_schema_tokens;
@@ -58,6 +58,9 @@ fn extractor_openapi_tokens(
     if let Some(token) = uploaded_files_openapi_token(input) {
         tokens.push(token);
     }
+    if let Some(token) = body_fields_openapi_token(input) {
+        tokens.push(token);
+    }
 
     for arg in &input.args {
         let Some(extractor) = &arg.extractor else {
@@ -65,12 +68,13 @@ fn extractor_openapi_tokens(
         };
 
         match extractor {
-            Extractor::Body => {
+            Extractor::Body(BodyExtractor::Whole) => {
                 let schema = openapi_schema_tokens(&arg.ty);
                 tokens.push(quote! {
                     with_json_request_body(#schema)
                 });
             }
+            Extractor::Body(BodyExtractor::Field(_)) => {}
             Extractor::Param(spec) => tokens.push(single_value_extractor_openapi_tokens(
                 &spec.name,
                 &arg.ty,
@@ -118,6 +122,36 @@ fn extractor_openapi_tokens(
     }
 
     tokens
+}
+
+fn body_fields_openapi_token(input: &RouteMethodInput) -> Option<proc_macro2::TokenStream> {
+    let mut properties = Vec::new();
+    let mut required = Vec::new();
+
+    for arg in &input.args {
+        let Some(Extractor::Body(BodyExtractor::Field(spec))) = &arg.extractor else {
+            continue;
+        };
+        let name = &spec.name;
+        let schema = single_value_extractor_schema(&arg.ty, spec.pipe.as_ref());
+        properties.push(quote! {
+            (#name, #schema)
+        });
+        if spec.default.is_none() && single_value_extractor_required(&arg.ty) {
+            required.push(name);
+        }
+    }
+
+    if properties.is_empty() {
+        return None;
+    }
+
+    Some(quote! {
+        with_json_request_body(::a3s_boot::OpenApiSchema::object_with_properties(
+            [#(#properties),*],
+            [#(#required),*],
+        ))
+    })
 }
 
 fn single_value_extractor_schema_type(extractor_ty: &Type, pipe: Option<&Expr>) -> Type {

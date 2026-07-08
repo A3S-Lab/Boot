@@ -1,4 +1,4 @@
-use super::input::{Extractor, RouteMethodInput};
+use super::input::{BodyExtractor, Extractor, RouteMethodInput};
 use super::routing::RouteFlavor;
 use crate::validation::AttrOptions as ValidationAttrOptions;
 use quote::quote;
@@ -70,7 +70,7 @@ fn extractor_validation_tokens(
         let ty = &arg.ty;
 
         match extractor {
-            Extractor::Body => {
+            Extractor::Body(BodyExtractor::Whole) => {
                 if use_options {
                     tokens.push(quote! {
                         with_body_validation_options::<#ty>(#options_token)
@@ -81,6 +81,7 @@ fn extractor_validation_tokens(
                     });
                 }
             }
+            Extractor::Body(BodyExtractor::Field(_)) => {}
             Extractor::Params => {
                 if use_options {
                     tokens.push(quote! {

@@ -50,13 +50,14 @@ Implemented today:
   method routes with exact-method precedence.
 - Nest-style attribute macros: `#[module]`, `#[injectable]`, `#[controller]`,
   `#[all]`, `#[get]`, `#[post]`, `#[put]`, `#[patch]`, `#[delete]`, `#[sse]`,
-  raw route mode, and method argument extractors including `#[body]`, `#[request]`,
-  `#[param("name")]`, `#[params]`, `#[query]`, `#[query("name")]`,
-  `#[header("name")]`, `#[headers]`, `#[host_param("name")]`, `#[ip]`, and
-  custom `#[extract(...)]` request value binding. Single-value extractors can
-  also run Nest-style parameter pipes through `pipe = <expr>`, for example
-  `#[param("id", pipe = parse_cat_id)]` and
-  `#[query("page", pipe = parse_page)]`, plus `#[host]` for
+  raw route mode, and method argument extractors including `#[body]`,
+  `#[body("name")]`, `#[request]`, `#[param("name")]`, `#[params]`, `#[query]`,
+  `#[query("name")]`, `#[header("name")]`, `#[headers]`, `#[cookie("name")]`,
+  `#[cookies]`, `#[host_param("name")]`, `#[ip]`, and custom `#[extract(...)]`
+  request value binding. Single-value extractors can also run Nest-style
+  parameter pipes through `pipe = <expr>`, for example
+  `#[param("id", pipe = parse_cat_id)]`, `#[query("page", pipe = parse_page)]`,
+  and `#[body("page", pipe = ParseIntPipe)]`, plus `#[host]` for
   host-scoped controllers and routes, `#[metadata]` for
   Nest-style custom route/controller metadata and `#[http_code]` for Nest-style
   response status metadata, `#[header]` for response headers, and `#[redirect]`
@@ -117,6 +118,9 @@ Implemented today:
 - Nest-style request cookie binding with typed `BootRequest` cookie helpers,
   `#[cookie("name")]`, `#[cookies]`, pipe/default support for one cookie value,
   and OpenAPI cookie parameter metadata.
+- Nest-style JSON body field binding with typed `BootRequest` body field helpers,
+  `#[body("name")]`, pipe/default support for one body field value, and
+  automatic OpenAPI JSON object request-body metadata.
 - Nest-style runtime discovery and devtools-ready application graph snapshots
   for modules, imports, provider tokens, exports, route counts, WebSocket
   gateway counts, and microservice message pattern counts.
@@ -242,6 +246,7 @@ a separate companion crate rather than part of the core parity plan.
 Nest equivalent:
 
 - `@Body()`
+- `@Body("field")`
 - `@Param("id")`
 - `@HostParam("account")`
 - `@Query()`
@@ -791,6 +796,8 @@ Acceptance:
   adapter-native response objects. (Covered)
 - Request cookies can be read through typed `BootRequest` helpers and bound
   through Nest-style `#[cookie]` and `#[cookies]` arguments. (Covered)
+- JSON body fields can be read through typed `BootRequest` helpers and bound
+  through Nest-style `#[body("field")]` arguments. (Covered)
 - Testing utilities can compile Nest-style testing modules, override providers
   before controllers are built, resolve providers, and dispatch in-process
   requests. (Covered)

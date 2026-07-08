@@ -308,7 +308,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@Query("page", new DefaultValuePipe(1), ParseIntPipe)` | `#[query("page", default = 1, pipe = ParseIntPipe)]` |
 | `@Query("ids", new ParseArrayPipe({ separator: "," }))` | `#[query("ids", pipe = ParseArrayPipe)]` on a `Vec<T>` argument |
 | `@Query("kind", ParseEnumPipe)` | `#[query("kind", pipe = ParseEnumPipe)]` on an enum argument that implements `FromStr` |
-| `@Body()` | `#[body]` on a JSON body DTO argument |
+| `@Body()` / `@Body("name")` | `#[body]` for a JSON DTO or `#[body("name")]` for one JSON body field |
 | `@Headers("x-request-id")` | `#[header("x-request-id")]` on a method argument |
 | `@Cookie("sid")` / `@Cookies()` | `#[cookie("sid")]` for one cookie or `#[cookies]` for the request cookie map |
 | `@Ip()` | `#[ip]` on a method argument |
@@ -534,23 +534,24 @@ should usually be listed in `providers` as injectables. GET, POST, PUT, PATCH,
 and DELETE route attributes default to JSON.
 Use extractor attributes on method arguments for Nest-style request binding:
 `#[param("id")]`, `#[params]`, `#[query]`, `#[query("name")]`, `#[body]`,
-`#[header("name")]`, `#[headers]`, `#[cookie("name")]`, `#[cookies]`,
-`#[host_param("account")]`, `#[ip]`, and `#[request]`. `#[res]` injects a
-`ResponsePassthrough` handle for Nest-style response passthrough metadata: set
-status codes, headers, and cookies while still returning a DTO or
+`#[body("name")]`, `#[header("name")]`, `#[headers]`, `#[cookie("name")]`,
+`#[cookies]`, `#[host_param("account")]`, `#[ip]`, and `#[request]`. `#[res]`
+injects a `ResponsePassthrough` handle for Nest-style response passthrough
+metadata: set status codes, headers, and cookies while still returning a DTO or
 `BootResponse` through the normal Boot pipeline. With the `session` feature
 enabled, `#[session]` mirrors Nest's `@Session()` parameter decorator.
-Single-value extractors parse into the argument type with `FromStr`, so
-`#[param("id")] id: u64`, `#[query("active")] active: bool`, and
+Single-value extractors parse into the argument type with `FromStr` or JSON
+field deserialization. For example, `#[param("id")] id: u64`,
+`#[query("active")] active: bool`, `#[body("age")] age: u8`, and
 `#[cookie("page")] page: u16` work without a separate parse pipe. For custom
-Nest-style parameter pipes, add `pipe = <expr>` to `#[param]`,
-`#[query("name")]`, `#[header]`, `#[cookie]`, `#[host_param]`, or `#[ip]`; the
-pipe receives the raw `String` and returns `Result<T>`. Boot also includes
-`ParseIntPipe`, `ParseBoolPipe`,
-`ParseFloatPipe`, `ParseArrayPipe`, `ParseEnumPipe`, and `ParseUuidPipe` for
-common request value parsing, plus `default = <expr>` for
-DefaultValuePipe-style fallbacks on missing query, header, cookie, host, or
-path values:
+Nest-style parameter pipes, add
+`pipe = <expr>` to `#[param]`, `#[query("name")]`, `#[body("name")]`,
+`#[header]`, `#[cookie]`, `#[host_param]`, or `#[ip]`; the pipe receives the raw
+`String` and returns `Result<T>`. Boot also includes `ParseIntPipe`,
+`ParseBoolPipe`, `ParseFloatPipe`, `ParseArrayPipe`, `ParseEnumPipe`, and
+`ParseUuidPipe` for common request value parsing, plus `default = <expr>` for
+DefaultValuePipe-style fallbacks on missing query, JSON body field, header,
+cookie, host, or path values:
 
 ```rust
 #[derive(Debug)]
@@ -593,6 +594,21 @@ async fn find(
     #[query("kind", pipe = ParseEnumPipe)] kind: CatKind,
 ) -> Result<CatDto> {
     self.cats.find(id, legacy_id, page, active, ids, kind).await
+}
+```
+
+JSON body fields can be bound directly when a route does not need a dedicated
+DTO:
+
+```rust
+#[post("/cats")]
+async fn create(
+    &self,
+    #[body("name")] name: String,
+    #[body("age")] age: Option<u8>,
+    #[body("page", default = 1, pipe = ParseIntPipe)] page: u16,
+) -> Result<CatDto> {
+    self.cats.create_from_fields(name, age, page).await
 }
 ```
 
@@ -4863,6 +4879,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | File response | Streamable file and download helpers through `StreamableFile` and `BootResponse` |
 | Static assets | Optional provider-backed static file module for assets and SPA fallback |
 | Security | Optional CORS, security headers, CSRF, and rate limiting helpers |
+| Request body fields | Typed `BootRequest` JSON body field helpers plus `#[body("field")]` argument binding |
 | Request cookies | Typed `BootRequest` cookie helpers plus `#[cookie]` and `#[cookies]` argument binding |
 | Session | Optional provider-backed session store, middleware, and cookie persistence |
 | Response cookies | Typed `Set-Cookie` and delete-cookie helpers on `BootResponse` |

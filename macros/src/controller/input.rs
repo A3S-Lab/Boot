@@ -97,7 +97,7 @@ impl MethodArg {
 
 #[derive(Clone)]
 pub(crate) enum Extractor {
-    Body,
+    Body(BodyExtractor),
     Request,
     Params,
     Param(SingleValueExtractor),
@@ -113,6 +113,12 @@ pub(crate) enum Extractor {
     UploadedFile(file_upload::UploadedFileExtractor),
     UploadedFiles(file_upload::UploadedFileExtractor),
     Custom(Expr),
+}
+
+#[derive(Clone)]
+pub(crate) enum BodyExtractor {
+    Whole,
+    Field(SingleValueExtractor),
 }
 
 #[derive(Clone)]
@@ -136,8 +142,7 @@ impl Extractor {
         };
 
         let extractor = if ident == "body" {
-            expect_no_extractor_args(attr, "body")?;
-            Self::Body
+            Self::Body(parse_body_extractor(attr)?)
         } else if ident == "request" {
             expect_no_extractor_args(attr, "request")?;
             Self::Request
@@ -185,6 +190,13 @@ impl Extractor {
         };
 
         Ok(Some(extractor))
+    }
+}
+
+fn parse_body_extractor(attr: &Attribute) -> Result<BodyExtractor> {
+    match &attr.meta {
+        syn::Meta::Path(_) => Ok(BodyExtractor::Whole),
+        _ => parse_single_value_extractor(attr, "body").map(BodyExtractor::Field),
     }
 }
 
