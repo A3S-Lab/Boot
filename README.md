@@ -85,6 +85,15 @@ serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
+Enable the optional request context module when services need Nest-style
+AsyncLocalStorage-like access to the current request:
+
+```toml
+[dependencies]
+a3s-boot = { version = "0.1", features = ["request-context"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
 Enable the optional scheduler module when the application needs Nest-style
 scheduled jobs:
 
@@ -3156,6 +3165,65 @@ provider through `ModuleRef`. `RequestLoggingMiddleware` logs incoming requests
 before the pipeline; `RequestLoggingInterceptor` logs route start/completion and
 response status after the handler.
 
+## Request Context
+
+Enable the `request-context` feature to use `RequestContext`, Boot's
+task-local equivalent of Nest's AsyncLocalStorage recipes. During an HTTP route
+execution, middleware, guards, interceptors, pipes, handlers, and provider
+methods called from that async chain can read the current request without
+threading `BootRequest` through every function.
+
+```rust
+use std::sync::Arc;
+
+use a3s_boot::{
+    BootApplication, BootRequest, BootResponse, HttpMethod, MiddlewareOutcome,
+    RequestContext, Result, RouteDefinition,
+};
+
+#[derive(Debug)]
+struct CatsService;
+
+impl CatsService {
+    fn describe_current_request(&self) -> Result<String> {
+        let context = RequestContext::current()?;
+        Ok(format!(
+            "{} {} {}",
+            context.method().as_str(),
+            context.request_id().unwrap_or("missing-request-id"),
+            context.param("id").unwrap_or("missing-id"),
+        ))
+    }
+}
+
+let service = Arc::new(CatsService);
+let app = BootApplication::builder()
+    .route(
+        RouteDefinition::get("/cats/{id}", move |_| {
+            let service = Arc::clone(&service);
+            async move { Ok(BootResponse::text(service.describe_current_request()?)) }
+        })?
+        .with_middleware(|request: BootRequest| async move {
+            RequestContext::current()?.set_value("tenant", "north")?;
+            Ok(MiddlewareOutcome::next(request))
+        }),
+    )
+    .build()?;
+
+let response = app
+    .call(
+        BootRequest::new(HttpMethod::Get, "/cats/1")
+            .with_header("x-request-id", "request-1"),
+    )
+    .await?;
+```
+
+`RequestContext::current()` returns the active context or an error when called
+outside a route scope. The context exposes method, request path, route path,
+request id, params, query values, headers, route metadata, and a small
+serde-backed value map for pipeline-local data. When `auth` is also enabled,
+`AuthGuard` copies the authenticated principal into the active request context.
+
 ## Middleware
 
 Middleware runs after route matching and path parameter decoding, but before
@@ -4049,6 +4117,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | ModuleRef | Typed provider container used by controllers and hosts |
 | Testing module | Test-only module compilation with provider overrides and in-process calls |
 | Discovery/Reflector | Runtime snapshots and metadata lookup for modules, routes, gateways, and message patterns |
+| Request context | Optional task-local request state through `RequestContext` |
 | HTTP adapter | Replaceable backend adapter; Axum is the first implementation |
 | Controller | Typed request handlers grouped by route prefix |
 | Provider | Injectable service or repository dependency |
@@ -4110,6 +4179,7 @@ src/
 ├── pipeline/     # Middleware, pipes, guards, interceptors, filters, and execution context
 ├── provider/     # Provider tokens, definitions, and ModuleRef container
 ├── queue.rs      # Optional provider-backed queue and in-process backend
+├── request_context.rs # Optional task-local request context
 ├── routing/      # Route handlers, controllers, route execution, and path matching
 ├── schedule.rs   # Optional provider-backed scheduler and in-process backend
 ├── security.rs   # Optional CORS, security headers, CSRF, and rate limiting helpers

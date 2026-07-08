@@ -86,6 +86,9 @@ Implemented today:
   route-level override semantics, protocol-neutral `ExecutionContext` access
   for HTTP, WebSocket, and transport guards/interceptors, and typed `Reflector`
   lookup from discovery snapshots.
+- Optional task-local request context with `RequestContext`, request id,
+  path/param/query/header/metadata access, pipeline-local values, and auth
+  principal propagation when authentication is enabled.
 - DTO validation with `Validate`, body/query/params validation hooks, global,
   controller-level, route-level validation switches, and `#[validate]` /
   `#[skip_validation]` macros.
@@ -558,6 +561,7 @@ Nest equivalent areas:
 - CQRS command, query, and event buses (implemented)
 - authentication strategies and guards (implemented)
 - database providers and transactions (implemented)
+- request context / AsyncLocalStorage-style request state (implemented)
 - health checks (implemented)
 - outbound HTTP client module (implemented)
 - logging (implemented)
@@ -599,6 +603,10 @@ Acceptance:
   execute statements, query adapter-neutral rows, run commit/rollback
   transactions, support named/global exports, and expose an in-memory backend
   for tests. (Covered)
+- Request context can bind task-local request data across middleware, guards,
+  interceptors, pipes, handlers, and called provider methods; expose request id,
+  path params, query values, headers, metadata, pipeline-local values, and auth
+  principal data when authentication is enabled. (Covered)
 - Cache can register typed providers, cache serde values with TTL, and
   participate in module imports/exports. (Covered)
 - Schedule can register typed providers, run timeout/interval/cron jobs through

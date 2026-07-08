@@ -54,6 +54,25 @@ impl RouteDefinition {
             request = request.with_module_ref(module_ref.request_scope());
         }
 
+        #[cfg(feature = "request-context")]
+        {
+            let context = crate::RequestContext::from_route_request(
+                &request,
+                self.path.clone(),
+                self.module_name.clone(),
+                self.controller_prefix.clone(),
+                self.metadata.clone(),
+            );
+            return crate::RequestContext::scope(context, self.call_pipeline(request)).await;
+        }
+
+        #[cfg(not(feature = "request-context"))]
+        {
+            self.call_pipeline(request).await
+        }
+    }
+
+    async fn call_pipeline(&self, mut request: BootRequest) -> Result<BootResponse> {
         for middleware in &self.middleware {
             let context_request = request.clone();
             request = match middleware.handle(request).await {

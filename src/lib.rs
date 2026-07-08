@@ -43,6 +43,8 @@ mod pipeline;
 mod provider;
 #[cfg(feature = "queue")]
 mod queue;
+#[cfg(feature = "request-context")]
+mod request_context;
 mod routing;
 #[cfg(feature = "schedule")]
 mod schedule;
@@ -156,6 +158,8 @@ pub use queue::{
     QueueJobInfo, QueueJobReceipt, QueueJobState, QueueModule, QueueOptions, QueueProcessor,
     QueueStats,
 };
+#[cfg(feature = "request-context")]
+pub use request_context::RequestContext;
 pub use routing::{ControllerDefinition, RouteDefinition, RouteHandler};
 #[cfg(feature = "schedule")]
 pub use schedule::{

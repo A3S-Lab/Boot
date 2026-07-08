@@ -498,6 +498,10 @@ impl Guard for AuthGuard {
             }
 
             context.request.set_auth_principal(principal)?;
+            #[cfg(feature = "request-context")]
+            if let Some(request_context) = crate::RequestContext::try_current() {
+                request_context.set_auth_principal(context.request.require_auth_principal()?)?;
+            }
             Ok(true)
         })
     }
