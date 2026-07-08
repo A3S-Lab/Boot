@@ -1613,6 +1613,10 @@ request scope, request-scoped providers behave like a fresh resolution. Provider
 aliases mirror Nest's `useExisting`: the alias token delegates to the target
 token and preserves the target provider's scope.
 
+During transient and request-scoped provider resolution, Boot tracks the active
+provider chain and reports circular dependencies with the full token path, for
+example `cyclic provider dependency detected: cats -> repository -> cats`.
+
 ```rust
 use std::sync::Arc;
 

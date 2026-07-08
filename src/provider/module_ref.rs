@@ -11,11 +11,51 @@ pub struct ModuleRef {
     providers: Arc<RwLock<BTreeMap<ProviderToken, ProviderEntry>>>,
     visible_scopes: Arc<RwLock<Vec<ModuleRef>>>,
     request_cache: Option<ProviderCache>,
+    resolution_stack: Option<ProviderResolutionStack>,
 }
 
 type ProviderCache = Arc<RwLock<BTreeMap<ProviderCacheKey, Arc<AnyProvider>>>>;
+type ProviderResolutionStack = Arc<RwLock<Vec<ProviderToken>>>;
 
 static NEXT_PROVIDER_CACHE_KEY: AtomicU64 = AtomicU64::new(1);
+
+fn new_resolution_stack() -> ProviderResolutionStack {
+    Arc::new(RwLock::new(Vec::new()))
+}
+
+fn enter_resolution_stack(
+    resolution_stack: &ProviderResolutionStack,
+    token: &ProviderToken,
+) -> Result<()> {
+    let mut stack = resolution_stack.write().map_err(|_| {
+        BootError::Internal("provider resolution stack lock is poisoned".to_string())
+    })?;
+    if let Some(index) = stack.iter().position(|active| active == token) {
+        let mut chain = stack[index..].to_vec();
+        chain.push(token.clone());
+        let chain = chain
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(" -> ");
+        return Err(BootError::Internal(format!(
+            "cyclic provider dependency detected: {chain}"
+        )));
+    }
+
+    stack.push(token.clone());
+    Ok(())
+}
+
+fn exit_resolution_stack(resolution_stack: &ProviderResolutionStack) -> Result<()> {
+    let mut stack = resolution_stack.write().map_err(|_| {
+        BootError::Internal("provider resolution stack lock is poisoned".to_string())
+    })?;
+    stack
+        .pop()
+        .ok_or_else(|| BootError::Internal("provider resolution stack underflow".to_string()))?;
+    Ok(())
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct ProviderCacheKey(u64);
@@ -59,36 +99,31 @@ impl ProviderEntry {
         &self,
         module_ref: &ModuleRef,
         request_cache: Option<ProviderCache>,
+        resolution_stack: &ProviderResolutionStack,
         alias_path: &mut Vec<ProviderToken>,
     ) -> Result<Arc<AnyProvider>> {
         let base_ref = self.owner.as_ref().unwrap_or(module_ref);
         if let Some(target) = self.definition.alias_target() {
-            return self.resolve_alias(base_ref, target, request_cache, alias_path);
+            return self.resolve_alias(
+                base_ref,
+                target,
+                request_cache,
+                resolution_stack,
+                alias_path,
+            );
         }
 
         match self.scope() {
-            ProviderScope::Singleton => self.resolve_singleton(base_ref),
+            ProviderScope::Singleton => self.resolve_singleton(base_ref, resolution_stack),
             ProviderScope::Transient => {
-                let scoped_ref;
-                let factory_ref = match request_cache.clone() {
-                    Some(request_cache) => {
-                        scoped_ref = base_ref.with_request_cache(request_cache);
-                        &scoped_ref
-                    }
-                    None => base_ref,
-                };
-                self.definition.build(factory_ref)
+                let factory_ref =
+                    self.factory_ref(base_ref, request_cache.clone(), resolution_stack);
+                self.build_with_resolution_stack(&factory_ref, resolution_stack)
             }
             ProviderScope::Request => {
-                let scoped_ref;
-                let factory_ref = match request_cache.clone() {
-                    Some(request_cache) => {
-                        scoped_ref = base_ref.with_request_cache(request_cache);
-                        &scoped_ref
-                    }
-                    None => base_ref,
-                };
-                self.resolve_request(factory_ref, request_cache)
+                let factory_ref =
+                    self.factory_ref(base_ref, request_cache.clone(), resolution_stack);
+                self.resolve_request(&factory_ref, request_cache, resolution_stack)
             }
         }
     }
@@ -98,6 +133,7 @@ impl ProviderEntry {
         module_ref: &ModuleRef,
         target: &ProviderToken,
         request_cache: Option<ProviderCache>,
+        resolution_stack: &ProviderResolutionStack,
         alias_path: &mut Vec<ProviderToken>,
     ) -> Result<Arc<AnyProvider>> {
         if alias_path.contains(self.definition.token()) {
@@ -113,14 +149,22 @@ impl ProviderEntry {
         }
 
         alias_path.push(self.definition.token().clone());
-        let value =
-            module_ref.get_any_with_request_cache_inner(target, request_cache, alias_path)?;
+        let value = module_ref.get_any_with_request_cache_inner(
+            target,
+            request_cache,
+            resolution_stack,
+            alias_path,
+        )?;
         alias_path.pop();
 
         value.ok_or_else(|| BootError::MissingProvider(target.to_string()))
     }
 
-    fn resolve_singleton(&self, module_ref: &ModuleRef) -> Result<Arc<AnyProvider>> {
+    fn resolve_singleton(
+        &self,
+        module_ref: &ModuleRef,
+        resolution_stack: &ProviderResolutionStack,
+    ) -> Result<Arc<AnyProvider>> {
         if let Some(value) = self
             .read_cache(&self.singleton)?
             .get(&self.cache_key)
@@ -129,7 +173,8 @@ impl ProviderEntry {
             return Ok(value);
         }
 
-        let value = self.definition.build(module_ref)?;
+        let factory_ref = module_ref.with_resolution_stack(Arc::clone(resolution_stack));
+        let value = self.build_with_resolution_stack(&factory_ref, resolution_stack)?;
         self.write_cache(&self.singleton)?
             .insert(self.cache_key, Arc::clone(&value));
         Ok(value)
@@ -139,9 +184,10 @@ impl ProviderEntry {
         &self,
         module_ref: &ModuleRef,
         request_cache: Option<ProviderCache>,
+        resolution_stack: &ProviderResolutionStack,
     ) -> Result<Arc<AnyProvider>> {
         let Some(request_cache) = request_cache else {
-            return self.definition.build(module_ref);
+            return self.build_with_resolution_stack(module_ref, resolution_stack);
         };
 
         if let Some(value) = self
@@ -152,14 +198,23 @@ impl ProviderEntry {
             return Ok(value);
         }
 
-        let value = self.definition.build(module_ref)?;
+        let value = self.build_with_resolution_stack(module_ref, resolution_stack)?;
         self.write_cache(&request_cache)?
             .insert(self.cache_key, Arc::clone(&value));
         Ok(value)
     }
 
     async fn seed_singleton_async(&self, module_ref: ModuleRef) -> Result<()> {
-        let value = self.definition.build_async(module_ref).await?;
+        let resolution_stack = new_resolution_stack();
+        let module_ref = module_ref.with_resolution_stack(Arc::clone(&resolution_stack));
+        enter_resolution_stack(&resolution_stack, self.definition.token())?;
+        let result = self.definition.build_async(module_ref).await;
+        let exit_result = exit_resolution_stack(&resolution_stack);
+        let value = match (result, exit_result) {
+            (Ok(value), Ok(())) => value,
+            (Err(error), _) => return Err(error),
+            (Ok(_), Err(error)) => return Err(error),
+        };
         self.seed_singleton(value)
     }
 
@@ -174,7 +229,8 @@ impl ProviderEntry {
             return Ok(());
         };
 
-        let value = self.resolve_singleton(module_ref)?;
+        let resolution_stack = new_resolution_stack();
+        let value = self.resolve_singleton(module_ref, &resolution_stack)?;
         hook(value, module_ref)
     }
 
@@ -183,7 +239,8 @@ impl ProviderEntry {
             return Ok(());
         };
 
-        let value = self.resolve_singleton(&module_ref)?;
+        let resolution_stack = new_resolution_stack();
+        let value = self.resolve_singleton(&module_ref, &resolution_stack)?;
         hook(value, module_ref).await
     }
 
@@ -192,8 +249,37 @@ impl ProviderEntry {
             return Ok(());
         };
 
-        let value = self.resolve_singleton(&module_ref)?;
+        let resolution_stack = new_resolution_stack();
+        let value = self.resolve_singleton(&module_ref, &resolution_stack)?;
         hook(value, module_ref).await
+    }
+
+    fn factory_ref(
+        &self,
+        module_ref: &ModuleRef,
+        request_cache: Option<ProviderCache>,
+        resolution_stack: &ProviderResolutionStack,
+    ) -> ModuleRef {
+        let factory_ref = module_ref.with_resolution_stack(Arc::clone(resolution_stack));
+        match request_cache {
+            Some(request_cache) => factory_ref.with_request_cache(request_cache),
+            None => factory_ref,
+        }
+    }
+
+    fn build_with_resolution_stack(
+        &self,
+        module_ref: &ModuleRef,
+        resolution_stack: &ProviderResolutionStack,
+    ) -> Result<Arc<AnyProvider>> {
+        enter_resolution_stack(resolution_stack, self.definition.token())?;
+        let result = self.definition.build(module_ref);
+        let exit_result = exit_resolution_stack(resolution_stack);
+        match (result, exit_result) {
+            (Ok(value), Ok(())) => Ok(value),
+            (Err(error), _) => Err(error),
+            (Ok(_), Err(error)) => Err(error),
+        }
     }
 
     fn read_cache<'a>(
@@ -248,6 +334,16 @@ impl ModuleRef {
             providers: Arc::clone(&self.providers),
             visible_scopes: Arc::clone(&self.visible_scopes),
             request_cache: Some(request_cache),
+            resolution_stack: self.resolution_stack.clone(),
+        }
+    }
+
+    fn with_resolution_stack(&self, resolution_stack: ProviderResolutionStack) -> Self {
+        Self {
+            providers: Arc::clone(&self.providers),
+            visible_scopes: Arc::clone(&self.visible_scopes),
+            request_cache: self.request_cache.clone(),
+            resolution_stack: Some(resolution_stack),
         }
     }
 
@@ -262,8 +358,8 @@ impl ModuleRef {
 
         let entry = ProviderEntry::new(definition);
         if entry.scope() == ProviderScope::Singleton && !entry.definition.is_alias() {
-            let value = entry.definition.build(self)?;
-            entry.seed_singleton(value)?;
+            let resolution_stack = new_resolution_stack();
+            entry.resolve_singleton(self, &resolution_stack)?;
         }
         self.insert_entry(token, entry)
     }
@@ -444,23 +540,38 @@ impl ModuleRef {
 
     fn get_any(&self, token: &ProviderToken) -> Result<Option<Arc<AnyProvider>>> {
         let mut alias_path = Vec::new();
-        self.get_any_with_request_cache_inner(token, self.request_cache.clone(), &mut alias_path)
+        let resolution_stack = self
+            .resolution_stack
+            .clone()
+            .unwrap_or_else(new_resolution_stack);
+        self.get_any_with_request_cache_inner(
+            token,
+            self.request_cache.clone(),
+            &resolution_stack,
+            &mut alias_path,
+        )
     }
 
     fn get_any_with_request_cache_inner(
         &self,
         token: &ProviderToken,
         request_cache: Option<ProviderCache>,
+        resolution_stack: &ProviderResolutionStack,
         alias_path: &mut Vec<ProviderToken>,
     ) -> Result<Option<Arc<AnyProvider>>> {
         if let Some(entry) = self.read_providers()?.get(token).cloned() {
-            return entry.resolve(self, request_cache, alias_path).map(Some);
+            return entry
+                .resolve(self, request_cache, resolution_stack, alias_path)
+                .map(Some);
         }
 
         for scope in self.visible_scopes()? {
-            if let Some(value) =
-                scope.get_any_with_request_cache_inner(token, request_cache.clone(), alias_path)?
-            {
+            if let Some(value) = scope.get_any_with_request_cache_inner(
+                token,
+                request_cache.clone(),
+                resolution_stack,
+                alias_path,
+            )? {
                 return Ok(Some(value));
             }
         }

@@ -93,8 +93,9 @@ Implemented today:
 - Provider lifecycle scopes with default singleton providers, request-scoped
   providers cached per in-process request context, transient providers built per
   resolution, async singleton provider factories awaited during async graph
-  build, request-time lookup through `BootRequest`, and singleton provider
-  startup/shutdown hooks.
+  build, request-time lookup through `BootRequest`, transient/request-scoped
+  provider dependency cycle diagnostics, and singleton provider startup/shutdown
+  hooks.
 - Provider aliases that mirror Nest custom provider `useExisting` semantics and
   preserve target provider scope.
 - Request-scoped route/controller handler factories through `*_scoped` helpers.
@@ -382,6 +383,8 @@ Tasks:
   (Implemented)
 - Add request-scoped route/controller handler factories. (Implemented)
 - Add provider aliases comparable to Nest `useExisting`. (Implemented)
+- Add contextual diagnostics for transient and request-scoped provider
+  dependency cycles. (Implemented)
 
 Acceptance:
 
@@ -401,6 +404,8 @@ Acceptance:
   same request-scoped provider cache as `BootRequest::get(...)`. (Covered)
 - Provider aliases resolve the same singleton instance, preserve request-scoped
   resolution, and reject alias cycles with contextual errors. (Covered)
+- Transient and request-scoped provider cycles report the active token chain.
+  (Covered)
 
 ## Milestone 5: Middleware
 
@@ -579,8 +584,8 @@ framework capability. Keep GraphQL out of scope.
 
 Suggested implementation sequence:
 
-1. Add Nest-style module and provider diagnostics for circular dependencies,
-   lazy module loading, and clearer dependency graph errors.
+1. Continue Nest-style module and provider diagnostics with lazy module loading,
+   singleton provider graph ordering, and clearer module import cycle chains.
 2. Continue defining integrations through providers, middleware, guards,
    interceptors, or adapters instead of adding one-off framework hooks.
 3. Add crate-local tests and README examples for each chosen framework module.

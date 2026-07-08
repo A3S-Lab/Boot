@@ -392,6 +392,16 @@ struct RequestScopedAliasModule {
     calls: Arc<AtomicUsize>,
 }
 
+#[derive(Debug)]
+struct CircularA {
+    _b: Arc<CircularB>,
+}
+
+#[derive(Debug)]
+struct CircularB {
+    _a: Arc<CircularA>,
+}
+
 impl Module for RequestScopedAliasModule {
     fn name(&self) -> &'static str {
         "request-scoped-alias"
@@ -783,6 +793,73 @@ fn provider_alias_cycles_return_contextual_errors() {
         error,
         BootError::Internal(message)
             if message == "cyclic provider alias detected: alias-a -> alias-b -> alias-a"
+    ));
+}
+
+#[test]
+fn transient_provider_dependency_cycles_return_contextual_errors() {
+    let module_ref = ModuleRef::new();
+    module_ref
+        .register(ProviderDefinition::named_transient::<CircularA, _>(
+            "cycle-a",
+            |module_ref| {
+                Ok(CircularA {
+                    _b: module_ref.get_named::<CircularB>("cycle-b")?,
+                })
+            },
+        ))
+        .unwrap();
+    module_ref
+        .register(ProviderDefinition::named_transient::<CircularB, _>(
+            "cycle-b",
+            |module_ref| {
+                Ok(CircularB {
+                    _a: module_ref.get_named::<CircularA>("cycle-a")?,
+                })
+            },
+        ))
+        .unwrap();
+
+    let error = module_ref.get_named::<CircularA>("cycle-a").unwrap_err();
+
+    assert!(matches!(
+        error,
+        BootError::Internal(message)
+            if message == "cyclic provider dependency detected: cycle-a -> cycle-b -> cycle-a"
+    ));
+}
+
+#[test]
+fn request_scoped_provider_dependency_cycles_return_contextual_errors() {
+    let module_ref = ModuleRef::new();
+    module_ref
+        .register(ProviderDefinition::named_request_scoped::<CircularA, _>(
+            "cycle-a",
+            |module_ref| {
+                Ok(CircularA {
+                    _b: module_ref.get_named::<CircularB>("cycle-b")?,
+                })
+            },
+        ))
+        .unwrap();
+    module_ref
+        .register(ProviderDefinition::named_request_scoped::<CircularB, _>(
+            "cycle-b",
+            |module_ref| {
+                Ok(CircularB {
+                    _a: module_ref.get_named::<CircularA>("cycle-a")?,
+                })
+            },
+        ))
+        .unwrap();
+
+    let request_scope = module_ref.request_scope();
+    let error = request_scope.get_named::<CircularA>("cycle-a").unwrap_err();
+
+    assert!(matches!(
+        error,
+        BootError::Internal(message)
+            if message == "cyclic provider dependency detected: cycle-a -> cycle-b -> cycle-a"
     ));
 }
 
