@@ -89,7 +89,7 @@ Implemented today:
   `#[skip_validation]` macros.
 - Module-scoped provider registries, explicit provider exports, transitive
   re-exports, global module exports, and `DynamicModule` for runtime-built
-  provider modules.
+  provider modules, with contextual module import cycle diagnostics.
 - Provider lifecycle scopes with default singleton providers, request-scoped
   providers cached per in-process request context, transient providers built per
   resolution, async singleton provider factories awaited during async graph
@@ -359,7 +359,9 @@ request-scoped, or transient lifecycle behavior. Singleton providers can opt
 into module init, application bootstrap, and application shutdown hooks.
 Request-scoped handler factories rebuild route/controller state from the current
 request's module context. Provider aliases let one token delegate to an existing
-provider token without changing the target provider's lifecycle scope.
+provider token without changing the target provider's lifecycle scope. Module
+import cycles report the active module chain during sync and async application
+graph builds.
 
 Tasks:
 
@@ -385,6 +387,7 @@ Tasks:
 - Add provider aliases comparable to Nest `useExisting`. (Implemented)
 - Add contextual diagnostics for transient and request-scoped provider
   dependency cycles. (Implemented)
+- Add contextual diagnostics for module import cycles. (Implemented)
 
 Acceptance:
 
@@ -406,6 +409,8 @@ Acceptance:
   resolution, and reject alias cycles with contextual errors. (Covered)
 - Transient and request-scoped provider cycles report the active token chain.
   (Covered)
+- Module import cycles report the active module chain during sync and async
+  builds. (Covered)
 
 ## Milestone 5: Middleware
 
@@ -584,8 +589,8 @@ framework capability. Keep GraphQL out of scope.
 
 Suggested implementation sequence:
 
-1. Continue Nest-style module and provider diagnostics with lazy module loading,
-   singleton provider graph ordering, and clearer module import cycle chains.
+1. Continue Nest-style module and provider diagnostics with lazy module loading
+   and singleton provider graph ordering.
 2. Continue defining integrations through providers, middleware, guards,
    interceptors, or adapters instead of adding one-off framework hooks.
 3. Add crate-local tests and README examples for each chosen framework module.

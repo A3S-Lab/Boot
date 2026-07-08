@@ -4,12 +4,12 @@ use crate::{
     BootError, BoxFuture, ControllerDefinition, MessagePatternDefinition, Module, ModuleRef,
     ProviderDefinition, ProviderToken, Result, RouteDefinition, WebSocketGatewayDefinition,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub(super) struct ModuleRegistry {
     registered: BTreeMap<String, RegisteredModule>,
-    visiting: BTreeSet<String>,
+    visiting: Vec<String>,
     global_ref: ModuleRef,
     provider_overrides: BTreeMap<ProviderToken, ProviderDefinition>,
 }
@@ -29,7 +29,7 @@ impl ModuleRegistry {
     ) -> Self {
         Self {
             registered: BTreeMap::new(),
-            visiting: BTreeSet::new(),
+            visiting: Vec::new(),
             global_ref,
             provider_overrides,
         }
@@ -50,12 +50,44 @@ impl ModuleRegistry {
             return Ok(existing.clone());
         }
 
-        if !self.visiting.insert(name.to_string()) {
-            return Err(BootError::Internal(format!(
-                "cyclic module import detected: {name}"
-            )));
-        }
+        self.enter_module(name)?;
+        let result = self.register_module_inner(module, name, global_pipeline, sink);
+        self.exit_module();
+        result
+    }
 
+    pub fn register_module_async<'a>(
+        &'a mut self,
+        module: Arc<dyn Module>,
+        global_pipeline: &'a PipelineComponents,
+        sink: &'a mut ModuleRegistrationSink<'_>,
+    ) -> BoxFuture<'a, Result<RegisteredModule>> {
+        Box::pin(async move {
+            let name = module.name();
+            if name.trim().is_empty() {
+                return Err(BootError::EmptyModuleName);
+            }
+
+            if let Some(existing) = self.registered.get(name) {
+                return Ok(existing.clone());
+            }
+
+            self.enter_module(name)?;
+            let result = self
+                .register_module_async_inner(module, name, global_pipeline, sink)
+                .await;
+            self.exit_module();
+            result
+        })
+    }
+
+    fn register_module_inner(
+        &mut self,
+        module: Arc<dyn Module>,
+        name: &'static str,
+        global_pipeline: &PipelineComponents,
+        sink: &mut ModuleRegistrationSink<'_>,
+    ) -> Result<RegisteredModule> {
         let mut imported_modules = Vec::new();
         for imported in module.imports() {
             imported_modules.push(self.register_module(imported, global_pipeline, sink)?);
@@ -131,32 +163,17 @@ impl ModuleRegistry {
         sink.module_instances
             .push(ModuleInstance { module, module_ref });
         self.registered.insert(name.to_string(), registered.clone());
-        self.visiting.remove(name);
         Ok(registered)
     }
 
-    pub fn register_module_async<'a>(
+    fn register_module_async_inner<'a>(
         &'a mut self,
         module: Arc<dyn Module>,
+        name: &'static str,
         global_pipeline: &'a PipelineComponents,
         sink: &'a mut ModuleRegistrationSink<'_>,
     ) -> BoxFuture<'a, Result<RegisteredModule>> {
         Box::pin(async move {
-            let name = module.name();
-            if name.trim().is_empty() {
-                return Err(BootError::EmptyModuleName);
-            }
-
-            if let Some(existing) = self.registered.get(name) {
-                return Ok(existing.clone());
-            }
-
-            if !self.visiting.insert(name.to_string()) {
-                return Err(BootError::Internal(format!(
-                    "cyclic module import detected: {name}"
-                )));
-            }
-
             let mut imported_modules = Vec::new();
             for imported in module.imports() {
                 imported_modules.push(
@@ -235,9 +252,26 @@ impl ModuleRegistry {
             sink.module_instances
                 .push(ModuleInstance { module, module_ref });
             self.registered.insert(name.to_string(), registered.clone());
-            self.visiting.remove(name);
             Ok(registered)
         })
+    }
+
+    fn enter_module(&mut self, name: &str) -> Result<()> {
+        if let Some(index) = self.visiting.iter().position(|active| active == name) {
+            let mut chain = self.visiting[index..].to_vec();
+            chain.push(name.to_string());
+            return Err(BootError::Internal(format!(
+                "cyclic module import detected: {}",
+                chain.join(" -> ")
+            )));
+        }
+
+        self.visiting.push(name.to_string());
+        Ok(())
+    }
+
+    fn exit_module(&mut self) {
+        self.visiting.pop();
     }
 
     fn provider_override_or(&self, provider: ProviderDefinition) -> ProviderDefinition {

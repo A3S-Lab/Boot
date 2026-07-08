@@ -2092,7 +2092,8 @@ impl CatsController {
 Modules are provider visibility boundaries. A module can use its own providers
 and the exported providers of its imports. Providers declared by an imported
 module stay private unless that module returns their `ProviderToken` from
-`exports()`.
+`exports()`. Import cycles are rejected with the full module chain, for example
+`cyclic module import detected: cats -> database -> cats`.
 
 ```rust
 use a3s_boot::{

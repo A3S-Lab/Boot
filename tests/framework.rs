@@ -38,6 +38,32 @@ impl Module for AppModule {
     }
 }
 
+#[derive(Debug)]
+struct CycleRootModule;
+
+impl Module for CycleRootModule {
+    fn name(&self) -> &'static str {
+        "cycle-root"
+    }
+
+    fn imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(CycleFeatureModule)]
+    }
+}
+
+#[derive(Debug)]
+struct CycleFeatureModule;
+
+impl Module for CycleFeatureModule {
+    fn name(&self) -> &'static str {
+        "cycle-feature"
+    }
+
+    fn imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(CycleRootModule)]
+    }
+}
+
 #[test]
 fn registers_imports_before_parent_modules() {
     let app = BootApplication::builder()
@@ -60,6 +86,31 @@ fn deduplicates_imported_modules_by_name() {
 
     assert_eq!(app.module_names(), ["health"]);
     assert_eq!(app.routes().len(), 1);
+}
+
+#[test]
+fn module_import_cycles_return_contextual_errors() {
+    let result = BootApplication::builder().import(CycleRootModule).build();
+
+    assert!(matches!(
+        result,
+        Err(BootError::Internal(message))
+            if message == "cyclic module import detected: cycle-root -> cycle-feature -> cycle-root"
+    ));
+}
+
+#[tokio::test]
+async fn async_module_import_cycles_return_contextual_errors() {
+    let result = BootApplication::builder()
+        .import(CycleRootModule)
+        .build_async()
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(BootError::Internal(message))
+            if message == "cyclic module import detected: cycle-root -> cycle-feature -> cycle-root"
+    ));
 }
 
 #[test]
