@@ -2,9 +2,9 @@ use super::builder::BootApplicationBuilder;
 use crate::versioning::ApiVersionCandidate;
 use crate::{
     ApiVersioning, BootError, BootRequest, BootResponse, DiscoveryService, HttpAdapter, HttpMethod,
-    MessagePatternDefinition, MessageTransport, Module, ModuleRef, OpenApiDocument, OpenApiInfo,
-    Reflector, Result, RouteDefinition, TransportMessage, TransportReply,
-    WebSocketGatewayDefinition,
+    LazyModuleLoader, MessagePatternDefinition, MessageTransport, Module, ModuleRef,
+    OpenApiDocument, OpenApiInfo, Reflector, Result, RouteDefinition, TransportMessage,
+    TransportReply, WebSocketGatewayDefinition,
 };
 use std::collections::BTreeMap;
 use std::fmt;
@@ -199,6 +199,11 @@ impl BootApplication {
     /// Provider container available to hosts and controllers.
     pub fn module_ref(&self) -> &ModuleRef {
         &self.module_ref
+    }
+
+    /// Lazy module loader available through the application provider graph.
+    pub fn lazy_module_loader(&self) -> Result<Arc<LazyModuleLoader>> {
+        self.get::<LazyModuleLoader>()
     }
 
     /// Resolve a typed provider from the application container.

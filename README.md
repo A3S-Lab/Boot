@@ -2209,6 +2209,92 @@ fn config_module(database_url: String) -> DynamicModule {
 Private providers from imported feature modules are not exposed unless they are
 exported into a root-visible scope.
 
+## Lazy Module Loading
+
+`LazyModuleLoader` is registered as an application-wide provider, similar to
+Nest's lazy module loader. Use `app.lazy_module_loader()` or inject
+`Arc<LazyModuleLoader>` from a provider factory, then call `load(...)` when a
+module's provider graph should be created on demand:
+
+```rust
+use a3s_boot::{
+    BootApplication, LazyModuleLoader, Module, ProviderDefinition, ProviderToken, Result,
+};
+use std::sync::Arc;
+
+#[derive(Debug)]
+struct ReportsService;
+
+#[derive(Debug)]
+struct ReportsModule;
+
+impl Module for ReportsModule {
+    fn name(&self) -> &'static str {
+        "reports"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::singleton(ReportsService)])
+    }
+
+    fn exports(&self) -> Result<Vec<ProviderToken>> {
+        Ok(vec![ProviderToken::of::<ReportsService>()])
+    }
+}
+
+#[derive(Debug)]
+struct ReportsHost {
+    loader: Arc<LazyModuleLoader>,
+}
+
+impl ReportsHost {
+    fn load_reports(&self) -> Result<Arc<ReportsService>> {
+        let module = self.loader.load(ReportsModule)?;
+        module.get::<ReportsService>()
+    }
+}
+
+let app = BootApplication::builder().build()?;
+let reports = app
+    .lazy_module_loader()?
+    .load(ReportsModule)?
+    .get::<ReportsService>()?;
+# let _ = reports;
+```
+
+Loaded modules are cached by module name. If a module was already imported
+during application build, the lazy loader returns that existing module
+reference instead of building a second provider graph. Lazy modules can import
+other modules and can see global exports, but they are provider-only: loading a
+module this way does not register controllers, direct routes, gateways,
+middleware, message patterns, or module/provider lifecycle hooks.
+
+Use `load_async(...)` or `load_arc_async(...)` when the lazy module includes
+async singleton provider factories:
+
+```rust
+# use a3s_boot::{BootApplication, Module, ProviderDefinition, Result};
+# #[derive(Debug)]
+# struct RuntimeConfig;
+# #[derive(Debug)]
+# struct RuntimeModule;
+# impl Module for RuntimeModule {
+#     fn name(&self) -> &'static str { "runtime" }
+#     fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+#         Ok(vec![ProviderDefinition::async_factory::<RuntimeConfig, _, _>(|_| async {
+#             Ok(RuntimeConfig)
+#         })])
+#     }
+# }
+# async fn load_runtime() -> Result<()> {
+let app = BootApplication::builder().build()?;
+let runtime = app.lazy_module_loader()?.load_async(RuntimeModule).await?;
+let config = runtime.get::<RuntimeConfig>()?;
+# let _ = config;
+# Ok(())
+# }
+```
+
 ## Configuration
 
 Enable the `config` feature to load typed configuration from ACL. `ConfigModule`

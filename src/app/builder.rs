@@ -1,4 +1,5 @@
 use super::application::BootApplication;
+use super::lazy::LazyModuleLoader;
 use super::registration::{ModuleRegistrationSink, ModuleRegistry};
 use crate::pipeline::PipelineComponents;
 use crate::{
@@ -261,6 +262,8 @@ impl BootApplicationBuilder {
     pub fn build(self) -> Result<BootApplication> {
         let module_ref = ModuleRef::new();
         let global_ref = ModuleRef::new();
+        let lazy_module_loader = LazyModuleLoader::new(global_ref.clone());
+        global_ref.insert_arc(Arc::new(lazy_module_loader.clone()))?;
         module_ref.add_visible_scope(global_ref.clone())?;
         let mut registry = ModuleRegistry::new(global_ref, self.provider_overrides);
         let mut modules = Vec::new();
@@ -290,6 +293,9 @@ impl BootApplicationBuilder {
                 )?;
                 module_ref.add_visible_scope(registered.module_ref)?;
             }
+        }
+        for (name, registered) in registry.registered_modules() {
+            lazy_module_loader.seed_module(name, registered.module_ref, registered.exports)?;
         }
 
         let mut routes = apply_global_prefix(routes, self.global_prefix.as_deref())?;
@@ -354,6 +360,8 @@ impl BootApplicationBuilder {
     pub async fn build_async(self) -> Result<BootApplication> {
         let module_ref = ModuleRef::new();
         let global_ref = ModuleRef::new();
+        let lazy_module_loader = LazyModuleLoader::new(global_ref.clone());
+        global_ref.insert_arc(Arc::new(lazy_module_loader.clone()))?;
         module_ref.add_visible_scope(global_ref.clone())?;
         let mut registry = ModuleRegistry::new(global_ref, self.provider_overrides);
         let mut modules = Vec::new();
@@ -381,6 +389,9 @@ impl BootApplicationBuilder {
                     .await?;
                 module_ref.add_visible_scope(registered.module_ref)?;
             }
+        }
+        for (name, registered) in registry.registered_modules() {
+            lazy_module_loader.seed_module(name, registered.module_ref, registered.exports)?;
         }
 
         let mut routes = apply_global_prefix(routes, self.global_prefix.as_deref())?;

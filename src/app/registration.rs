@@ -81,6 +81,13 @@ impl ModuleRegistry {
         })
     }
 
+    pub fn registered_modules(&self) -> Vec<(String, RegisteredModule)> {
+        self.registered
+            .iter()
+            .map(|(name, module)| (name.clone(), module.clone()))
+            .collect()
+    }
+
     fn register_module_inner(
         &mut self,
         module: Arc<dyn Module>,
@@ -287,7 +294,7 @@ impl ModuleRegistry {
 #[derive(Clone)]
 pub(super) struct RegisteredModule {
     pub module_ref: ModuleRef,
-    exports: ModuleRef,
+    pub exports: ModuleRef,
 }
 
 fn register_controller(

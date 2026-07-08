@@ -66,7 +66,7 @@ pub use a3s_boot_macros::{event_listener, on_event};
 pub use adapters::AxumAdapter;
 pub use app::{
     BootApplication, BootApplicationBuilder, BootApplicationContext, BootApplicationHandle,
-    BootFactory, BootMicroservice, RouteMatch,
+    BootFactory, BootMicroservice, LazyLoadedModule, LazyModuleLoader, RouteMatch,
 };
 #[cfg(feature = "cache")]
 pub use cache::{Cache, CacheModule, CacheOptions, CacheStore, InMemoryCacheStore};

@@ -89,7 +89,8 @@ Implemented today:
   `#[skip_validation]` macros.
 - Module-scoped provider registries, explicit provider exports, transitive
   re-exports, global module exports, and `DynamicModule` for runtime-built
-  provider modules, with contextual module import cycle diagnostics.
+  provider modules, with provider-only lazy module loading and contextual
+  module import cycle diagnostics.
 - Provider lifecycle scopes with default singleton providers, request-scoped
   providers cached per in-process request context, transient providers built per
   resolution, async singleton provider factories awaited during async graph
@@ -348,6 +349,7 @@ Nest equivalent:
 - singleton provider lifecycle hooks
 - request-scoped controllers
 - provider aliases / `useExisting`
+- lazy module loading
 
 Current gap:
 
@@ -364,7 +366,9 @@ provider token without changing the target provider's lifecycle scope. Module
 import cycles report the active module chain during sync and async application
 graph builds. Singleton provider factories are initialized after all module
 provider tokens are registered, so factories can depend on providers declared
-later in the same module.
+later in the same module. `LazyModuleLoader` can load provider-only module
+graphs on demand, reuse eagerly registered modules, and resolve async singleton
+factories through `load_async(...)`.
 
 Tasks:
 
@@ -392,6 +396,7 @@ Tasks:
   dependency cycles. (Implemented)
 - Add contextual diagnostics for module import cycles. (Implemented)
 - Add order-independent singleton provider graph initialization. (Implemented)
+- Add provider-only lazy module loading with cached module refs. (Implemented)
 
 Acceptance:
 
@@ -418,6 +423,10 @@ Acceptance:
 - Singleton provider factories can resolve dependencies declared later in the
   same module, including sync factories that depend on async-built singletons in
   async builds. (Covered)
+- Lazy module loading returns cached module refs, reuses eagerly imported
+  modules, resolves imports/exports, supports async singleton providers through
+  `load_async(...)`, and does not register controllers, routes, gateways,
+  middleware, message patterns, or lifecycle hooks. (Covered)
 
 ## Milestone 5: Middleware
 
@@ -596,7 +605,8 @@ framework capability. Keep GraphQL out of scope.
 
 Suggested implementation sequence:
 
-1. Continue Nest-style module and provider diagnostics with lazy module loading.
+1. Continue the Nest framework parity audit with the next non-GraphQL core
+   capability.
 2. Continue defining integrations through providers, middleware, guards,
    interceptors, or adapters instead of adding one-off framework hooks.
 3. Add crate-local tests and README examples for each chosen framework module.
