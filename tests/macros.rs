@@ -598,6 +598,19 @@ struct MacroWhitelistCreateDto {
 
 impl Validate for MacroWhitelistCreateDto {}
 
+#[derive(Debug, Deserialize, Serialize, a3s_boot::ValidationSchema)]
+struct MacroTransformCreateDto {
+    name: String,
+    #[serde(default = "macro_default_kind")]
+    kind: String,
+}
+
+impl Validate for MacroTransformCreateDto {}
+
+fn macro_default_kind() -> String {
+    "cat".to_string()
+}
+
 #[derive(Debug)]
 struct MacroValidationModule;
 
@@ -652,6 +665,16 @@ impl MacroWhitelistValidationController {
             id: "strict".to_string(),
             name: dto.name,
         })
+    }
+
+    #[post("/transform", status = 201)]
+    #[validate(transform)]
+    async fn create_transform(
+        &self,
+        #[request] request: BootRequest,
+        #[body] _dto: MacroTransformCreateDto,
+    ) -> Result<serde_json::Value> {
+        request.json::<serde_json::Value>()
     }
 }
 
@@ -1865,6 +1888,17 @@ async fn validate_macro_enables_body_and_query_dto_validation() {
         )
         .await
         .unwrap_err();
+    let transformed = app
+        .call(
+            BootRequest::new(
+                a3s_boot::HttpMethod::Post,
+                "/macro-whitelist-validation/transform",
+            )
+            .with_content_type("application/json")
+            .with_body(r#"{"name":"Milo"}"#),
+        )
+        .await
+        .unwrap();
 
     assert!(
         matches!(body_error, BootError::BadRequest(message) if message.contains("name is required"))
@@ -1891,5 +1925,12 @@ async fn validate_macro_enables_body_and_query_dto_validation() {
     );
     assert!(
         matches!(forbidden, BootError::BadRequest(message) if message == "non-whitelisted body properties: role")
+    );
+    assert_eq!(
+        transformed.body_json::<serde_json::Value>().unwrap(),
+        json!({
+            "kind": "cat",
+            "name": "Milo"
+        })
     );
 }

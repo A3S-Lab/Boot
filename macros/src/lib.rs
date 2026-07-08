@@ -565,6 +565,9 @@ fn validation_schema_field_name(ident: &Ident, attrs: &[Attribute]) -> Result<Li
             if meta.path.is_ident("rename") {
                 meta.input.parse::<Token![=]>()?;
                 renamed = Some(meta.input.parse::<LitStr>()?);
+            } else if meta.input.peek(Token![=]) {
+                meta.input.parse::<Token![=]>()?;
+                let _ = meta.input.parse::<Expr>()?;
             }
             Ok(())
         })?;
@@ -4216,23 +4219,29 @@ impl ValidationAttrKind {
 
 #[derive(Clone, Copy, Default)]
 struct ValidationAttrOptions {
+    transform: bool,
     whitelist: bool,
     forbid_non_whitelisted: bool,
 }
 
 impl ValidationAttrOptions {
     fn is_empty(self) -> bool {
-        !self.whitelist && !self.forbid_non_whitelisted
+        !self.transform && !self.whitelist && !self.forbid_non_whitelisted
     }
 
     fn merge(self, other: Self) -> Self {
         Self {
+            transform: self.transform || other.transform,
             whitelist: self.whitelist || other.whitelist,
             forbid_non_whitelisted: self.forbid_non_whitelisted || other.forbid_non_whitelisted,
         }
     }
 
     fn token(self) -> proc_macro2::TokenStream {
+        let transform = self
+            .transform
+            .then(|| quote!(.transform(true)))
+            .unwrap_or_default();
         let whitelist = self
             .whitelist
             .then(|| quote!(.whitelist(true)))
@@ -4242,7 +4251,7 @@ impl ValidationAttrOptions {
             .then(|| quote!(.forbid_non_whitelisted(true)))
             .unwrap_or_default();
         quote! {
-            ::a3s_boot::ValidationOptions::new() #whitelist #forbid_non_whitelisted
+            ::a3s_boot::ValidationOptions::new() #transform #whitelist #forbid_non_whitelisted
         }
     }
 }
@@ -4261,15 +4270,10 @@ impl Parse for ValidationAttrOptions {
             };
 
             match name.to_string().as_str() {
+                "transform" => options.transform = enabled,
                 "whitelist" => options.whitelist = enabled,
                 "forbid_non_whitelisted" | "forbidNonWhitelisted" => {
                     options.forbid_non_whitelisted = enabled;
-                }
-                "transform" => {
-                    return Err(syn::Error::new_spanned(
-                        name,
-                        "ValidationPipe transform is not supported yet",
-                    ));
                 }
                 _ => {
                     return Err(syn::Error::new_spanned(name, "unsupported validate option"));

@@ -8,7 +8,7 @@ use crate::{
     ExecutionInterceptor, Guard, Interceptor, Middleware, Pipe, Validate, ValidationOptions,
     ValidationSchema,
 };
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Serialize};
 use std::sync::Arc;
 
 impl RouteDefinition {
@@ -124,7 +124,7 @@ impl RouteDefinition {
 
     pub fn with_body_validation_options<T>(mut self, options: ValidationOptions) -> Self
     where
-        T: DeserializeOwned + Validate + ValidationSchema + 'static,
+        T: DeserializeOwned + Serialize + Validate + ValidationSchema + 'static,
     {
         self.validators
             .push(body_validator_with_options::<T>(options));
@@ -141,7 +141,7 @@ impl RouteDefinition {
 
     pub fn with_params_validation_options<T>(mut self, options: ValidationOptions) -> Self
     where
-        T: DeserializeOwned + Validate + ValidationSchema + 'static,
+        T: DeserializeOwned + Serialize + Validate + ValidationSchema + 'static,
     {
         self.validators
             .push(params_validator_with_options::<T>(options));
@@ -158,7 +158,7 @@ impl RouteDefinition {
 
     pub fn with_query_validation_options<T>(mut self, options: ValidationOptions) -> Self
     where
-        T: DeserializeOwned + Validate + ValidationSchema + 'static,
+        T: DeserializeOwned + Serialize + Validate + ValidationSchema + 'static,
     {
         self.validators
             .push(query_validator_with_options::<T>(options));

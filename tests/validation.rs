@@ -26,7 +26,7 @@ impl ValidationSchema for ValidatedCreateItemDto {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct ValidatedItemQuery {
     page: u16,
 }
@@ -48,7 +48,7 @@ impl ValidationSchema for ValidatedItemQuery {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct ValidatedItemParams {
     id: String,
 }
@@ -73,6 +73,57 @@ impl ValidationSchema for ValidatedItemParams {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct ItemDto {
     name: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct TransformCreateItemDto {
+    name: String,
+    #[serde(default = "default_item_kind")]
+    kind: String,
+}
+
+impl Validate for TransformCreateItemDto {}
+
+impl ValidationSchema for TransformCreateItemDto {
+    fn allowed_fields() -> &'static [&'static str] {
+        &["kind", "name"]
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct TransformItemQuery {
+    page: u16,
+    #[serde(default = "default_page_limit")]
+    limit: u16,
+}
+
+impl Validate for TransformItemQuery {}
+
+impl ValidationSchema for TransformItemQuery {
+    fn allowed_fields() -> &'static [&'static str] {
+        &["limit", "page"]
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct TransformItemParams {
+    id: u16,
+}
+
+impl Validate for TransformItemParams {}
+
+impl ValidationSchema for TransformItemParams {
+    fn allowed_fields() -> &'static [&'static str] {
+        &["id"]
+    }
+}
+
+fn default_item_kind() -> String {
+    "cat".to_string()
+}
+
+fn default_page_limit() -> u16 {
+    25
 }
 
 #[tokio::test]
@@ -213,6 +264,73 @@ async fn controller_validation_options_whitelist_unknown_body_properties() {
         response.body_json::<serde_json::Value>().unwrap(),
         json!({ "name": "Milo" })
     );
+}
+
+#[tokio::test]
+async fn validation_options_transform_body_into_validated_dto_shape() {
+    let route = RouteDefinition::post("/", |request: BootRequest| async move {
+        BootResponse::json(&request.json::<serde_json::Value>()?)
+    })
+    .unwrap()
+    .with_body_validation_options::<TransformCreateItemDto>(
+        ValidationOptions::new().transform(true),
+    )
+    .with_validation();
+
+    let response = route
+        .call(
+            BootRequest::new(HttpMethod::Post, "/")
+                .with_content_type("application/json")
+                .with_body(r#"{"name":"Milo"}"#),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.body_json::<serde_json::Value>().unwrap(),
+        json!({ "kind": "cat", "name": "Milo" })
+    );
+}
+
+#[tokio::test]
+async fn validation_options_transform_query_into_validated_dto_shape() {
+    let route = RouteDefinition::get("/", |request: BootRequest| async move {
+        Ok(BootResponse::text(format!(
+            "{}:{}:{}",
+            request.query_param("page").unwrap_or("missing"),
+            request.query_param("limit").unwrap_or("missing"),
+            request.query_string().unwrap_or("normalized")
+        )))
+    })
+    .unwrap()
+    .with_query_validation_options::<TransformItemQuery>(ValidationOptions::new().transform(true))
+    .with_validation();
+
+    let response = route
+        .call(BootRequest::new(HttpMethod::Get, "/?page=2"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.body_text().unwrap(), "2:25:normalized");
+}
+
+#[tokio::test]
+async fn validation_options_transform_path_params_into_validated_dto_shape() {
+    let route = RouteDefinition::get("/{id}", |request: BootRequest| async move {
+        Ok(BootResponse::text(
+            request.param("id").unwrap_or("missing").to_string(),
+        ))
+    })
+    .unwrap()
+    .with_params_validation_options::<TransformItemParams>(ValidationOptions::new().transform(true))
+    .with_validation();
+
+    let response = route
+        .call(BootRequest::new(HttpMethod::Get, "/007"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.body_text().unwrap(), "7");
 }
 
 #[tokio::test]

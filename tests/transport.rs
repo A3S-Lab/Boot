@@ -222,6 +222,7 @@ async fn message_patterns_validate_payloads() {
                 "cat.create",
                 &CreateTransportCat {
                     name: " ".to_string(),
+                    kind: "cat".to_string(),
                 },
             )
             .unwrap(),
@@ -260,6 +261,34 @@ async fn message_patterns_whitelist_payload_properties() {
         .unwrap();
 
     assert_eq!(reply.data, json!({ "name": "Milo" }));
+}
+
+#[tokio::test]
+async fn message_patterns_transform_payload_properties() {
+    let app = BootApplication::builder()
+        .message_pattern(
+            MessagePatternDefinition::request(
+                "cat.create",
+                |message: TransportMessage| async move { Ok(message.data) },
+            )
+            .unwrap()
+            .with_payload_validation_options::<CreateTransportCat>(
+                ValidationOptions::new().transform(true),
+            ),
+        )
+        .build()
+        .unwrap();
+
+    let reply = app
+        .dispatch_message(TransportMessage::new(
+            "cat.create",
+            json!({ "name": "Milo" }),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(reply.data, json!({ "kind": "cat", "name": "Milo" }));
 }
 
 #[tokio::test]
@@ -1210,6 +1239,8 @@ struct NumberPayload {
 #[derive(Debug, Deserialize, Serialize)]
 struct CreateTransportCat {
     name: String,
+    #[serde(default = "default_transport_cat_kind")]
+    kind: String,
 }
 
 impl Validate for CreateTransportCat {
@@ -1223,8 +1254,12 @@ impl Validate for CreateTransportCat {
 
 impl ValidationSchema for CreateTransportCat {
     fn allowed_fields() -> &'static [&'static str] {
-        &["name"]
+        &["kind", "name"]
     }
+}
+
+fn default_transport_cat_kind() -> String {
+    "cat".to_string()
 }
 
 #[derive(Clone)]

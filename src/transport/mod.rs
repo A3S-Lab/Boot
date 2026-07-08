@@ -537,7 +537,7 @@ impl MessagePatternDefinition {
 
     pub fn with_payload_validation_options<T>(mut self, options: ValidationOptions) -> Self
     where
-        T: DeserializeOwned + Validate + ValidationSchema + 'static,
+        T: DeserializeOwned + Serialize + Validate + ValidationSchema + 'static,
     {
         self.validators.push(Arc::new(move |mut message| {
             let data = validate_json_value_with_options::<T>(
@@ -545,7 +545,7 @@ impl MessagePatternDefinition {
                 options,
                 "message property",
             )?;
-            if options.whitelist {
+            if options.transform || options.whitelist {
                 message.data = data;
             }
             Ok(message)

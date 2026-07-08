@@ -1,5 +1,6 @@
 use crate::{BootError, BootRequest, Result};
 use serde::de::DeserializeOwned;
+use serde::Serialize;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -19,6 +20,7 @@ pub trait ValidationSchema {
 /// Options for route-level DTO validation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ValidationOptions {
+    pub transform: bool,
     pub whitelist: bool,
     pub forbid_non_whitelisted: bool,
 }
@@ -33,6 +35,11 @@ impl ValidationOptions {
         self
     }
 
+    pub fn transform(mut self, enabled: bool) -> Self {
+        self.transform = enabled;
+        self
+    }
+
     pub fn forbid_non_whitelisted(mut self, enabled: bool) -> Self {
         self.forbid_non_whitelisted = enabled;
         self
@@ -40,6 +47,7 @@ impl ValidationOptions {
 
     pub fn merge(self, other: Self) -> Self {
         Self {
+            transform: self.transform || other.transform,
             whitelist: self.whitelist || other.whitelist,
             forbid_non_whitelisted: self.forbid_non_whitelisted || other.forbid_non_whitelisted,
         }
@@ -65,14 +73,14 @@ where
 
 pub(crate) fn body_validator_with_options<T>(options: ValidationOptions) -> RequestValidator
 where
-    T: DeserializeOwned + Validate + ValidationSchema + 'static,
+    T: DeserializeOwned + Serialize + Validate + ValidationSchema + 'static,
 {
     Arc::new(move |mut request, inherited_options| {
         let options = inherited_options.merge(options);
         request.require_json_content_type()?;
         let value = request.json::<Value>()?;
         let value = validate_json_value_with_options::<T>(value, options, "body property")?;
-        if options.whitelist {
+        if options.transform || options.whitelist {
             let body =
                 serde_json::to_vec(&value).map_err(|err| BootError::Internal(err.to_string()))?;
             rewrite_request_body(&mut request, body);
@@ -90,12 +98,15 @@ where
 
 pub(crate) fn params_validator_with_options<T>(options: ValidationOptions) -> RequestValidator
 where
-    T: DeserializeOwned + Validate + ValidationSchema + 'static,
+    T: DeserializeOwned + Serialize + Validate + ValidationSchema + 'static,
 {
     Arc::new(move |mut request, inherited_options| {
         let options = inherited_options.merge(options);
         apply_map_field_options::<T>(&mut request.params, options, "path parameter")?;
-        validate_value(request.params::<T>()?)?;
+        let value = validate_value(request.params::<T>()?)?;
+        if options.transform {
+            request.params = serialize_urlencoded_map(&value)?;
+        }
         Ok(request)
     })
 }
@@ -109,7 +120,7 @@ where
 
 pub(crate) fn query_validator_with_options<T>(options: ValidationOptions) -> RequestValidator
 where
-    T: DeserializeOwned + Validate + ValidationSchema + 'static,
+    T: DeserializeOwned + Serialize + Validate + ValidationSchema + 'static,
 {
     Arc::new(move |mut request, inherited_options| {
         let options = inherited_options.merge(options);
@@ -118,7 +129,11 @@ where
         if options.whitelist {
             request.query_string = None;
         }
-        validate_value(request.query::<T>()?)?;
+        let value = validate_value(request.query::<T>()?)?;
+        if options.transform {
+            request.query = serialize_urlencoded_map(&value)?;
+            request.query_string = None;
+        }
         Ok(request)
     })
 }
@@ -148,14 +163,18 @@ pub(crate) fn validate_json_value_with_options<T>(
     label: &'static str,
 ) -> Result<Value>
 where
-    T: DeserializeOwned + Validate + ValidationSchema,
+    T: DeserializeOwned + Serialize + Validate + ValidationSchema,
 {
     let value = apply_json_field_options::<T>(value, options, label)?;
-    validate_value(
+    let typed = validate_value(
         serde_json::from_value::<T>(value.clone())
             .map_err(|err| BootError::BadRequest(err.to_string()))?,
     )?;
-    Ok(value)
+    if options.transform {
+        serde_json::to_value(&typed).map_err(|err| BootError::Internal(err.to_string()))
+    } else {
+        Ok(value)
+    }
 }
 
 fn apply_json_field_options<T>(
@@ -284,4 +303,17 @@ fn rewrite_request_body(request: &mut BootRequest, body: Vec<u8>) {
             .appended_headers
             .retain(|(name, _)| !name.eq_ignore_ascii_case("content-length"));
     }
+}
+
+fn serialize_urlencoded_map<T>(value: &T) -> Result<BTreeMap<String, String>>
+where
+    T: Serialize,
+{
+    let encoded =
+        serde_urlencoded::to_string(value).map_err(|err| BootError::Internal(err.to_string()))?;
+    if encoded.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+
+    serde_urlencoded::from_str(&encoded).map_err(|err| BootError::Internal(err.to_string()))
 }

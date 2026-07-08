@@ -330,6 +330,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@Catch(BadRequestException)` | `#[catch(BadRequest)]` on a filter struct, used through `BadRequestFilter::catch_filter()` |
 | `@UsePipes(ParsePipe)` | `#[use_pipe(ParsePipe)]` on a controller impl or route method |
 | `@UsePipes(new ValidationPipe())` | `#[validate]` on a controller impl or route method for DTO validation |
+| `new ValidationPipe({ transform: true })` | `#[validate(transform)]` or `ValidationOptions::new().transform(true)` |
 | `new ValidationPipe({ whitelist: true })` | `#[validate(whitelist)]` or `ValidationOptions::new().whitelist(true)` with `ValidationSchema` |
 | `new ValidationPipe({ forbidNonWhitelisted: true })` | `#[validate(forbidNonWhitelisted)]` or `ValidationOptions::new().forbid_non_whitelisted(true)` |
 | `@SetMetadata("roles", ["admin"])` | `#[metadata("roles", ["admin"])]` below `#[controller]` or on a route method |
@@ -804,11 +805,13 @@ Manual handlers can also call `BootRequest::validated_json::<T>()`,
 validated unless they register validators explicitly, for example with
 `RouteDefinition::with_body_validation::<T>()`.
 
-For Nest-style whitelist policies, derive or implement `ValidationSchema` on the
-DTO and register validation options. `whitelist(true)` strips unknown body,
-query, path, or transport payload fields before the handler runs;
-`forbid_non_whitelisted(true)` rejects the request instead. In macro
-controllers, use `#[validate(whitelist)]` or
+For Nest-style transform and whitelist policies, derive or implement
+`ValidationSchema` on the DTO and register validation options. `transform(true)`
+rewrites body, query, path, or transport payload data from the validated DTO
+shape before the handler runs, so serde defaults and rename rules are visible
+downstream. `whitelist(true)` strips unknown fields, and
+`forbid_non_whitelisted(true)` rejects them instead. In macro controllers, use
+`#[validate(transform)]`, `#[validate(whitelist)]`, or
 `#[validate(forbidNonWhitelisted)]`:
 
 ```rust
@@ -821,16 +824,22 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize, Serialize, a3s_boot::ValidationSchema)]
 struct CreateCatDto {
     name: String,
+    #[serde(default = "default_kind")]
+    kind: String,
 }
 
 impl Validate for CreateCatDto {}
+
+fn default_kind() -> String {
+    "cat".to_string()
+}
 
 struct CatsController;
 
 #[controller("/cats")]
 impl CatsController {
     #[post("/", status = 201)]
-    #[validate(whitelist)]
+    #[validate(transform, whitelist)]
     async fn create(&self, #[body] dto: CreateCatDto) -> Result<CreateCatDto> {
         Ok(dto)
     }
@@ -840,7 +849,7 @@ let route = RouteDefinition::post("/", |request: BootRequest| async move {
     BootResponse::json(&request.json::<serde_json::Value>()?)
 })?
 .with_body_validation_options::<CreateCatDto>(
-    ValidationOptions::new().whitelist(true),
+    ValidationOptions::new().transform(true).whitelist(true),
 )
 .with_validation();
 ```
