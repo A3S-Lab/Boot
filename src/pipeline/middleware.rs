@@ -17,7 +17,7 @@ impl MiddlewareOutcome {
     }
 }
 
-/// Request middleware that runs before pipes, guards, interceptors, and handlers.
+/// Request middleware that runs before guards, interceptors, pipes, and handlers.
 pub trait Middleware: Send + Sync + 'static {
     fn handle(&self, request: BootRequest) -> BoxFuture<'static, Result<MiddlewareOutcome>>;
 }

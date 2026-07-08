@@ -2216,8 +2216,9 @@ response status after the handler.
 ## Middleware
 
 Middleware runs after route matching and path parameter decoding, but before
-pipes, validation, guards, interceptors, and handlers. A middleware can mutate
-the `BootRequest` and continue, or short-circuit with a `BootResponse`.
+guards, interceptor `before` hooks, pipes, validation, and handlers. A
+middleware can mutate the `BootRequest` and continue, or short-circuit with a
+`BootResponse`.
 
 ```rust
 use a3s_boot::{
@@ -3006,7 +3007,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | HTTP adapter | Replaceable backend adapter; Axum is the first implementation |
 | Controller | Typed request handlers grouped by route prefix |
 | Provider | Injectable service or repository dependency |
-| Middleware | Request inspection, mutation, and short-circuiting before pipes and guards |
+| Middleware | Request inspection, mutation, and short-circuiting before guards and pipes |
 | Guard | Request authorization and policy gate |
 | Interceptor | Cross-cutting request/response behavior at global, controller, or route scope |
 | Pipe | Request validation and transformation |

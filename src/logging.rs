@@ -273,8 +273,8 @@ impl LogSink for InMemoryLogSink {
     }
 }
 
-/// Middleware that logs an incoming request before it reaches pipes, guards,
-/// interceptors, and handlers.
+/// Middleware that logs an incoming request before it reaches guards,
+/// interceptors, pipes, and handlers.
 #[derive(Debug, Clone)]
 pub struct RequestLoggingMiddleware {
     logger: Arc<Logger>,

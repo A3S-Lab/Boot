@@ -308,8 +308,8 @@ Tasks:
 - Add a small `Validate` trait in core or a `validation` feature. (Implemented
   in core)
 - Integrate validation after DTO extraction and before handler invocation.
-  (Implemented with route validation hooks that run after request pipes and
-  before guards/handlers for routes carrying validation metadata)
+  (Implemented with route validation hooks that run after guards, interceptor
+  `before` hooks, and request pipes for routes carrying validation metadata)
 - Support explicit validation pipe composition for projects that prefer a third
   party crate such as `garde` or `validator`. (Implemented through ordinary
   `Pipe` composition plus explicit `Validate` implementations)
@@ -409,14 +409,14 @@ Status: implemented.
 
 Tasks:
 
-- Add middleware trait that can inspect/mutate `BootRequest` before pipes and
-  guards. (Implemented)
+- Add middleware trait that can inspect/mutate `BootRequest` before guards,
+  interceptor `before` hooks, and pipes. (Implemented)
 - Allow middleware to short-circuit with `BootResponse`. (Implemented through
   `MiddlewareOutcome::Respond`)
 - Support global, module/controller, and route-scoped registration.
   (Implemented)
-- Preserve order: middleware, pipes, guards, interceptors, handler, filters.
-  (Covered)
+- Preserve order: middleware, guards, interceptor `before` hooks, pipes,
+  validation, handler, interceptor `after` hooks, filters. (Covered)
 - Ensure adapter-level request validation remains before middleware.
   (Covered for Axum)
 

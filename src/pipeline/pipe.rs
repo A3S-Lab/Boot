@@ -1,6 +1,6 @@
 use crate::{BootRequest, BoxFuture, Result};
 
-/// Transforms a request before guards and handlers run.
+/// Transforms a request after guards and interceptor `before` hooks, before handlers run.
 pub trait Pipe: Send + Sync + 'static {
     fn transform(&self, request: BootRequest) -> BoxFuture<'static, Result<BootRequest>>;
 }

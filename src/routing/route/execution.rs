@@ -67,28 +67,6 @@ impl RouteDefinition {
             };
         }
 
-        for pipe in &self.pipes {
-            let context_request = request.clone();
-            request = match pipe.inner().transform(request).await {
-                Ok(request) => request,
-                Err(error) => {
-                    return self
-                        .handle_error(self.execution_context(context_request), error)
-                        .await;
-                }
-            };
-        }
-
-        if self.validation_enabled {
-            for validator in &self.validators {
-                if let Err(error) = validator(&request) {
-                    return self
-                        .handle_error(self.execution_context(request.clone()), error)
-                        .await;
-                }
-            }
-        }
-
         let context = self.execution_context(request.clone());
 
         for guard in &self.guards {
@@ -108,6 +86,28 @@ impl RouteDefinition {
         for interceptor in &self.interceptors {
             if let Err(error) = interceptor.inner().before(context.clone()).await {
                 return self.handle_error(context.clone(), error).await;
+            }
+        }
+
+        for pipe in &self.pipes {
+            let context_request = request.clone();
+            request = match pipe.inner().transform(request).await {
+                Ok(request) => request,
+                Err(error) => {
+                    return self
+                        .handle_error(self.execution_context(context_request), error)
+                        .await;
+                }
+            };
+        }
+
+        if self.validation_enabled {
+            for validator in &self.validators {
+                if let Err(error) = validator(&request) {
+                    return self
+                        .handle_error(self.execution_context(request.clone()), error)
+                        .await;
+                }
             }
         }
 

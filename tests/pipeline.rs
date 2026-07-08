@@ -9,7 +9,7 @@ use serde_json::json;
 use std::sync::Arc;
 
 #[tokio::test]
-async fn route_pipeline_runs_pipes_guards_interceptors_and_filters() {
+async fn route_pipeline_runs_guards_interceptors_pipes_and_filters() {
     struct HeaderInterceptor;
 
     impl Interceptor for HeaderInterceptor {
@@ -522,7 +522,7 @@ impl Module for MiddlewareOrderModule {
 }
 
 #[tokio::test]
-async fn middleware_runs_before_pipes_guards_interceptors_and_handlers() {
+async fn middleware_runs_before_guards_interceptors_pipes_and_handlers() {
     let log = Arc::new(std::sync::Mutex::new(Vec::new()));
     let app = BootApplication::builder()
         .use_global_middleware(trace_middleware("global", Arc::clone(&log)))
@@ -545,9 +545,9 @@ async fn middleware_runs_before_pipes_guards_interceptors_and_handlers() {
             "middleware:module",
             "middleware:controller",
             "middleware:route",
-            "pipe",
             "guard",
             "before:route",
+            "pipe",
             "handler",
             "after:route"
         ]
