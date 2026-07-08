@@ -109,6 +109,9 @@ Implemented today:
   route-level override semantics, protocol-neutral `ExecutionContext` access
   for HTTP, WebSocket, and transport guards/interceptors, and typed `Reflector`
   lookup from discovery snapshots.
+- Nest-style runtime discovery and devtools-ready application graph snapshots
+  for modules, imports, provider tokens, exports, route counts, WebSocket
+  gateway counts, and microservice message pattern counts.
 - Optional task-local request context with `RequestContext`, request id,
   path/param/query/header/metadata access, pipeline-local values, and auth
   principal propagation when authentication is enabled.
@@ -724,9 +727,9 @@ Acceptance:
 - Testing utilities can compile Nest-style testing modules, override providers
   before controllers are built, resolve providers, and dispatch in-process
   requests. (Covered)
-- Discovery and reflector utilities can snapshot modules, provider tokens,
-  HTTP route metadata, WebSocket gateways, and message patterns from a built
-  application. (Covered)
+- Discovery and reflector utilities can snapshot modules, module graph edges,
+  provider tokens, exports, HTTP route metadata, WebSocket gateways, and
+  message patterns from a built application. (Covered)
 
 ## Immediate Next Task
 

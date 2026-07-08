@@ -3,8 +3,8 @@ use crate::versioning::ApiVersionCandidate;
 use crate::{
     ApiVersioning, BootError, BootRequest, BootResponse, DiscoveryService, HttpAdapter, HttpMethod,
     LazyModuleLoader, MessagePatternDefinition, MessageTransport, Module, ModuleRef,
-    OpenApiDocument, OpenApiInfo, Reflector, Result, RouteDefinition, TransportMessage,
-    TransportReply, WebSocketGatewayDefinition,
+    OpenApiDocument, OpenApiInfo, ProviderToken, Reflector, Result, RouteDefinition,
+    TransportMessage, TransportReply, WebSocketGatewayDefinition,
 };
 use std::collections::BTreeMap;
 use std::fmt;
@@ -15,6 +15,10 @@ use std::sync::Arc;
 pub(crate) struct ModuleInstance {
     pub module: Arc<dyn Module>,
     pub module_ref: ModuleRef,
+    pub imports: Vec<String>,
+    pub exports: Vec<ProviderToken>,
+    pub is_global: bool,
+    pub route_prefix: Option<String>,
 }
 
 /// Resolved route and decoded path parameters for a method/path lookup.

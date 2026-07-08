@@ -111,8 +111,8 @@ pub use database::{
     InMemoryDatabaseTransactionLog,
 };
 pub use discovery::{
-    DiscoveredGateway, DiscoveredMessagePattern, DiscoveredModule, DiscoveredRoute,
-    DiscoveryService, Reflector,
+    ApplicationGraph, ApplicationGraphModule, DiscoveredGateway, DiscoveredMessagePattern,
+    DiscoveredModule, DiscoveredRoute, DiscoveryService, Reflector,
 };
 pub use error::{BootError, BootErrorKind};
 #[cfg(feature = "events")]

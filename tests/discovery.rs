@@ -10,11 +10,49 @@ use serde_json::json;
 struct CatsService;
 
 #[derive(Debug)]
+struct SharedDiscoveryService;
+
+#[derive(Debug)]
+struct SharedDiscoveryModule;
+
+impl Module for SharedDiscoveryModule {
+    fn name(&self) -> &'static str {
+        "shared-discovery"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::singleton(SharedDiscoveryService)])
+    }
+
+    fn exports(&self) -> Result<Vec<ProviderToken>> {
+        Ok(vec![ProviderToken::of::<SharedDiscoveryService>()])
+    }
+
+    fn is_global(&self) -> bool {
+        true
+    }
+
+    fn route_prefix(&self) -> Option<&str> {
+        Some("/shared")
+    }
+
+    fn routes(&self) -> Result<Vec<RouteDefinition>> {
+        Ok(vec![RouteDefinition::get("/ping", |_| async {
+            Ok(BootResponse::text("pong"))
+        })?])
+    }
+}
+
+#[derive(Debug)]
 struct DiscoveryModuleFixture;
 
 impl Module for DiscoveryModuleFixture {
     fn name(&self) -> &'static str {
         "discovery"
+    }
+
+    fn imports(&self) -> Vec<std::sync::Arc<dyn Module>> {
+        vec![std::sync::Arc::new(SharedDiscoveryModule)]
     }
 
     fn providers(&self) -> Result<Vec<ProviderDefinition>> {
@@ -77,6 +115,41 @@ fn discovery_service_snapshots_modules_routes_gateways_and_message_patterns() {
     assert!(module
         .provider_tokens
         .contains(&ProviderToken::of::<CatsService>()));
+
+    let graph = discovery.graph();
+    assert_eq!(
+        graph.module("discovery").unwrap().imports.as_slice(),
+        ["shared-discovery"]
+    );
+    assert_eq!(
+        graph
+            .imports_of("discovery")
+            .into_iter()
+            .map(|module| module.name.as_str())
+            .collect::<Vec<_>>(),
+        ["shared-discovery"]
+    );
+    assert_eq!(
+        graph
+            .dependents_of("shared-discovery")
+            .into_iter()
+            .map(|module| module.name.as_str())
+            .collect::<Vec<_>>(),
+        ["discovery"]
+    );
+    let shared = graph.module("shared-discovery").unwrap();
+    assert!(shared.is_global);
+    assert_eq!(shared.route_prefix.as_deref(), Some("/shared"));
+    assert_eq!(shared.route_count, 1);
+    assert_eq!(shared.gateway_count, 0);
+    assert_eq!(shared.message_pattern_count, 0);
+    assert!(shared
+        .export_tokens
+        .contains(&ProviderToken::of::<SharedDiscoveryService>()));
+    let discovery_node = graph.module("discovery").unwrap();
+    assert_eq!(discovery_node.route_count, 2);
+    assert_eq!(discovery_node.gateway_count, 1);
+    assert_eq!(discovery_node.message_pattern_count, 2);
 
     let module_routes = discovery.routes_for_module("discovery");
     assert_eq!(module_routes.len(), 2);

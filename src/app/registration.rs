@@ -149,13 +149,16 @@ impl ModuleRegistry {
         module_ref.initialize_local_singletons()?;
 
         let exports = ModuleRef::new();
-        for token in module.exports()? {
-            exports.export_from(&module_ref, &token)?;
+        let export_tokens = module.exports()?;
+        for token in &export_tokens {
+            exports.export_from(&module_ref, token)?;
         }
+        let exported_tokens = exports.local_tokens()?;
+        let is_global = module.is_global();
 
-        if module.is_global() {
-            for token in exports.local_tokens()? {
-                self.global_ref.export_from(&exports, &token)?;
+        if is_global {
+            for token in &exported_tokens {
+                self.global_ref.export_from(&exports, token)?;
             }
         }
 
@@ -205,13 +208,25 @@ impl ModuleRegistry {
                 .map(|pattern| pattern.with_module_name(name)),
         );
 
+        let import_names = imported_modules
+            .iter()
+            .map(|module| module.name.clone())
+            .collect::<Vec<_>>();
+        let route_prefix = (!route_prefix.is_empty()).then_some(route_prefix);
         let registered = RegisteredModule {
+            name: name.to_string(),
             module_ref: module_ref.clone(),
             exports,
         };
         sink.modules.push(name.to_string());
-        sink.module_instances
-            .push(ModuleInstance { module, module_ref });
+        sink.module_instances.push(ModuleInstance {
+            module,
+            module_ref,
+            imports: import_names,
+            exports: exported_tokens,
+            is_global,
+            route_prefix,
+        });
         self.registered.insert(name.to_string(), registered.clone());
         Ok(registered)
     }
@@ -252,13 +267,16 @@ impl ModuleRegistry {
             module_ref.initialize_local_singletons_async().await?;
 
             let exports = ModuleRef::new();
-            for token in module.exports()? {
-                exports.export_from(&module_ref, &token)?;
+            let export_tokens = module.exports()?;
+            for token in &export_tokens {
+                exports.export_from(&module_ref, token)?;
             }
+            let exported_tokens = exports.local_tokens()?;
+            let is_global = module.is_global();
 
-            if module.is_global() {
-                for token in exports.local_tokens()? {
-                    self.global_ref.export_from(&exports, &token)?;
+            if is_global {
+                for token in &exported_tokens {
+                    self.global_ref.export_from(&exports, token)?;
                 }
             }
 
@@ -308,13 +326,25 @@ impl ModuleRegistry {
                     .map(|pattern| pattern.with_module_name(name)),
             );
 
+            let import_names = imported_modules
+                .iter()
+                .map(|module| module.name.clone())
+                .collect::<Vec<_>>();
+            let route_prefix = (!route_prefix.is_empty()).then_some(route_prefix);
             let registered = RegisteredModule {
+                name: name.to_string(),
                 module_ref: module_ref.clone(),
                 exports,
             };
             sink.modules.push(name.to_string());
-            sink.module_instances
-                .push(ModuleInstance { module, module_ref });
+            sink.module_instances.push(ModuleInstance {
+                module,
+                module_ref,
+                imports: import_names,
+                exports: exported_tokens,
+                is_global,
+                route_prefix,
+            });
             self.registered.insert(name.to_string(), registered.clone());
             Ok(registered)
         })
@@ -348,6 +378,7 @@ impl ModuleRegistry {
 
 #[derive(Clone)]
 pub(super) struct RegisteredModule {
+    pub name: String,
     pub module_ref: ModuleRef,
     pub exports: ModuleRef,
 }

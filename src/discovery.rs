@@ -46,6 +46,51 @@ pub struct DiscoveredMessagePattern {
     pub module_name: Option<String>,
 }
 
+/// Read-only module graph snapshot for diagnostics and Nest-style devtools.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplicationGraph {
+    pub modules: Vec<ApplicationGraphModule>,
+}
+
+impl ApplicationGraph {
+    pub fn module(&self, name: &str) -> Option<&ApplicationGraphModule> {
+        self.modules.iter().find(|module| module.name == name)
+    }
+
+    pub fn imports_of(&self, name: &str) -> Vec<&ApplicationGraphModule> {
+        let Some(module) = self.module(name) else {
+            return Vec::new();
+        };
+
+        module
+            .imports
+            .iter()
+            .filter_map(|import| self.module(import))
+            .collect()
+    }
+
+    pub fn dependents_of(&self, name: &str) -> Vec<&ApplicationGraphModule> {
+        self.modules
+            .iter()
+            .filter(|module| module.imports.iter().any(|import| import == name))
+            .collect()
+    }
+}
+
+/// One module node in an [`ApplicationGraph`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplicationGraphModule {
+    pub name: String,
+    pub imports: Vec<String>,
+    pub provider_tokens: Vec<ProviderToken>,
+    pub export_tokens: Vec<ProviderToken>,
+    pub is_global: bool,
+    pub route_prefix: Option<String>,
+    pub route_count: usize,
+    pub gateway_count: usize,
+    pub message_pattern_count: usize,
+}
+
 /// Read-only discovery snapshot for a built Boot application.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DiscoveryService {
@@ -53,15 +98,23 @@ pub struct DiscoveryService {
     routes: Vec<DiscoveredRoute>,
     gateways: Vec<DiscoveredGateway>,
     message_patterns: Vec<DiscoveredMessagePattern>,
+    graph: ApplicationGraph,
 }
 
 impl DiscoveryService {
     pub fn from_app(app: &BootApplication) -> Result<Self> {
+        let modules = discover_modules(app)?;
+        let routes = discover_routes(app);
+        let gateways = discover_gateways(app);
+        let message_patterns = discover_message_patterns(app);
+        let graph = discover_application_graph(app, &routes, &gateways, &message_patterns)?;
+
         Ok(Self {
-            modules: discover_modules(app)?,
-            routes: discover_routes(app),
-            gateways: discover_gateways(app),
-            message_patterns: discover_message_patterns(app),
+            modules,
+            routes,
+            gateways,
+            message_patterns,
+            graph,
         })
     }
 
@@ -79,6 +132,10 @@ impl DiscoveryService {
 
     pub fn message_patterns(&self) -> &[DiscoveredMessagePattern] {
         &self.message_patterns
+    }
+
+    pub fn graph(&self) -> &ApplicationGraph {
+        &self.graph
     }
 
     pub fn module(&self, name: &str) -> Option<&DiscoveredModule> {
@@ -229,6 +286,45 @@ fn discover_modules(app: &BootApplication) -> Result<Vec<DiscoveredModule>> {
             })
         })
         .collect()
+}
+
+fn discover_application_graph(
+    app: &BootApplication,
+    routes: &[DiscoveredRoute],
+    gateways: &[DiscoveredGateway],
+    message_patterns: &[DiscoveredMessagePattern],
+) -> Result<ApplicationGraph> {
+    let mut modules = Vec::new();
+
+    for instance in &app.module_instances {
+        let name = instance.module.name().to_string();
+        let route_count = routes
+            .iter()
+            .filter(|route| route.module_name.as_deref() == Some(name.as_str()))
+            .count();
+        let gateway_count = gateways
+            .iter()
+            .filter(|gateway| gateway.module_name.as_deref() == Some(name.as_str()))
+            .count();
+        let message_pattern_count = message_patterns
+            .iter()
+            .filter(|pattern| pattern.module_name.as_deref() == Some(name.as_str()))
+            .count();
+
+        modules.push(ApplicationGraphModule {
+            name,
+            imports: instance.imports.clone(),
+            provider_tokens: instance.module_ref.local_tokens()?,
+            export_tokens: instance.exports.clone(),
+            is_global: instance.is_global,
+            route_prefix: instance.route_prefix.clone(),
+            route_count,
+            gateway_count,
+            message_pattern_count,
+        });
+    }
+
+    Ok(ApplicationGraph { modules })
 }
 
 fn discover_routes(app: &BootApplication) -> Vec<DiscoveredRoute> {

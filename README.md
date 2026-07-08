@@ -2311,10 +2311,10 @@ let module = TestingModule::builder()
 ## Discovery And Reflector
 
 `DiscoveryService` creates a read-only snapshot of a built application. It can
-inspect modules, local provider tokens, resolved HTTP routes, WebSocket
-gateways, and microservice message patterns. `Reflector` provides convenient
-route metadata lookups over the same snapshot, similar to Nest's reflector
-pattern.
+inspect modules, local provider tokens, the resolved module graph, resolved
+HTTP routes, WebSocket gateways, and microservice message patterns. `Reflector`
+provides convenient route metadata lookups over the same snapshot, similar to
+Nest's reflector pattern.
 
 ```rust
 use a3s_boot::{
@@ -2353,11 +2353,16 @@ impl Module for CatsModule {
 let app = BootApplication::builder().import(CatsModule).build()?;
 let discovery = DiscoveryService::from_app(&app)?;
 let reflector = discovery.reflector();
+let graph = discovery.graph();
 
 assert!(discovery.module("CatsModule").is_some());
 assert_eq!(
     discovery.routes_for_module("CatsModule")[0].path,
     "/cats/{id}"
+);
+assert_eq!(
+    graph.module("CatsModule").unwrap().route_count,
+    1
 );
 assert_eq!(
     reflector.operation_id(HttpMethod::Get, "/cats/{id}"),
@@ -2368,6 +2373,20 @@ assert_eq!(
     Some(&json!(["admin"]))
 );
 assert_eq!(reflector.routes_with_tag("cats").len(), 1);
+```
+
+The application graph exposes module import edges and resource counts for
+diagnostics, tests, or a devtools UI:
+
+```rust
+let graph = app.discovery()?.graph().clone();
+let cats = graph.module("CatsModule").unwrap();
+
+assert!(cats.imports.is_empty());
+assert_eq!(cats.provider_tokens.len(), 1);
+assert_eq!(cats.export_tokens.len(), 0);
+assert_eq!(cats.route_count, 1);
+assert_eq!(graph.imports_of("CatsModule").len(), 0);
 ```
 
 Route metadata is also copied into `ExecutionContext`, so guards and
@@ -4497,7 +4516,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | Module | A named feature boundary declared with `#[module]` or explicit `impl Module` |
 | ModuleRef | Typed provider container used by controllers and hosts |
 | Testing module | Test-only module compilation with provider overrides and in-process calls |
-| Discovery/Reflector | Runtime snapshots and metadata lookup for modules, routes, gateways, and message patterns |
+| Discovery/Reflector | Runtime module graph snapshots and metadata lookup for modules, routes, gateways, and message patterns |
 | Request context | Optional task-local request state through `RequestContext` |
 | HTTP adapter | Replaceable backend adapter; Axum is the first implementation |
 | Controller | Typed request handlers grouped by route prefix |
