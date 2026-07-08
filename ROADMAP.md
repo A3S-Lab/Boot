@@ -108,7 +108,8 @@ Implemented today:
   `TransportReply`, request-response and event-only message patterns,
   provider-backed handlers, validation helpers, transport pipes/guards/
   interceptors, Nest-style message macros, an in-process transport, and an
-  optional TCP transport for newline-delimited JSON message frames.
+  optional TCP transport for newline-delimited JSON message frames plus an
+  optional Redis Pub/Sub transport.
 - ACL-backed typed configuration modules with `ConfigModule`, named/global
   provider exports, environment/default function support, and validation hooks.
 - Typed cache modules with `CacheModule`, `Cache`, in-memory storage,
@@ -491,8 +492,9 @@ Tasks:
 - Start with an in-process test transport before external brokers.
   (Implemented with `InProcessTransport`)
 - Add one production transport only after the core contract is stable.
-  (Implemented first with optional `TcpTransport`; broker transports remain
-  future companion features.)
+  (Implemented first with optional `TcpTransport`, followed by optional
+  `RedisTransport`; additional broker transports remain future companion
+  features.)
 
 Acceptance:
 
@@ -588,8 +590,9 @@ framework capability. Keep GraphQL out of scope.
 
 Suggested implementation sequence:
 
-1. Add the next production message transport, such as Redis or NATS, now that
-   the async provider contract and TCP transport contract are stable.
+1. Add the next production message transport, such as NATS, MQTT, RabbitMQ,
+   Kafka, or gRPC, now that the async provider, TCP, and Redis transport
+   contracts are stable.
 2. Continue defining integrations through providers, middleware, guards,
    interceptors, or adapters instead of adding one-off framework hooks.
 3. Add crate-local tests and README examples for each chosen framework module.

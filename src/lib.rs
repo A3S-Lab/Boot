@@ -147,6 +147,8 @@ pub use transport::{
     MessagePatternKind, MessageTransport, TransportContext, TransportGuard, TransportInterceptor,
     TransportMessage, TransportPipe, TransportReply,
 };
+#[cfg(feature = "redis-transport")]
+pub use transport::{RedisTransport, RedisTransportClient, RedisTransportOptions};
 #[cfg(feature = "tcp-transport")]
 pub use transport::{TcpTransport, TcpTransportClient, TcpTransportOptions};
 pub use validation::Validate;

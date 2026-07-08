@@ -4,15 +4,21 @@ use a3s_boot::{
     MessageTransport, Module, ModuleRef, ProviderDefinition, Result, TransportContext,
     TransportInterceptor, TransportMessage, TransportReply, Validate,
 };
+#[cfg(feature = "redis-transport")]
+use a3s_boot::{RedisTransport, RedisTransportClient, RedisTransportOptions};
 #[cfg(feature = "tcp-transport")]
 use a3s_boot::{TcpTransport, TcpTransportClient};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
+#[cfg(any(feature = "redis-transport", feature = "tcp-transport"))]
+use std::time::Duration;
+#[cfg(feature = "redis-transport")]
+use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(feature = "tcp-transport")]
 use tokio::net::TcpListener;
-#[cfg(feature = "tcp-transport")]
-use tokio::time::{sleep, Duration};
+#[cfg(any(feature = "redis-transport", feature = "tcp-transport"))]
+use tokio::time::sleep;
 
 #[derive(Debug)]
 struct TransportCatsService;
@@ -324,6 +330,112 @@ async fn in_process_transport_builds_a_message_client() {
     assert_eq!(reply.data_as::<NumberPayload>().unwrap().value, 14);
 }
 
+#[cfg(feature = "redis-transport")]
+#[test]
+fn redis_transport_builds_a_message_client_with_custom_options() {
+    let options = RedisTransportOptions::new()
+        .with_channel_prefix("a3s.boot.test")
+        .with_request_timeout(Duration::from_secs(2));
+    let app = BootApplication::builder().build().unwrap();
+    let client = RedisTransport::with_options("redis://127.0.0.1/", options.clone())
+        .build(app)
+        .unwrap();
+
+    assert_eq!(client.url(), "redis://127.0.0.1/");
+    assert_eq!(client.options(), &options);
+    assert_eq!(client.options().request_channel(), "a3s.boot.test.requests");
+    assert_eq!(client.options().event_channel(), "a3s.boot.test.events");
+    assert_eq!(
+        client.options().reply_channel_prefix(),
+        "a3s.boot.test.replies"
+    );
+}
+
+#[cfg(feature = "redis-transport")]
+#[tokio::test]
+async fn redis_transport_round_trips_when_redis_url_is_set() {
+    let Some(url) = redis_test_url() else {
+        return;
+    };
+    let options = RedisTransportOptions::new()
+        .with_channel_prefix(unique_transport_prefix("redis-round-trip"))
+        .with_request_timeout(Duration::from_secs(2));
+    let app = BootApplication::builder()
+        .message_pattern(
+            MessagePatternDefinition::request_json(
+                "math.double",
+                |payload: NumberPayload| async move {
+                    Ok(NumberPayload {
+                        value: payload.value * 2,
+                    })
+                },
+            )
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+    let transport = RedisTransport::with_options(url.clone(), options.clone());
+    let server = tokio::spawn({
+        let app = app.clone();
+        async move { transport.serve(app).await }
+    });
+    let client = RedisTransportClient::with_options(url, options);
+
+    let reply = send_redis_with_retry(
+        &client,
+        TransportMessage::json("math.double", &NumberPayload { value: 9 }).unwrap(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(reply.data_as::<NumberPayload>().unwrap().value, 18);
+    server.abort();
+}
+
+#[cfg(feature = "redis-transport")]
+#[tokio::test]
+async fn redis_transport_emits_events_when_redis_url_is_set() {
+    let Some(url) = redis_test_url() else {
+        return;
+    };
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let event_log = Arc::clone(&observed);
+    let options = RedisTransportOptions::new()
+        .with_channel_prefix(unique_transport_prefix("redis-event"))
+        .with_request_timeout(Duration::from_secs(2));
+    let app = BootApplication::builder()
+        .message_pattern(
+            MessagePatternDefinition::event_json("math.observed", move |payload: NumberPayload| {
+                let event_log = Arc::clone(&event_log);
+                async move {
+                    event_log.lock().unwrap().push(payload.value);
+                    Ok(())
+                }
+            })
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+    let transport = RedisTransport::with_options(url.clone(), options.clone());
+    let server = tokio::spawn({
+        let app = app.clone();
+        async move { transport.serve(app).await }
+    });
+    let client = RedisTransportClient::with_options(url, options);
+
+    emit_redis_until_observed(
+        &client,
+        TransportMessage::json("math.observed", &NumberPayload { value: 11 }).unwrap(),
+        Arc::clone(&observed),
+    )
+    .await
+    .unwrap();
+
+    assert!(observed.lock().unwrap().contains(&11));
+    server.abort();
+}
+
 #[cfg(feature = "tcp-transport")]
 #[tokio::test]
 async fn tcp_transport_round_trips_request_response_messages() {
@@ -565,4 +677,70 @@ async fn send_tcp_with_retry(
         || BootError::Adapter("tcp transport did not start".to_string()),
         BootError::Io,
     ))
+}
+
+#[cfg(feature = "redis-transport")]
+fn redis_test_url() -> Option<String> {
+    std::env::var("A3S_BOOT_REDIS_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+#[cfg(feature = "redis-transport")]
+async fn send_redis_with_retry(
+    client: &RedisTransportClient,
+    message: TransportMessage,
+) -> Result<Option<TransportReply>> {
+    let mut last_error = None;
+    for _ in 0..50 {
+        match client.send(message.clone()).await {
+            Ok(reply) => return Ok(reply),
+            Err(BootError::Adapter(message))
+                if message.contains("has no subscribers") || message.contains("timed out") =>
+            {
+                last_error = Some(BootError::Adapter(message));
+                sleep(Duration::from_millis(20)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_error
+        .unwrap_or_else(|| BootError::Adapter("redis transport did not start".to_string())))
+}
+
+#[cfg(feature = "redis-transport")]
+async fn emit_redis_until_observed(
+    client: &RedisTransportClient,
+    message: TransportMessage,
+    observed: Arc<Mutex<Vec<i32>>>,
+) -> Result<()> {
+    let mut last_error = None;
+    for _ in 0..50 {
+        match client.emit(message.clone()).await {
+            Ok(()) => {
+                sleep(Duration::from_millis(20)).await;
+                if !observed.lock().unwrap().is_empty() {
+                    return Ok(());
+                }
+            }
+            Err(error) => {
+                last_error = Some(error);
+                sleep(Duration::from_millis(20)).await;
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        BootError::Adapter("redis transport event was not observed".to_string())
+    }))
+}
+
+#[cfg(feature = "redis-transport")]
+fn unique_transport_prefix(name: &str) -> String {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    format!("a3s.boot.tests.{name}.{nanos}")
 }

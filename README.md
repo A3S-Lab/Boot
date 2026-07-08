@@ -93,6 +93,16 @@ serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
+Enable the optional Redis microservice transport when services need Nest-style
+request-response and event-only message patterns over Redis Pub/Sub:
+
+```toml
+[dependencies]
+a3s-boot = { version = "0.1", features = ["redis-transport"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
 Enable the optional structured logger module when the application needs
 provider-backed logging without forcing a concrete backend:
 
@@ -939,7 +949,8 @@ Microservice message patterns mirror Nest's `@MessagePattern()` and
 `TransportMessage` values with a `pattern` and `data`, and external brokers can
 implement `MessageTransport`. `InProcessTransport` is included for tests,
 workers, and single-process dispatch. Enable the `tcp-transport` feature to use
-`TcpTransport` for newline-delimited JSON messages over TCP.
+`TcpTransport` for newline-delimited JSON messages over TCP, or
+`redis-transport` to use Redis Pub/Sub channels.
 
 ```rust
 use std::sync::Arc;
@@ -1107,6 +1118,54 @@ The wire format is one UTF-8 JSON frame per line. Clients send a
 `TransportMessage` such as `{"pattern":"cat.find","data":{"id":"1"}}`; servers
 reply with a `reply`, `no_reply`, or `error` envelope. Handler errors are mapped
 back into the closest `BootError` variant on the client.
+
+With `redis-transport`, request-response messages go through a configured
+request channel and receive replies on per-request reply channels. Event
+messages are published to a configured event channel:
+
+```rust
+use std::time::Duration;
+
+use a3s_boot::{
+    BootFactory, RedisTransport, RedisTransportClient, RedisTransportOptions, Result,
+    TransportMessage,
+};
+
+async fn run_redis_microservice() -> Result<()> {
+    let options = RedisTransportOptions::new()
+        .with_channel_prefix("cats")
+        .with_request_timeout(Duration::from_secs(5));
+    let transport = RedisTransport::with_options("redis://127.0.0.1/", options);
+    let mut service = BootFactory::create_microservice(CatsModule, transport)?;
+    service.listen().await
+}
+
+async fn call_redis_microservice() -> Result<()> {
+    let options = RedisTransportOptions::new().with_channel_prefix("cats");
+    let client = RedisTransportClient::with_options("redis://127.0.0.1/", options);
+    let reply = client
+        .send(TransportMessage::json(
+            "cat.find",
+            &FindCatMessage {
+                id: "milo".to_string(),
+            },
+        )?)
+        .await?
+        .unwrap();
+
+    client
+        .emit(TransportMessage::json(
+            "cat.created",
+            &FindCatMessage {
+                id: "luna".to_string(),
+            },
+        )?)
+        .await?;
+
+    assert_eq!(reply.data_as::<CatDto>()?.name, "Milo");
+    Ok(())
+}
+```
 
 ## Application Events
 

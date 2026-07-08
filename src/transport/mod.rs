@@ -9,9 +9,13 @@ use std::future::Future;
 use std::ops::Deref;
 use std::sync::Arc;
 
+#[cfg(feature = "redis-transport")]
+mod redis;
 #[cfg(feature = "tcp-transport")]
 mod tcp;
 
+#[cfg(feature = "redis-transport")]
+pub use self::redis::{RedisTransport, RedisTransportClient, RedisTransportOptions};
 #[cfg(feature = "tcp-transport")]
 pub use tcp::{TcpTransport, TcpTransportClient, TcpTransportOptions};
 
