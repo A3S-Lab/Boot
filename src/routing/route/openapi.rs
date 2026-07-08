@@ -78,8 +78,34 @@ impl RouteDefinition {
         self
     }
 
+    pub fn with_request_body_content_type(
+        self,
+        content_type: impl Into<String>,
+        schema: OpenApiSchema,
+    ) -> Self {
+        self.with_request_body(OpenApiRequestBody::content(content_type, schema))
+    }
+
     pub fn with_json_request_body(self, schema: OpenApiSchema) -> Self {
         self.with_request_body(OpenApiRequestBody::json(schema))
+    }
+
+    pub fn try_with_request_body_content_type_example<T>(
+        self,
+        content_type: impl Into<String>,
+        schema: OpenApiSchema,
+        example: T,
+    ) -> Result<Self>
+    where
+        T: Serialize,
+    {
+        Ok(
+            self.with_request_body(OpenApiRequestBody::try_content_example(
+                content_type,
+                schema,
+                example,
+            )?),
+        )
     }
 
     pub fn try_with_json_request_body_example<T>(
@@ -105,6 +131,19 @@ impl RouteDefinition {
         self
     }
 
+    pub fn with_response_content_type(
+        self,
+        status: u16,
+        description: impl Into<String>,
+        content_type: impl Into<String>,
+        schema: OpenApiSchema,
+    ) -> Self {
+        self.with_response(
+            status,
+            OpenApiResponse::content(description, content_type, schema),
+        )
+    }
+
     pub fn with_json_response(
         self,
         status: u16,
@@ -112,6 +151,23 @@ impl RouteDefinition {
         schema: OpenApiSchema,
     ) -> Self {
         self.with_response(status, OpenApiResponse::json(description, schema))
+    }
+
+    pub fn try_with_response_content_type_example<T>(
+        self,
+        status: u16,
+        description: impl Into<String>,
+        content_type: impl Into<String>,
+        schema: OpenApiSchema,
+        example: T,
+    ) -> Result<Self>
+    where
+        T: Serialize,
+    {
+        Ok(self.with_response(
+            status,
+            OpenApiResponse::try_content_example(description, content_type, schema, example)?,
+        ))
     }
 
     pub fn try_with_json_response_example<T>(

@@ -103,9 +103,9 @@ Implemented today:
   with Nest-style HTTP route exclusions, lifecycle hooks, and an Axum adapter.
 - OpenAPI route metadata, schema-crate-neutral document generation from resolved
   routes, explicit Nest-style parameter decorators, automatic path-parameter
-  documentation, request/response examples, and optional `serve_openapi(...)`
-  JSON route registration plus `serve_openapi_ui(...)` Swagger UI route
-  registration.
+  documentation, request/response examples, non-JSON media type metadata, and
+  optional `serve_openapi(...)` JSON route registration plus
+  `serve_openapi_ui(...)` Swagger UI route registration.
 - Custom route/controller metadata through builders and `#[metadata]`,
   route-level override semantics, protocol-neutral `ExecutionContext` access
   for HTTP, WebSocket, and transport guards/interceptors, and typed `Reflector`
@@ -342,15 +342,16 @@ Tasks:
 - Preserve adapter neutrality. (Implemented)
 - Add Nest-style OpenAPI macros such as `#[tag]`, `#[operation]`,
   `#[api_param]`, `#[api_query]`, `#[api_header]`, `#[response]`,
-  request/response examples, and auth metadata attributes. (Implemented)
+  request/response examples, request/response media types, and auth metadata
+  attributes. (Implemented)
 - Add optional schema component generation from `schemars`. (Implemented)
 
 Acceptance:
 
 - A sample controller can generate a valid OpenAPI 3 document.
 - The generated document includes paths, methods, inferred and explicit params,
-  request body, responses, request/response examples, tags, and security
-  metadata.
+  request body, responses, request/response examples, non-JSON media types,
+  tags, and security metadata.
 - A generated Swagger UI route can load the generated JSON document.
 - JSON examples in README are generated from tested code paths.
 - OpenAPI tests validate a representative document with `serde_json`.

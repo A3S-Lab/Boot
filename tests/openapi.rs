@@ -235,6 +235,52 @@ fn openapi_documents_include_request_and_response_examples() {
     );
 }
 
+#[test]
+fn openapi_documents_include_request_and_response_media_types() {
+    let route = RouteDefinition::post_json_with_status(
+        "/cats/import",
+        202,
+        |dto: OpenApiCreateCatDto| async move {
+            Ok(OpenApiCatDto {
+                id: "imported".to_string(),
+                name: dto.name,
+            })
+        },
+    )
+    .unwrap()
+    .with_request_body_content_type("multipart/form-data", OpenApiSchema::object())
+    .try_with_response_content_type_example(
+        202,
+        "Cat import accepted",
+        "application/vnd.a3s.cat+json",
+        OpenApiSchema::reference("OpenApiCatDto"),
+        json!({ "id": "imported", "name": "Milo" }),
+    )
+    .unwrap();
+
+    let document = BootApplication::builder()
+        .route(route)
+        .build()
+        .unwrap()
+        .openapi(OpenApiInfo::new("Cats API", "1.0.0"));
+    let value = serde_json::to_value(document).unwrap();
+    let operation = &value["paths"]["/cats/import"]["post"];
+
+    assert_eq!(
+        operation["requestBody"]["content"]["multipart/form-data"]["schema"],
+        json!({ "type": "object" })
+    );
+    assert!(operation["requestBody"]["content"]["application/json"].is_null());
+    assert_eq!(
+        operation["responses"]["202"]["content"]["application/vnd.a3s.cat+json"]["schema"],
+        json!({ "$ref": "#/components/schemas/OpenApiCatDto" })
+    );
+    assert_eq!(
+        operation["responses"]["202"]["content"]["application/vnd.a3s.cat+json"]["example"],
+        json!({ "id": "imported", "name": "Milo" })
+    );
+}
+
 #[cfg(feature = "openapi-schemas")]
 #[test]
 fn openapi_schema_components_can_be_generated_from_schemars() {

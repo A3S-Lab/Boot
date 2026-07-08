@@ -353,6 +353,8 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@ApiResponse(...)` | `#[response(status = 200, description = "...", schema = CatDto)]` |
 | `@ApiResponse({ example: ... })` | `#[response(status = 200, schema = CatDto, example = serde_json::json!(...))]` |
 | `@ApiBody({ example: ... })` | `#[request_body(schema = CreateCatDto, example = serde_json::json!(...))]` |
+| `@ApiConsumes("multipart/form-data")` | `#[request_body(content_type = "multipart/form-data", schema = UploadDto)]` |
+| `@ApiProduces("text/csv")` | `#[response(status = 200, content_type = "text/csv", schema = String)]` |
 | `@ApiBearerAuth()` | `#[bearer_auth]` on a route method |
 | Constructor injection | `#[injectable]` fields such as `cats: Arc<CatsService>` plus `CatsController::provider()` |
 | `@Inject("TOKEN")` | `#[inject("token")]` on an `Arc<T>`, `Option<Arc<T>>`, or `ProviderRef<T>` field |
@@ -1089,7 +1091,10 @@ when the inferred parameter needs a description or a more precise schema.
 Use `try_with_json_request_body_example(...)`,
 `try_with_json_response_example(...)`, `#[request_body(example = ...)]`, and
 `#[response(example = ...)]` to mirror Nest Swagger request and response
-examples.
+examples. Use `with_request_body_content_type(...)`,
+`with_response_content_type(...)`, `#[request_body(content_type = "...")]`, and
+`#[response(content_type = "...")]` for non-JSON media types such as
+`multipart/form-data`, vendor JSON, or CSV.
 
 With `openapi-schemas`, routes can collect component schemas directly from
 types that derive `schemars::JsonSchema`:

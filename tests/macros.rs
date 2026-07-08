@@ -443,6 +443,26 @@ impl MacroCatsController {
         Ok(MacroCatDto { id, name: dto.name })
     }
 
+    #[post("/imports", status = 202)]
+    #[request_body(
+        content_type = "multipart/form-data",
+        schema = MacroCreateCatDto,
+        description = "Cat import form"
+    )]
+    #[response(
+        status = 202,
+        description = "Cat import accepted",
+        content_type = "application/vnd.a3s.cat+json",
+        schema = MacroCatDto,
+        example = json!({ "id": "imported", "name": "Milo" })
+    )]
+    async fn import(&self, dto: MacroCreateCatDto) -> Result<MacroCatDto> {
+        Ok(MacroCatDto {
+            id: "imported".to_string(),
+            name: dto.name,
+        })
+    }
+
     #[post("/{id}/touch")]
     #[http_code(202)]
     async fn touch(&self, #[param("id")] id: String) -> Result<MacroCatDto> {
@@ -977,7 +997,7 @@ async fn macros_register_injectable_services_and_controller_routes() {
         .build()
         .unwrap();
 
-    assert_eq!(app.routes().len(), 19);
+    assert_eq!(app.routes().len(), 20);
     assert_eq!(app.gateways().len(), 1);
     assert_eq!(app.gateways()[0].namespace(), Some("/macro-cats"));
     assert_eq!(app.message_patterns().len(), 3);
@@ -1539,6 +1559,25 @@ async fn macros_register_injectable_services_and_controller_routes() {
     assert_eq!(
         adopt_operation["requestBody"]["content"]["application/json"]["schema"],
         json!({ "$ref": "#/components/schemas/MacroCreateCatDto" })
+    );
+
+    let import_operation = &document["paths"]["/macro-cats/imports"]["post"];
+    assert_eq!(
+        import_operation["requestBody"]["description"],
+        json!("Cat import form")
+    );
+    assert_eq!(
+        import_operation["requestBody"]["content"]["multipart/form-data"]["schema"],
+        json!({ "$ref": "#/components/schemas/MacroCreateCatDto" })
+    );
+    assert!(import_operation["requestBody"]["content"]["application/json"].is_null());
+    assert_eq!(
+        import_operation["responses"]["202"]["content"]["application/vnd.a3s.cat+json"]["schema"],
+        json!({ "$ref": "#/components/schemas/MacroCatDto" })
+    );
+    assert_eq!(
+        import_operation["responses"]["202"]["content"]["application/vnd.a3s.cat+json"]["example"],
+        json!({ "id": "imported", "name": "Milo" })
     );
     assert!(!document["paths"]
         .as_object()

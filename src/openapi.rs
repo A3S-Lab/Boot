@@ -268,17 +268,30 @@ pub struct OpenApiRequestBody {
 }
 
 impl OpenApiRequestBody {
-    pub fn json(schema: OpenApiSchema) -> Self {
+    pub fn content(content_type: impl Into<String>, schema: OpenApiSchema) -> Self {
         let mut content = BTreeMap::new();
-        content.insert(
-            "application/json".to_string(),
-            OpenApiMediaType::new(schema),
-        );
+        content.insert(content_type.into(), OpenApiMediaType::new(schema));
         Self {
             description: None,
             required: true,
             content,
         }
+    }
+
+    pub fn json(schema: OpenApiSchema) -> Self {
+        Self::content("application/json", schema)
+    }
+
+    pub fn try_content_example<T>(
+        content_type: impl Into<String>,
+        schema: OpenApiSchema,
+        example: T,
+    ) -> Result<Self>
+    where
+        T: Serialize,
+    {
+        let content_type = content_type.into();
+        Self::content(content_type.clone(), schema).try_with_content_example(content_type, example)
     }
 
     pub fn try_json_example<T>(schema: OpenApiSchema, example: T) -> Result<Self>
@@ -298,16 +311,28 @@ impl OpenApiRequestBody {
         self
     }
 
-    pub fn try_with_json_example<T>(mut self, example: T) -> Result<Self>
+    pub fn try_with_content_example<T>(
+        mut self,
+        content_type: impl Into<String>,
+        example: T,
+    ) -> Result<Self>
     where
         T: Serialize,
     {
+        let content_type = content_type.into();
         let example = serialize_openapi_example(example)?;
         self.content
-            .entry("application/json".to_string())
+            .entry(content_type)
             .or_insert_with(|| OpenApiMediaType::new(OpenApiSchema::object()))
             .example = Some(example);
         Ok(self)
+    }
+
+    pub fn try_with_json_example<T>(self, example: T) -> Result<Self>
+    where
+        T: Serialize,
+    {
+        self.try_with_content_example("application/json", example)
     }
 }
 
@@ -327,16 +352,35 @@ impl OpenApiResponse {
         }
     }
 
-    pub fn json(description: impl Into<String>, schema: OpenApiSchema) -> Self {
+    pub fn content(
+        description: impl Into<String>,
+        content_type: impl Into<String>,
+        schema: OpenApiSchema,
+    ) -> Self {
         let mut content = BTreeMap::new();
-        content.insert(
-            "application/json".to_string(),
-            OpenApiMediaType::new(schema),
-        );
+        content.insert(content_type.into(), OpenApiMediaType::new(schema));
         Self {
             description: description.into(),
             content,
         }
+    }
+
+    pub fn json(description: impl Into<String>, schema: OpenApiSchema) -> Self {
+        Self::content(description, "application/json", schema)
+    }
+
+    pub fn try_content_example<T>(
+        description: impl Into<String>,
+        content_type: impl Into<String>,
+        schema: OpenApiSchema,
+        example: T,
+    ) -> Result<Self>
+    where
+        T: Serialize,
+    {
+        let content_type = content_type.into();
+        Self::content(description, content_type.clone(), schema)
+            .try_with_content_example(content_type, example)
     }
 
     pub fn try_json_example<T>(
@@ -350,16 +394,28 @@ impl OpenApiResponse {
         Self::json(description, schema).try_with_json_example(example)
     }
 
-    pub fn try_with_json_example<T>(mut self, example: T) -> Result<Self>
+    pub fn try_with_content_example<T>(
+        mut self,
+        content_type: impl Into<String>,
+        example: T,
+    ) -> Result<Self>
     where
         T: Serialize,
     {
+        let content_type = content_type.into();
         let example = serialize_openapi_example(example)?;
         self.content
-            .entry("application/json".to_string())
+            .entry(content_type)
             .or_insert_with(|| OpenApiMediaType::new(OpenApiSchema::object()))
             .example = Some(example);
         Ok(self)
+    }
+
+    pub fn try_with_json_example<T>(self, example: T) -> Result<Self>
+    where
+        T: Serialize,
+    {
+        self.try_with_content_example("application/json", example)
     }
 }
 

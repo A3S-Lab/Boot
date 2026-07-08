@@ -4854,6 +4854,7 @@ struct ResponseArgs {
     status: LitInt,
     description: Option<LitStr>,
     schema: Option<Type>,
+    content_type: Option<LitStr>,
     example: Option<Expr>,
 }
 
@@ -4865,25 +4866,36 @@ impl ResponseArgs {
             None => quote!("Success"),
         };
 
-        Ok(match (&self.schema, &self.example) {
-            (schema, Some(example)) => {
-                let schema = schema
+        Ok(
+            if self.schema.is_some() || self.content_type.is_some() || self.example.is_some() {
+                let schema = self
+                    .schema
                     .as_ref()
                     .map(openapi_schema_tokens)
                     .unwrap_or_else(|| quote!(::a3s_boot::OpenApiSchema::object()));
-                quote!(try_with_json_response_example(#status, #description, #schema, #example)?)
-            }
-            (Some(schema), None) => {
-                let schema = openapi_schema_tokens(schema);
-                quote!(with_json_response(#status, #description, #schema))
-            }
-            (None, None) => quote! {
+                let content_type = self
+                    .content_type
+                    .as_ref()
+                    .map(|content_type| quote!(#content_type))
+                    .unwrap_or_else(|| quote!("application/json"));
+
+                match &self.example {
+                    Some(example) => {
+                        quote!(try_with_response_content_type_example(#status, #description, #content_type, #schema, #example)?)
+                    }
+                    None => {
+                        quote!(with_response_content_type(#status, #description, #content_type, #schema))
+                    }
+                }
+            } else {
+                quote! {
                 with_response(
                     #status,
                     ::a3s_boot::OpenApiResponse::description(#description)
                 )
+                }
             },
-        })
+        )
     }
 }
 
@@ -4892,6 +4904,7 @@ impl Parse for ResponseArgs {
         let mut status = None;
         let mut description = None;
         let mut schema = None;
+        let mut content_type = None;
         let mut example = None;
 
         while !input.is_empty() {
@@ -4903,12 +4916,14 @@ impl Parse for ResponseArgs {
                 set_once(&mut description, input.parse::<LitStr>()?, name)?;
             } else if name == "schema" || name == "ty" || name == "body" {
                 set_once(&mut schema, input.parse::<Type>()?, name)?;
+            } else if name == "content_type" || name == "contentType" || name == "media_type" {
+                set_once(&mut content_type, input.parse::<LitStr>()?, name)?;
             } else if name == "example" {
                 set_once(&mut example, input.parse::<Expr>()?, name)?;
             } else {
                 return Err(syn::Error::new_spanned(
                     name,
-                    "expected `status`, `description`, `schema`, or `example`",
+                    "expected `status`, `description`, `schema`, `content_type`, or `example`",
                 ));
             }
             parse_optional_comma(input)?;
@@ -4922,6 +4937,7 @@ impl Parse for ResponseArgs {
             status,
             description,
             schema,
+            content_type,
             example,
         })
     }
@@ -4930,6 +4946,7 @@ impl Parse for ResponseArgs {
 #[derive(Clone, Default)]
 struct RequestBodyArgs {
     schema: Option<Type>,
+    content_type: Option<LitStr>,
     description: Option<LitStr>,
     required: Option<LitBool>,
     example: Option<Expr>,
@@ -4942,11 +4959,19 @@ impl RequestBodyArgs {
             .as_ref()
             .map(openapi_schema_tokens)
             .unwrap_or_else(|| quote!(::a3s_boot::OpenApiSchema::object()));
-        let mut request_body = match &self.example {
-            Some(example) => {
-                quote!(::a3s_boot::OpenApiRequestBody::try_json_example(#schema, #example)?)
+        let content_type = self
+            .content_type
+            .as_ref()
+            .map(|content_type| quote!(#content_type))
+            .unwrap_or_else(|| quote!("application/json"));
+        let mut request_body = match (&self.content_type, &self.example) {
+            (_, Some(example)) => {
+                quote!(::a3s_boot::OpenApiRequestBody::try_content_example(#content_type, #schema, #example)?)
             }
-            None => quote!(::a3s_boot::OpenApiRequestBody::json(#schema)),
+            (Some(_), None) => {
+                quote!(::a3s_boot::OpenApiRequestBody::content(#content_type, #schema))
+            }
+            (None, None) => quote!(::a3s_boot::OpenApiRequestBody::json(#schema)),
         };
 
         if let Some(description) = &self.description {
@@ -4974,6 +4999,8 @@ impl Parse for RequestBodyArgs {
             input.parse::<Token![=]>()?;
             if name == "schema" || name == "ty" || name == "body" {
                 set_once(&mut args.schema, input.parse::<Type>()?, name)?;
+            } else if name == "content_type" || name == "contentType" || name == "media_type" {
+                set_once(&mut args.content_type, input.parse::<LitStr>()?, name)?;
             } else if name == "description" {
                 set_once(&mut args.description, input.parse::<LitStr>()?, name)?;
             } else if name == "required" {
@@ -4983,7 +5010,7 @@ impl Parse for RequestBodyArgs {
             } else {
                 return Err(syn::Error::new_spanned(
                     name,
-                    "expected `schema`, `description`, `required`, or `example`",
+                    "expected `schema`, `content_type`, `description`, `required`, or `example`",
                 ));
             }
             parse_optional_comma(input)?;
