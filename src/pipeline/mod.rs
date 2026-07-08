@@ -6,7 +6,7 @@ mod interceptor;
 mod middleware;
 mod pipe;
 
-pub(crate) use components::PipelineComponents;
+pub(crate) use components::{PipelineComponent, PipelineComponents, PipelineOverrides};
 pub use context::{
     ExecutionContext, ExecutionProtocol, ExecutionTransportKind, TransportExecutionContext,
     WebSocketExecutionContext,

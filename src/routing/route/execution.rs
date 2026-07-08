@@ -69,7 +69,7 @@ impl RouteDefinition {
 
         for pipe in &self.pipes {
             let context_request = request.clone();
-            request = match pipe.transform(request).await {
+            request = match pipe.inner().transform(request).await {
                 Ok(request) => request,
                 Err(error) => {
                     return self
@@ -92,7 +92,7 @@ impl RouteDefinition {
         let context = self.execution_context(request.clone());
 
         for guard in &self.guards {
-            let can_activate = match guard.can_activate(context.clone()).await {
+            let can_activate = match guard.inner().can_activate(context.clone()).await {
                 Ok(can_activate) => can_activate,
                 Err(error) => return self.handle_error(context.clone(), error).await,
             };
@@ -106,7 +106,7 @@ impl RouteDefinition {
         }
 
         for interceptor in &self.interceptors {
-            if let Err(error) = interceptor.before(context.clone()).await {
+            if let Err(error) = interceptor.inner().before(context.clone()).await {
                 return self.handle_error(context.clone(), error).await;
             }
         }
@@ -117,7 +117,7 @@ impl RouteDefinition {
         };
 
         for interceptor in self.interceptors.iter().rev() {
-            response = match interceptor.after(context.clone(), response).await {
+            response = match interceptor.inner().after(context.clone(), response).await {
                 Ok(response) => response,
                 Err(error) => return self.handle_error(context.clone(), error).await,
             };
@@ -192,6 +192,7 @@ impl RouteDefinition {
     ) -> Result<BootResponse> {
         for filter in self.filters.iter().rev() {
             if let Some(response) = filter
+                .inner()
                 .catch(context.clone(), error.clone_for_filter())
                 .await?
             {

@@ -1351,7 +1351,8 @@ application startup or shutdown hooks.
 
 `TestingModule` mirrors Nest's test-module workflow: assemble a module graph,
 override providers before controllers are built, compile it, resolve providers
-from the compiled graph, and call the app in process without binding a socket.
+from the compiled graph, override route pipeline components, and call the app
+in process without binding a socket.
 
 ```rust
 use std::sync::Arc;
@@ -1404,6 +1405,19 @@ let response = module
 assert_eq!(response.body_json::<String>()?, "test-cat");
 # Ok(())
 # }
+```
+
+Pipeline overrides use the original component type as the first generic
+argument and the replacement value as the method argument:
+
+```rust
+let module = TestingModule::builder()
+    .import(CatsModule)
+    .override_guard::<AuthGuard, _>(AllowGuard)
+    .override_interceptor::<TraceInterceptor, _>(NoopInterceptor)
+    .override_filter::<HttpErrorFilter, _>(TestErrorFilter)
+    .override_pipe::<ParseCatPipe, _>(PassThroughPipe)
+    .compile()?;
 ```
 
 ## Discovery And Reflector

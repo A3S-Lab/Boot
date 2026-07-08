@@ -1,7 +1,9 @@
+use crate::pipeline::PipelineOverrides;
 use crate::{
     BootApplication, BootApplicationBuilder, BootError, BootRequest, BootResponse,
-    ControllerDefinition, DynamicModule, MessagePatternDefinition, Module, ModuleRef,
-    ProviderDefinition, ProviderToken, Result, RouteDefinition, WebSocketGatewayDefinition,
+    ControllerDefinition, DynamicModule, ExceptionFilter, Guard, Interceptor,
+    MessagePatternDefinition, Module, ModuleRef, Pipe, ProviderDefinition, ProviderToken, Result,
+    RouteDefinition, WebSocketGatewayDefinition,
 };
 use std::sync::Arc;
 
@@ -97,6 +99,7 @@ impl TestingModule {
 pub struct TestingModuleBuilder {
     app: BootApplicationBuilder,
     module: DynamicModule,
+    pipeline_overrides: PipelineOverrides,
 }
 
 impl Default for TestingModuleBuilder {
@@ -104,6 +107,7 @@ impl Default for TestingModuleBuilder {
         Self {
             app: BootApplication::builder(),
             module: DynamicModule::new("TestingModule"),
+            pipeline_overrides: PipelineOverrides::default(),
         }
     }
 }
@@ -156,9 +160,52 @@ impl TestingModuleBuilder {
         self
     }
 
+    pub fn override_guard<T, G>(mut self, guard: G) -> Self
+    where
+        T: Guard,
+        G: Guard,
+    {
+        self.pipeline_overrides.override_guard::<T, G>(guard);
+        self
+    }
+
+    pub fn override_interceptor<T, I>(mut self, interceptor: I) -> Self
+    where
+        T: Interceptor,
+        I: Interceptor,
+    {
+        self.pipeline_overrides
+            .override_interceptor::<T, I>(interceptor);
+        self
+    }
+
+    pub fn override_filter<T, F>(mut self, filter: F) -> Self
+    where
+        T: ExceptionFilter,
+        F: ExceptionFilter,
+    {
+        self.pipeline_overrides.override_filter::<T, F>(filter);
+        self
+    }
+
+    pub fn override_pipe<T, P>(mut self, pipe: P) -> Self
+    where
+        T: Pipe,
+        P: Pipe,
+    {
+        self.pipeline_overrides.override_pipe::<T, P>(pipe);
+        self
+    }
+
     pub fn compile(self) -> Result<TestingModule> {
-        Ok(TestingModule {
-            app: self.app.import(self.module).build()?,
-        })
+        let mut app = self.app.import(self.module).build()?;
+        if !self.pipeline_overrides.is_empty() {
+            app.routes = app
+                .routes
+                .into_iter()
+                .map(|route| route.with_pipeline_overrides(&self.pipeline_overrides))
+                .collect();
+        }
+        Ok(TestingModule { app })
     }
 }

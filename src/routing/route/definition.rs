@@ -1,3 +1,4 @@
+use crate::pipeline::PipelineComponent;
 use crate::{
     BootError, ExceptionFilter, Guard, HttpMethod, Interceptor, Middleware, OpenApiRouteMetadata,
     Pipe, RequestValidator, Result, RouteVersioning, SerializationOptions,
@@ -26,10 +27,10 @@ pub struct RouteDefinition {
     pub(super) host: Option<String>,
     pub(super) handler: Arc<dyn RouteHandler>,
     pub(super) middleware: Vec<Arc<dyn Middleware>>,
-    pub(super) pipes: Vec<Arc<dyn Pipe>>,
-    pub(super) guards: Vec<Arc<dyn Guard>>,
-    pub(super) interceptors: Vec<Arc<dyn Interceptor>>,
-    pub(super) filters: Vec<Arc<dyn ExceptionFilter>>,
+    pub(super) pipes: Vec<PipelineComponent<dyn Pipe>>,
+    pub(super) guards: Vec<PipelineComponent<dyn Guard>>,
+    pub(super) interceptors: Vec<PipelineComponent<dyn Interceptor>>,
+    pub(super) filters: Vec<PipelineComponent<dyn ExceptionFilter>>,
     pub(super) validators: Vec<RequestValidator>,
     pub(super) validation_enabled: bool,
     pub(super) validation_disabled: bool,

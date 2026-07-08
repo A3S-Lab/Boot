@@ -35,6 +35,8 @@ Implemented today:
   singleton/request/transient lifecycle scopes, singleton provider lifecycle
   hooks, lookup, `FromModuleRef` auto-wired provider factories, and named or
   optional dependency resolution.
+- `TestingModule` with provider overrides and typed route pipeline overrides
+  for guards, interceptors, exception filters, and pipes.
 - `ControllerDefinition` and `RouteDefinition` for HTTP route groups.
 - Nest-style attribute macros: `#[injectable]`, `#[controller]`, `#[get]`,
   `#[post]`, `#[put]`, `#[patch]`, `#[delete]`, `#[sse]`, raw route mode, and
