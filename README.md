@@ -1613,9 +1613,17 @@ request scope, request-scoped providers behave like a fresh resolution. Provider
 aliases mirror Nest's `useExisting`: the alias token delegates to the target
 token and preserves the target provider's scope.
 
-During transient and request-scoped provider resolution, Boot tracks the active
-provider chain and reports circular dependencies with the full token path, for
-example `cyclic provider dependency detected: cats -> repository -> cats`.
+When an application module builds, Boot registers the module's provider tokens
+before it initializes singleton factories. Singleton factories can therefore
+depend on other providers declared later in the same module. During async
+application builds, async singleton factories are seeded before sync singleton
+factories are resolved, so sync singletons can depend on async-built singletons
+without declaration-order coupling.
+
+During singleton, transient, and request-scoped provider resolution, Boot tracks
+the active provider chain and reports circular dependencies with the full token
+path, for example
+`cyclic provider dependency detected: cats -> repository -> cats`.
 
 ```rust
 use std::sync::Arc;
@@ -1665,11 +1673,11 @@ impl FromModuleRef for Formatter {
 }
 
 let providers = vec![
+    ProviderDefinition::injectable::<Repository>(),
     ProviderDefinition::singleton(AppConfig { name: "cats" }),
     ProviderDefinition::factory_arc::<Client, _>(|_module_ref: &ModuleRef| {
         Ok(Arc::new(Client))
     }),
-    ProviderDefinition::injectable::<Repository>(),
     ProviderDefinition::named_factory_arc::<Client, _>("readonly-client", |_| {
         Ok(Arc::new(Client))
     }),
@@ -1735,14 +1743,14 @@ impl Module for AppModule {
 
     fn providers(&self) -> Result<Vec<ProviderDefinition>> {
         Ok(vec![
-            ProviderDefinition::async_factory::<DatabaseClient, _, _>(|_module_ref| async {
-                Ok(DatabaseClient {
-                    url: "postgres://localhost/app".to_string(),
-                })
-            }),
             ProviderDefinition::factory::<Repository, _>(|module_ref: &ModuleRef| {
                 Ok(Repository {
                     client: module_ref.get::<DatabaseClient>()?,
+                })
+            }),
+            ProviderDefinition::async_factory::<DatabaseClient, _, _>(|_module_ref| async {
+                Ok(DatabaseClient {
+                    url: "postgres://localhost/app".to_string(),
                 })
             }),
         ])

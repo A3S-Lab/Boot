@@ -93,7 +93,8 @@ Implemented today:
 - Provider lifecycle scopes with default singleton providers, request-scoped
   providers cached per in-process request context, transient providers built per
   resolution, async singleton provider factories awaited during async graph
-  build, request-time lookup through `BootRequest`, transient/request-scoped
+  build, order-independent singleton provider graph initialization,
+  request-time lookup through `BootRequest`, singleton/transient/request-scoped
   provider dependency cycle diagnostics, and singleton provider startup/shutdown
   hooks.
 - Provider aliases that mirror Nest custom provider `useExisting` semantics and
@@ -361,7 +362,9 @@ Request-scoped handler factories rebuild route/controller state from the current
 request's module context. Provider aliases let one token delegate to an existing
 provider token without changing the target provider's lifecycle scope. Module
 import cycles report the active module chain during sync and async application
-graph builds.
+graph builds. Singleton provider factories are initialized after all module
+provider tokens are registered, so factories can depend on providers declared
+later in the same module.
 
 Tasks:
 
@@ -388,6 +391,7 @@ Tasks:
 - Add contextual diagnostics for transient and request-scoped provider
   dependency cycles. (Implemented)
 - Add contextual diagnostics for module import cycles. (Implemented)
+- Add order-independent singleton provider graph initialization. (Implemented)
 
 Acceptance:
 
@@ -411,6 +415,9 @@ Acceptance:
   (Covered)
 - Module import cycles report the active module chain during sync and async
   builds. (Covered)
+- Singleton provider factories can resolve dependencies declared later in the
+  same module, including sync factories that depend on async-built singletons in
+  async builds. (Covered)
 
 ## Milestone 5: Middleware
 
@@ -589,8 +596,7 @@ framework capability. Keep GraphQL out of scope.
 
 Suggested implementation sequence:
 
-1. Continue Nest-style module and provider diagnostics with lazy module loading
-   and singleton provider graph ordering.
+1. Continue Nest-style module and provider diagnostics with lazy module loading.
 2. Continue defining integrations through providers, middleware, guards,
    interceptors, or adapters instead of adding one-off framework hooks.
 3. Add crate-local tests and README examples for each chosen framework module.

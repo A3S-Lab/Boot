@@ -103,6 +103,7 @@ impl ModuleRegistry {
             let provider = self.provider_override_or(provider);
             module_ref.register(provider)?;
         }
+        module_ref.initialize_local_singletons()?;
 
         let exports = ModuleRef::new();
         for token in module.exports()? {
@@ -192,6 +193,7 @@ impl ModuleRegistry {
                 let provider = self.provider_override_or(provider);
                 module_ref.register_async(provider).await?;
             }
+            module_ref.initialize_local_singletons_async().await?;
 
             let exports = ModuleRef::new();
             for token in module.exports()? {

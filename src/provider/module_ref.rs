@@ -9,6 +9,7 @@ use std::sync::{Arc, RwLock};
 #[derive(Clone, Default)]
 pub struct ModuleRef {
     providers: Arc<RwLock<BTreeMap<ProviderToken, ProviderEntry>>>,
+    provider_order: Arc<RwLock<Vec<ProviderToken>>>,
     visible_scopes: Arc<RwLock<Vec<ModuleRef>>>,
     request_cache: Option<ProviderCache>,
     resolution_stack: Option<ProviderResolutionStack>,
@@ -93,6 +94,14 @@ impl ProviderEntry {
 
     fn scope(&self) -> ProviderScope {
         self.definition.scope()
+    }
+
+    fn is_local_singleton(&self) -> bool {
+        self.scope() == ProviderScope::Singleton && !self.definition.is_alias()
+    }
+
+    fn is_async_factory(&self) -> bool {
+        self.definition.is_async_factory()
     }
 
     fn resolve(
@@ -332,6 +341,7 @@ impl ModuleRef {
     fn with_request_cache(&self, request_cache: ProviderCache) -> Self {
         Self {
             providers: Arc::clone(&self.providers),
+            provider_order: Arc::clone(&self.provider_order),
             visible_scopes: Arc::clone(&self.visible_scopes),
             request_cache: Some(request_cache),
             resolution_stack: self.resolution_stack.clone(),
@@ -341,6 +351,7 @@ impl ModuleRef {
     fn with_resolution_stack(&self, resolution_stack: ProviderResolutionStack) -> Self {
         Self {
             providers: Arc::clone(&self.providers),
+            provider_order: Arc::clone(&self.provider_order),
             visible_scopes: Arc::clone(&self.visible_scopes),
             request_cache: self.request_cache.clone(),
             resolution_stack: Some(resolution_stack),
@@ -357,10 +368,6 @@ impl ModuleRef {
         }
 
         let entry = ProviderEntry::new(definition);
-        if entry.scope() == ProviderScope::Singleton && !entry.definition.is_alias() {
-            let resolution_stack = new_resolution_stack();
-            entry.resolve_singleton(self, &resolution_stack)?;
-        }
         self.insert_entry(token, entry)
     }
 
@@ -369,9 +376,6 @@ impl ModuleRef {
         self.validate_registration(&token, &definition)?;
 
         let entry = ProviderEntry::new(definition);
-        if entry.scope() == ProviderScope::Singleton && !entry.definition.is_alias() {
-            entry.seed_singleton_async(self.clone()).await?;
-        }
         self.insert_entry(token, entry)
     }
 
@@ -441,11 +445,13 @@ impl ModuleRef {
     }
 
     fn insert_entry(&self, token: ProviderToken, entry: ProviderEntry) -> Result<()> {
+        let mut provider_order = self.write_provider_order()?;
         let mut providers = self.write_providers()?;
         if providers.contains_key(&token) {
             return Err(BootError::DuplicateProvider(token.to_string()));
         }
-        providers.insert(token, entry);
+        providers.insert(token.clone(), entry);
+        provider_order.push(token);
         Ok(())
     }
 
@@ -488,7 +494,27 @@ impl ModuleRef {
     }
 
     pub(crate) fn local_tokens(&self) -> Result<Vec<ProviderToken>> {
-        Ok(self.read_providers()?.keys().cloned().collect())
+        Ok(self.read_provider_order()?.clone())
+    }
+
+    pub(crate) fn initialize_local_singletons(&self) -> Result<()> {
+        for entry in self.local_entries()? {
+            if entry.is_local_singleton() {
+                let resolution_stack = new_resolution_stack();
+                entry.resolve_singleton(self, &resolution_stack)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn initialize_local_singletons_async(&self) -> Result<()> {
+        for entry in self.local_entries()? {
+            if entry.is_local_singleton() && entry.is_async_factory() {
+                entry.seed_singleton_async(self.clone()).await?;
+            }
+        }
+
+        self.initialize_local_singletons()
     }
 
     pub(crate) fn initialize_local_providers(&self) -> Result<()> {
@@ -608,7 +634,15 @@ impl ModuleRef {
     }
 
     fn local_entries(&self) -> Result<Vec<ProviderEntry>> {
-        Ok(self.read_providers()?.values().cloned().collect())
+        let provider_order = self.read_provider_order()?.clone();
+        let providers = self.read_providers()?;
+        let mut entries = Vec::with_capacity(provider_order.len());
+        for token in provider_order {
+            if let Some(entry) = providers.get(&token) {
+                entries.push(entry.clone());
+            }
+        }
+        Ok(entries)
     }
 
     fn visible_scopes(&self) -> Result<Vec<ModuleRef>> {
@@ -629,6 +663,18 @@ impl ModuleRef {
         self.providers
             .write()
             .map_err(|_| BootError::Internal("provider registry lock is poisoned".to_string()))
+    }
+
+    fn read_provider_order(&self) -> Result<std::sync::RwLockReadGuard<'_, Vec<ProviderToken>>> {
+        self.provider_order
+            .read()
+            .map_err(|_| BootError::Internal("provider order lock is poisoned".to_string()))
+    }
+
+    fn write_provider_order(&self) -> Result<std::sync::RwLockWriteGuard<'_, Vec<ProviderToken>>> {
+        self.provider_order
+            .write()
+            .map_err(|_| BootError::Internal("provider order lock is poisoned".to_string()))
     }
 
     fn read_visible_scopes(&self) -> Result<std::sync::RwLockReadGuard<'_, Vec<ModuleRef>>> {

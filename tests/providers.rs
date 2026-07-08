@@ -50,6 +50,11 @@ struct UsesSharedConfig {
 }
 
 #[derive(Debug)]
+struct OrderIndependentRepository {
+    config: Arc<SharedConfig>,
+}
+
+#[derive(Debug)]
 struct GlobalConfig {
     value: &'static str,
 }
@@ -67,6 +72,36 @@ struct RuntimeConfig {
 #[derive(Debug)]
 struct UsesRuntimeConfig {
     config: Arc<RuntimeConfig>,
+}
+
+#[derive(Debug)]
+struct ZAsyncConfig {
+    value: String,
+}
+
+#[derive(Debug)]
+struct AAsyncConfigConsumer {
+    config: Arc<ZAsyncConfig>,
+}
+
+#[derive(Debug)]
+struct OrderIndependentProviderModule;
+
+impl Module for OrderIndependentProviderModule {
+    fn name(&self) -> &'static str {
+        "order-independent-provider"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![
+            ProviderDefinition::factory::<OrderIndependentRepository, _>(|module_ref| {
+                Ok(OrderIndependentRepository {
+                    config: module_ref.get::<SharedConfig>()?,
+                })
+            }),
+            ProviderDefinition::singleton(SharedConfig { value: "late" }),
+        ])
+    }
 }
 
 #[derive(Debug)]
@@ -110,6 +145,73 @@ impl Module for AsyncProviderModule {
                 async move { Ok(BootResponse::text(service.config.value.clone())) }
             },
         )?])
+    }
+}
+
+#[derive(Debug)]
+struct AsyncOrderIndependentProviderModule {
+    calls: Arc<AtomicUsize>,
+}
+
+impl Module for AsyncOrderIndependentProviderModule {
+    fn name(&self) -> &'static str {
+        "async-order-independent-provider"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        let calls = Arc::clone(&self.calls);
+        Ok(vec![
+            ProviderDefinition::factory::<UsesRuntimeConfig, _>(|module_ref| {
+                Ok(UsesRuntimeConfig {
+                    config: module_ref.get::<RuntimeConfig>()?,
+                })
+            }),
+            ProviderDefinition::async_factory::<RuntimeConfig, _, _>(move |_| {
+                let calls = Arc::clone(&calls);
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(RuntimeConfig {
+                        value: "late-async".to_string(),
+                    })
+                }
+            }),
+        ])
+    }
+}
+
+#[derive(Debug)]
+struct AsyncProviderDeclarationOrderModule {
+    calls: Arc<AtomicUsize>,
+}
+
+impl Module for AsyncProviderDeclarationOrderModule {
+    fn name(&self) -> &'static str {
+        "async-provider-declaration-order"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        let dependency_calls = Arc::clone(&self.calls);
+        let consumer_calls = Arc::clone(&self.calls);
+        Ok(vec![
+            ProviderDefinition::async_factory::<ZAsyncConfig, _, _>(move |_| {
+                let dependency_calls = Arc::clone(&dependency_calls);
+                async move {
+                    dependency_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(ZAsyncConfig {
+                        value: "declared-first".to_string(),
+                    })
+                }
+            }),
+            ProviderDefinition::async_factory::<AAsyncConfigConsumer, _, _>(move |module_ref| {
+                let consumer_calls = Arc::clone(&consumer_calls);
+                async move {
+                    consumer_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(AAsyncConfigConsumer {
+                        config: module_ref.get::<ZAsyncConfig>()?,
+                    })
+                }
+            }),
+        ])
     }
 }
 
@@ -400,6 +502,30 @@ struct CircularA {
 #[derive(Debug)]
 struct CircularB {
     _a: Arc<CircularA>,
+}
+
+#[derive(Debug)]
+struct SingletonCycleModule;
+
+impl Module for SingletonCycleModule {
+    fn name(&self) -> &'static str {
+        "singleton-cycle"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![
+            ProviderDefinition::named_factory::<CircularA, _>("cycle-a", |module_ref| {
+                Ok(CircularA {
+                    _b: module_ref.get_named::<CircularB>("cycle-b")?,
+                })
+            }),
+            ProviderDefinition::named_factory::<CircularB, _>("cycle-b", |module_ref| {
+                Ok(CircularB {
+                    _a: module_ref.get_named::<CircularA>("cycle-a")?,
+                })
+            }),
+        ])
+    }
 }
 
 impl Module for RequestScopedAliasModule {
@@ -830,6 +956,19 @@ fn transient_provider_dependency_cycles_return_contextual_errors() {
 }
 
 #[test]
+fn singleton_provider_dependency_cycles_return_contextual_errors() {
+    let result = BootApplication::builder()
+        .import(SingletonCycleModule)
+        .build();
+
+    assert!(matches!(
+        result,
+        Err(BootError::Internal(message))
+            if message == "cyclic provider dependency detected: cycle-a -> cycle-b -> cycle-a"
+    ));
+}
+
+#[test]
 fn request_scoped_provider_dependency_cycles_return_contextual_errors() {
     let module_ref = ModuleRef::new();
     module_ref
@@ -1007,6 +1146,20 @@ fn provider_factories_can_return_shared_arc_values() {
     assert_eq!(named.value, "named");
 }
 
+#[test]
+fn singleton_provider_factories_can_depend_on_later_module_providers() {
+    let app = BootApplication::builder()
+        .import(OrderIndependentProviderModule)
+        .build()
+        .unwrap();
+
+    let repository = app.get::<OrderIndependentRepository>().unwrap();
+    let config = app.get::<SharedConfig>().unwrap();
+
+    assert_eq!(repository.config.value, "late");
+    assert!(Arc::ptr_eq(&repository.config, &config));
+}
+
 #[tokio::test]
 async fn async_provider_factories_are_awaited_before_controllers_build() {
     let calls = Arc::new(AtomicUsize::new(0));
@@ -1029,6 +1182,44 @@ async fn async_provider_factories_are_awaited_before_controllers_build() {
     assert_eq!(config.value, "shared-async");
     assert!(Arc::ptr_eq(&config, &dependent.config));
     assert_eq!(response.body_text().unwrap(), "shared-async");
+}
+
+#[tokio::test]
+async fn async_build_seeds_async_singletons_before_sync_singleton_factories() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let app = BootApplication::builder()
+        .import(AsyncOrderIndependentProviderModule {
+            calls: Arc::clone(&calls),
+        })
+        .build_async()
+        .await
+        .unwrap();
+
+    let config = app.get::<RuntimeConfig>().unwrap();
+    let dependent = app.get::<UsesRuntimeConfig>().unwrap();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(config.value, "late-async");
+    assert!(Arc::ptr_eq(&config, &dependent.config));
+}
+
+#[tokio::test]
+async fn async_provider_factories_keep_declaration_order_after_registration() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let app = BootApplication::builder()
+        .import(AsyncProviderDeclarationOrderModule {
+            calls: Arc::clone(&calls),
+        })
+        .build_async()
+        .await
+        .unwrap();
+
+    let config = app.get::<ZAsyncConfig>().unwrap();
+    let consumer = app.get::<AAsyncConfigConsumer>().unwrap();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(config.value, "declared-first");
+    assert!(Arc::ptr_eq(&config, &consumer.config));
 }
 
 #[test]
