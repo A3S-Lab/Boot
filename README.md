@@ -161,6 +161,16 @@ provider-backed logging without forcing a concrete backend:
 a3s-boot = { version = "0.1", features = ["logging"] }
 ```
 
+Enable the optional outbound HTTP client module when providers need to call
+external HTTP services:
+
+```toml
+[dependencies]
+a3s-boot = { version = "0.1", features = ["http-client"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
 Enable the optional gzip compression interceptor when the application should
 compress eligible responses for clients that send `Accept-Encoding: gzip`:
 
@@ -2412,6 +2422,75 @@ Use `ConfigModule::from_acl_file(...)` for file-backed configuration,
 to export a named provider, or `.global()` to make the config visible to every
 module scope after registration.
 
+## HTTP Client
+
+Enable the `http-client` feature to use `HttpModule` and `HttpService`, Boot's
+provider-backed equivalent of Nest's `HttpModule` and `HttpService`. The default
+backend uses `reqwest`; tests can provide any `HttpClientBackend`.
+
+```rust
+use std::sync::Arc;
+use std::time::Duration;
+
+use a3s_boot::{
+    BootApplication, HttpClientOptions, HttpModule, HttpService, Module, ModuleRef,
+    ProviderDefinition, Result,
+};
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+struct CatDto {
+    id: String,
+    name: String,
+}
+
+#[derive(Debug)]
+struct CatsClient {
+    http: Arc<HttpService>,
+}
+
+impl CatsClient {
+    async fn find_one(&self, id: &str) -> Result<CatDto> {
+        self.http.get_json(format!("/cats/{id}")).await
+    }
+}
+
+#[derive(Debug)]
+struct CatsModule;
+
+impl Module for CatsModule {
+    fn name(&self) -> &'static str {
+        "cats"
+    }
+
+    fn imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(HttpModule::with_options(
+            "cats-http",
+            HttpClientOptions::new()
+                .with_base_url("https://api.example")
+                .with_header("x-service", "cats")
+                .with_timeout(Duration::from_secs(5)),
+        ))]
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::factory::<CatsClient, _>(|module_ref| {
+            Ok(CatsClient {
+                http: module_ref.get::<HttpService>()?,
+            })
+        })])
+    }
+}
+
+let app = BootApplication::builder().import(CatsModule).build()?;
+```
+
+Use `.named("token")` when a module needs more than one HTTP client. Use
+`HttpModule::async_options(...)` with `build_async()` when the options depend on
+runtime providers or asynchronous setup. `HttpService` exposes typed helpers
+such as `get_json(...)`, `post_json(...)`, `put_json(...)`, and `patch_json(...)`
+plus lower-level `request(...)` for explicit `HttpClientRequest` values.
+
 ## Caching
 
 Enable the `cache` feature to register a typed cache provider. `CacheModule`
@@ -3682,6 +3761,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | Event emitter | Optional provider-backed in-process application events |
 | Health check | Optional provider-backed readiness/liveness reports |
 | Configuration | Optional ACL-backed typed providers through `ConfigModule` |
+| HTTP client | Optional provider-backed outbound HTTP client through `HttpModule` |
 | Cache | Optional typed cache provider through `CacheModule` |
 | Scheduler | Optional provider-backed task scheduling through `ScheduleModule` |
 | Queue | Optional provider-backed background jobs through `QueueModule` |
@@ -3718,6 +3798,7 @@ src/
 ├── events.rs     # Optional in-process application event emitter module
 ├── health.rs     # Optional provider-backed health check module
 ├── http/         # Adapter-neutral request, response, methods, and query parsing
+├── http_client.rs # Optional provider-backed outbound HTTP client module
 ├── logging.rs    # Optional provider-backed structured logging module
 ├── module/       # Module trait, dynamic modules, exports, and lifecycle hooks
 ├── pipeline/     # Middleware, pipes, guards, interceptors, filters, and execution context

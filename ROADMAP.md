@@ -119,6 +119,9 @@ Implemented today:
   event topics plus optional gRPC unary request/reply and event calls.
 - ACL-backed typed configuration modules with `ConfigModule`, named/global
   provider exports, environment/default function support, and validation hooks.
+- Provider-backed outbound HTTP clients with `HttpModule`, `HttpService`,
+  typed request/response helpers, base URL/default header/timeout options,
+  named/global exports, async option factories, and replaceable backends.
 - Typed cache modules with `CacheModule`, `Cache`, in-memory storage,
   default TTLs, named/global provider exports, and cache-store abstraction.
 - Provider-backed task scheduling with `ScheduleModule`, `Scheduler`,
@@ -540,6 +543,7 @@ Nest equivalent areas:
 - queues (implemented)
 - application events (implemented)
 - health checks (implemented)
+- outbound HTTP client module (implemented)
 - logging (implemented)
 - API versioning (implemented)
 - serialization (implemented)
@@ -564,6 +568,10 @@ Acceptance:
 - Modules compose through the same provider and lifecycle APIs.
 - Configuration can load ACL into typed providers, use environment defaults,
   and participate in module imports/exports. (Covered)
+- HTTP clients can be registered as module providers, use base URL/default
+  header/timeout options, send and decode JSON request/response bodies, support
+  named/global exports, build options asynchronously, and swap backends in
+  tests. (Covered)
 - Cache can register typed providers, cache serde values with TTL, and
   participate in module imports/exports. (Covered)
 - Schedule can register typed providers, run timeout/interval/cron jobs through

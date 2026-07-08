@@ -26,6 +26,8 @@ mod file_upload;
 #[cfg(feature = "health")]
 mod health;
 mod http;
+#[cfg(feature = "http-client")]
+mod http_client;
 #[cfg(feature = "logging")]
 mod logging;
 mod module;
@@ -97,6 +99,11 @@ pub use health::{
 pub use http::{
     extract_request_value, transform_request_value, BootRequest, BootResponse, CookieOptions,
     CookieSameSite, HttpMethod, RequestExtractor, RequestValuePipe, SseEvent, SseStream,
+};
+#[cfg(feature = "http-client")]
+pub use http_client::{
+    HttpClientBackend, HttpClientOptions, HttpClientRequest, HttpClientResponse, HttpModule,
+    HttpService, ReqwestHttpClientBackend,
 };
 #[cfg(feature = "logging")]
 pub use logging::{
