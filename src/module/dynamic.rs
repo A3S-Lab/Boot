@@ -11,6 +11,7 @@ use std::sync::Arc;
 pub struct DynamicModule {
     name: &'static str,
     imports: Vec<Arc<dyn Module>>,
+    forward_imports: Vec<Arc<dyn Module>>,
     providers: Vec<ProviderDefinition>,
     exports: Vec<ProviderToken>,
     middleware: Vec<Arc<dyn Middleware>>,
@@ -28,6 +29,7 @@ impl DynamicModule {
         Self {
             name,
             imports: Vec::new(),
+            forward_imports: Vec::new(),
             providers: Vec::new(),
             exports: Vec::new(),
             middleware: Vec::new(),
@@ -51,6 +53,19 @@ impl DynamicModule {
 
     pub fn import_arc(mut self, module: Arc<dyn Module>) -> Self {
         self.imports.push(module);
+        self
+    }
+
+    pub fn forward_import<M>(mut self, module: M) -> Self
+    where
+        M: Module,
+    {
+        self.forward_imports.push(Arc::new(module));
+        self
+    }
+
+    pub fn forward_import_arc(mut self, module: Arc<dyn Module>) -> Self {
+        self.forward_imports.push(module);
         self
     }
 
@@ -136,6 +151,10 @@ impl Module for DynamicModule {
 
     fn imports(&self) -> Vec<Arc<dyn Module>> {
         self.imports.clone()
+    }
+
+    fn forward_imports(&self) -> Vec<Arc<dyn Module>> {
+        self.forward_imports.clone()
     }
 
     fn providers(&self) -> Result<Vec<ProviderDefinition>> {

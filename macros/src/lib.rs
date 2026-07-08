@@ -531,6 +531,7 @@ fn expand_module(
         )
     });
     let imports = args.imports;
+    let forward_imports = args.forward_imports;
     let provider_tokens = args.providers.iter().map(provider_registration_token);
     let exports = args.exports.iter().map(export_registration_token);
     let controllers = args.controllers;
@@ -595,6 +596,10 @@ fn expand_module(
 
             fn imports(&self) -> ::std::vec::Vec<::std::sync::Arc<dyn ::a3s_boot::Module>> {
                 ::std::vec![#(::std::sync::Arc::new(#imports),)*]
+            }
+
+            fn forward_imports(&self) -> ::std::vec::Vec<::std::sync::Arc<dyn ::a3s_boot::Module>> {
+                ::std::vec![#(::std::sync::Arc::new(#forward_imports),)*]
             }
 
             fn providers(&self) -> ::a3s_boot::Result<::std::vec::Vec<::a3s_boot::ProviderDefinition>> {
@@ -3507,6 +3512,7 @@ fn is_render_attribute(attr: &Attribute) -> bool {
 struct ModuleArgs {
     name: Option<LitStr>,
     imports: Vec<Expr>,
+    forward_imports: Vec<Expr>,
     providers: Vec<Expr>,
     controllers: Vec<Type>,
     routes: Vec<Expr>,
@@ -3548,6 +3554,7 @@ impl Parse for ModuleArgs {
                     set_once(&mut args.route_prefix, input.parse::<LitStr>()?, name)?;
                 }
                 "imports" => args.imports.extend(parse_expr_array(input)?),
+                "forward_imports" => args.forward_imports.extend(parse_expr_array(input)?),
                 "providers" => args.providers.extend(parse_expr_array(input)?),
                 "controllers" => args.controllers.extend(parse_type_array(input)?),
                 "routes" => args.routes.extend(parse_expr_array(input)?),
@@ -3559,7 +3566,7 @@ impl Parse for ModuleArgs {
                 _ => {
                     return Err(syn::Error::new_spanned(
                         name,
-                        "expected `name`, `route_prefix`, `imports`, `providers`, `controllers`, `routes`, `gateways`, `message_controllers`, `exports`, or `global`",
+                        "expected `name`, `route_prefix`, `imports`, `forward_imports`, `providers`, `controllers`, `routes`, `gateways`, `message_controllers`, `exports`, or `global`",
                     ));
                 }
             }

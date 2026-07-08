@@ -862,6 +862,34 @@ impl MacroPrefixedController {
 #[derive(Debug)]
 struct MacroPrefixedModule;
 
+#[injectable]
+#[derive(Debug)]
+struct MacroForwardRootService;
+
+#[injectable]
+#[derive(Debug)]
+struct MacroForwardFeatureService {
+    root: ProviderRef<MacroForwardRootService>,
+}
+
+#[a3s_boot::module(
+    name = "macro-forward-root",
+    forward_imports = [MacroForwardFeatureModule],
+    providers = [MacroForwardRootService],
+    exports = [MacroForwardRootService, MacroForwardFeatureService],
+)]
+#[derive(Debug)]
+struct MacroForwardRootModule;
+
+#[a3s_boot::module(
+    name = "macro-forward-feature",
+    forward_imports = [MacroForwardRootModule],
+    providers = [MacroForwardFeatureService],
+    exports = [MacroForwardFeatureService],
+)]
+#[derive(Debug)]
+struct MacroForwardFeatureModule;
+
 #[tokio::test]
 async fn macros_register_injectable_services_and_controller_routes() {
     let app = BootApplication::builder()
@@ -1556,6 +1584,27 @@ async fn macro_pipeline_decorators_register_controller_and_route_hooks() {
         .await
         .unwrap_err();
     assert!(matches!(unfiltered, BootError::Unauthorized(message) if message == "macro private"));
+}
+
+#[test]
+fn module_macro_registers_forward_imports() {
+    let app = BootApplication::builder()
+        .import(MacroForwardRootModule)
+        .build()
+        .unwrap();
+    let service = app.get::<MacroForwardFeatureService>().unwrap();
+
+    assert!(service.root.get().is_ok());
+    assert_eq!(
+        app.discovery()
+            .unwrap()
+            .graph()
+            .module("macro-forward-root")
+            .unwrap()
+            .imports
+            .as_slice(),
+        ["macro-forward-feature"]
+    );
 }
 
 #[tokio::test]

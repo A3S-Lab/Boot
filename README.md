@@ -348,6 +348,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@Inject("TOKEN")` | `#[inject("token")]` on an `Arc<T>`, `Option<Arc<T>>`, or `ProviderRef<T>` field |
 | `@Optional()` | `Option<Arc<T>>` or `Option<ProviderRef<T>>` on an injectable field |
 | `forwardRef(() => Type)` | `ProviderRef<Type>` on an injectable field, or `module_ref.provider_ref::<Type>()` |
+| `forwardRef(() => Module)` | `forward_imports = [Module]`, `Module::forward_imports()`, or `DynamicModule::forward_import(...)` |
 | `@Module({ imports, providers, controllers, exports })` | `#[module(...)]` on a module struct, or an explicit `impl Module` |
 | `RouterModule.register([{ path: "api", module: CatsModule }])` | `#[module(route_prefix = "/api", ...)]` or `Module::route_prefix()` |
 | `configure(consumer: MiddlewareConsumer)` | `Module::configure(...)` with `MiddlewareConsumer::apply(...).for_routes(...)` |
@@ -504,10 +505,11 @@ async fn main() -> Result<()> {
 named provider. `#[controller("/cats")]` adds a
 `controller(self: Arc<Self>)` method that collects route attributes from the
 impl block. `#[module(...)]` implements `Module` for a struct from Nest-style
-metadata lists: `imports = [...]`, `providers = [...]`, `controllers = [...]`,
-`gateways = [...]`, `message_controllers = [...]`, `routes = [...]`,
-`exports = [...]`, `route_prefix = "/api"`, and `global`. Provider entries that
-are plain type paths expand to `Type::provider()`; entries that are full
+metadata lists: `imports = [...]`, `forward_imports = [...]`,
+`providers = [...]`, `controllers = [...]`, `gateways = [...]`,
+`message_controllers = [...]`, `routes = [...]`, `exports = [...]`,
+`route_prefix = "/api"`, and `global`. Provider entries that are plain type
+paths expand to `Type::provider()`; entries that are full
 expressions are used as `ProviderDefinition` values. Controller, gateway, and
 message-controller entries are resolved from the module's `ModuleRef`, so they
 should usually be listed in `providers` as injectables. GET, POST, PUT, PATCH,
@@ -1942,6 +1944,34 @@ created from a request-scoped `ModuleRef`, request-scoped providers keep the
 same per-request cache. The `#[injectable]` macro also auto-wires
 `ProviderRef<T>`, `Option<ProviderRef<T>>`, and named refs with `#[inject(...)]`.
 
+For an intentional circular module relationship, use forward imports on the
+module edge and lazy provider refs on the provider edge:
+
+```rust
+#[module(
+    name = "cats",
+    forward_imports = [OwnersModule],
+    providers = [CatsService],
+    exports = [CatsService],
+)]
+#[derive(Debug)]
+struct CatsModule;
+
+#[module(
+    name = "owners",
+    forward_imports = [CatsModule],
+    providers = [OwnersService],
+    exports = [OwnersService],
+)]
+#[derive(Debug)]
+struct OwnersModule;
+```
+
+The explicit APIs are `Module::forward_imports()`,
+`DynamicModule::forward_import(...)`, and
+`DynamicModule::forward_import_arc(...)`. Ordinary `imports()` cycles still
+return a contextual error; use forward imports only for deliberate cycles.
+
 ```rust
 use std::sync::Arc;
 
@@ -2585,6 +2615,9 @@ fn config_module(database_url: String) -> DynamicModule {
         .global()
 }
 ```
+
+`DynamicModule::forward_import(...)` and `forward_import_arc(...)` provide the
+same module-level forward reference behavior for runtime-built modules.
 
 `BootApplication::get(...)` resolves from root module scopes and global exports.
 Private providers from imported feature modules are not exposed unless they are

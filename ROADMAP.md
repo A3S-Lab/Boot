@@ -120,7 +120,8 @@ Implemented today:
   `#[skip_validation]` macros.
 - Module-scoped provider registries, explicit provider exports, transitive
   re-exports, global module exports, module route prefixes, and `DynamicModule`
-  for runtime-built provider modules, with provider-only lazy module loading
+  for runtime-built provider modules, with provider-only lazy module loading,
+  module-level forward imports for deliberate circular module relationships,
   and contextual module import cycle diagnostics.
 - Provider lifecycle scopes with default singleton providers, request-scoped
   providers cached per in-process request context, transient providers built per
@@ -136,6 +137,9 @@ Implemented today:
 - Lazy `ProviderRef<T>` handles that mirror the useful part of Nest
   `forwardRef(...)`: explicit delayed provider resolution without weakening
   normal cycle diagnostics.
+- Module-level forward imports that mirror Nest `forwardRef(() => Module)` for
+  explicit circular module relationships while preserving normal import-cycle
+  diagnostics.
 - Request-scoped route/controller handler factories through `*_scoped` helpers.
 - Middleware with request mutation, short-circuit responses, global/module/
   controller/route scopes, `MiddlewareConsumer::apply(...).for_routes(...)`
@@ -408,6 +412,7 @@ Nest equivalent:
 - request-scoped controllers
 - provider aliases / `useExisting`
 - forward-reference-style provider dependencies
+- module-level `forwardRef(() => Module)`
 - lazy module loading
 
 Current gap:
@@ -424,18 +429,19 @@ can enable Nest-style shutdown hooks so OS signals close the application through
 the same signal-aware lifecycle phases.
 Request-scoped handler factories rebuild route/controller state from the current
 request's module context. Provider aliases let one token delegate to an existing
-provider token without changing the target provider's lifecycle scope. Module
-import cycles report the active module chain during sync and async application
-graph builds. Singleton provider factories are initialized after all module
-provider tokens are registered, so factories can depend on providers declared
-later in the same module. `LazyModuleLoader` can load provider-only module
-graphs on demand, reuse eagerly registered modules, and resolve async singleton
-factories through `load_async(...)`. `ModuleRef` can resolve providers in a
-fresh temporary request context and dynamically create unregistered
-`FromModuleRef` values. `ProviderRef<T>` can capture a module context and
-resolve a provider lazily, which gives Rust code an explicit
-forward-reference-style escape hatch while keeping ordinary provider cycles
-diagnostic.
+provider token without changing the target provider's lifecycle scope.
+Explicit module-level forward imports can model deliberate circular module
+relationships, while ordinary module import cycles still report the active
+module chain during sync and async application graph builds. Singleton provider
+factories are initialized after all module provider tokens are registered, so
+factories can depend on providers declared later in the same module.
+`LazyModuleLoader` can load provider-only module graphs on demand, reuse eagerly
+registered modules, and resolve async singleton factories through
+`load_async(...)`. `ModuleRef` can resolve providers in a fresh temporary
+request context and dynamically create unregistered `FromModuleRef` values.
+`ProviderRef<T>` can capture a module context and resolve a provider lazily,
+which gives Rust code an explicit forward-reference-style escape hatch while
+keeping ordinary provider cycles diagnostic.
 
 Tasks:
 
@@ -467,6 +473,9 @@ Tasks:
 - Add provider aliases comparable to Nest `useExisting`. (Implemented)
 - Add lazy provider handles comparable to the useful provider side of Nest
   `forwardRef(...)`. (Implemented with `ProviderRef<T>`)
+- Add module-level forward imports comparable to Nest
+  `forwardRef(() => Module)`. (Implemented with `Module::forward_imports`,
+  `DynamicModule::forward_import(...)`, and `#[module(forward_imports = [...])]`)
 - Add Nest-style `ModuleRef::resolve(...)` and `ModuleRef::create(...)`
   runtime APIs. (Implemented)
 - Add contextual diagnostics for transient and request-scoped provider
@@ -506,6 +515,9 @@ Acceptance:
   (Covered)
 - Module import cycles report the active module chain during sync and async
   builds. (Covered)
+- Explicit forward imports allow deliberate circular module edges without
+  weakening ordinary import-cycle diagnostics, and provider cycles still use
+  lazy `ProviderRef<T>` handles. (Covered)
 - Singleton provider factories can resolve dependencies declared later in the
   same module, including sync factories that depend on async-built singletons in
   async builds. (Covered)

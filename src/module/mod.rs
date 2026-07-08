@@ -22,6 +22,16 @@ pub trait Module: Send + Sync + 'static {
         Vec::new()
     }
 
+    /// Forward module imports for intentional circular module relationships.
+    ///
+    /// This mirrors the module side of Nest's `forwardRef(...)`. Forward imports
+    /// can reference a module that is currently being registered; exported
+    /// providers become visible once the target module finishes registration.
+    /// Provider cycles should still use lazy [`crate::ProviderRef`] handles.
+    fn forward_imports(&self) -> Vec<Arc<dyn Module>> {
+        Vec::new()
+    }
+
     /// Providers exported into the application container.
     fn providers(&self) -> Result<Vec<ProviderDefinition>> {
         Ok(Vec::new())

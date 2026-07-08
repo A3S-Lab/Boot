@@ -1,6 +1,7 @@
 use a3s_boot::{
     BootApplication, BootError, BootResponse, BoxFuture, ControllerDefinition, HttpAdapter,
-    HttpMethod, Module, ModuleRef, Result, RouteDefinition,
+    HttpMethod, Module, ModuleRef, ProviderDefinition, ProviderRef, ProviderToken, Result,
+    RouteDefinition,
 };
 use std::sync::Arc;
 
@@ -64,6 +65,65 @@ impl Module for CycleFeatureModule {
     }
 }
 
+#[derive(Debug)]
+struct ForwardRootService;
+
+#[derive(Debug)]
+struct ForwardFeatureService {
+    root: ProviderRef<ForwardRootService>,
+}
+
+#[derive(Debug)]
+struct ForwardRootModule;
+
+impl Module for ForwardRootModule {
+    fn name(&self) -> &'static str {
+        "forward-root"
+    }
+
+    fn forward_imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(ForwardFeatureModule)]
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::singleton(ForwardRootService)])
+    }
+
+    fn exports(&self) -> Result<Vec<ProviderToken>> {
+        Ok(vec![
+            ProviderToken::of::<ForwardRootService>(),
+            ProviderToken::of::<ForwardFeatureService>(),
+        ])
+    }
+}
+
+#[derive(Debug)]
+struct ForwardFeatureModule;
+
+impl Module for ForwardFeatureModule {
+    fn name(&self) -> &'static str {
+        "forward-feature"
+    }
+
+    fn forward_imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(ForwardRootModule)]
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![
+            ProviderDefinition::factory::<ForwardFeatureService, _>(|module_ref| {
+                Ok(ForwardFeatureService {
+                    root: module_ref.provider_ref::<ForwardRootService>(),
+                })
+            }),
+        ])
+    }
+
+    fn exports(&self) -> Result<Vec<ProviderToken>> {
+        Ok(vec![ProviderToken::of::<ForwardFeatureService>()])
+    }
+}
+
 #[test]
 fn registers_imports_before_parent_modules() {
     let app = BootApplication::builder()
@@ -111,6 +171,41 @@ async fn async_module_import_cycles_return_contextual_errors() {
         Err(BootError::Internal(message))
             if message == "cyclic module import detected: cycle-root -> cycle-feature -> cycle-root"
     ));
+}
+
+#[test]
+fn forward_imports_allow_explicit_module_cycles() {
+    let app = BootApplication::builder()
+        .import(ForwardRootModule)
+        .build()
+        .unwrap();
+
+    assert_eq!(app.module_names(), ["forward-feature", "forward-root"]);
+
+    let feature = app.get::<ForwardFeatureService>().unwrap();
+    assert!(feature.root.get().is_ok());
+
+    let graph = app.discovery().unwrap().graph().clone();
+    assert_eq!(
+        graph.module("forward-root").unwrap().imports.as_slice(),
+        ["forward-feature"]
+    );
+    assert_eq!(
+        graph.module("forward-feature").unwrap().imports.as_slice(),
+        ["forward-root"]
+    );
+}
+
+#[tokio::test]
+async fn async_forward_imports_allow_explicit_module_cycles() {
+    let app = BootApplication::builder()
+        .import(ForwardRootModule)
+        .build_async()
+        .await
+        .unwrap();
+
+    let feature = app.get::<ForwardFeatureService>().unwrap();
+    assert!(feature.root.get().is_ok());
 }
 
 #[test]

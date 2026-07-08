@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 pub(super) struct ModuleRegistry {
     registered: BTreeMap<String, RegisteredModule>,
+    active: BTreeMap<String, RegisteredModule>,
     visiting: Vec<String>,
     global_ref: ModuleRef,
     provider_overrides: BTreeMap<ProviderToken, ProviderDefinition>,
@@ -24,6 +25,12 @@ pub(super) struct ModuleRegistrationSink<'a> {
     pub message_patterns: &'a mut Vec<MessagePatternDefinition>,
 }
 
+struct ActiveModuleRegistration {
+    route_prefix: String,
+    module_ref: ModuleRef,
+    exports: ModuleRef,
+}
+
 impl ModuleRegistry {
     pub fn new(
         global_ref: ModuleRef,
@@ -31,6 +38,7 @@ impl ModuleRegistry {
     ) -> Self {
         Self {
             registered: BTreeMap::new(),
+            active: BTreeMap::new(),
             visiting: Vec::new(),
             global_ref,
             provider_overrides,
@@ -62,11 +70,49 @@ impl ModuleRegistry {
             return Ok(existing.clone());
         }
 
+        let route_prefix = module_route_prefix(parent_route_prefix, module.route_prefix())?;
         self.enter_module(name)?;
-        let result =
-            self.register_module_inner(module, name, global_pipeline, sink, parent_route_prefix);
+        let module_ref = ModuleRef::new();
+        let exports = ModuleRef::new();
+        let state = ActiveModuleRegistration {
+            route_prefix,
+            module_ref: module_ref.clone(),
+            exports: exports.clone(),
+        };
+        self.active.insert(
+            name.to_string(),
+            RegisteredModule {
+                name: name.to_string(),
+                module_ref: module_ref.clone(),
+                exports: exports.clone(),
+            },
+        );
+        let result = self.register_module_inner(module, name, global_pipeline, sink, state);
+        self.active.remove(name);
         self.exit_module();
         result
+    }
+
+    fn register_forward_module_with_prefix(
+        &mut self,
+        module: Arc<dyn Module>,
+        global_pipeline: &PipelineComponents,
+        sink: &mut ModuleRegistrationSink<'_>,
+        parent_route_prefix: &str,
+    ) -> Result<RegisteredModule> {
+        let name = module.name();
+        if name.trim().is_empty() {
+            return Err(BootError::EmptyModuleName);
+        }
+
+        if let Some(existing) = self.registered.get(name) {
+            return Ok(existing.clone());
+        }
+        if let Some(active) = self.active.get(name) {
+            return Ok(active.clone());
+        }
+
+        self.register_module_with_prefix(module, global_pipeline, sink, parent_route_prefix)
     }
 
     pub fn register_module_async<'a>(
@@ -95,18 +141,59 @@ impl ModuleRegistry {
                 return Ok(existing.clone());
             }
 
+            let route_prefix = module_route_prefix(parent_route_prefix, module.route_prefix())?;
             self.enter_module(name)?;
+            let module_ref = ModuleRef::new();
+            let exports = ModuleRef::new();
+            let state = ActiveModuleRegistration {
+                route_prefix,
+                module_ref: module_ref.clone(),
+                exports: exports.clone(),
+            };
+            self.active.insert(
+                name.to_string(),
+                RegisteredModule {
+                    name: name.to_string(),
+                    module_ref: module_ref.clone(),
+                    exports: exports.clone(),
+                },
+            );
             let result = self
-                .register_module_async_inner(
-                    module,
-                    name,
-                    global_pipeline,
-                    sink,
-                    parent_route_prefix,
-                )
+                .register_module_async_inner(module, name, global_pipeline, sink, state)
                 .await;
+            self.active.remove(name);
             self.exit_module();
             result
+        })
+    }
+
+    fn register_forward_module_async_with_prefix<'a>(
+        &'a mut self,
+        module: Arc<dyn Module>,
+        global_pipeline: &'a PipelineComponents,
+        sink: &'a mut ModuleRegistrationSink<'_>,
+        parent_route_prefix: &'a str,
+    ) -> BoxFuture<'a, Result<RegisteredModule>> {
+        Box::pin(async move {
+            let name = module.name();
+            if name.trim().is_empty() {
+                return Err(BootError::EmptyModuleName);
+            }
+
+            if let Some(existing) = self.registered.get(name) {
+                return Ok(existing.clone());
+            }
+            if let Some(active) = self.active.get(name) {
+                return Ok(active.clone());
+            }
+
+            self.register_module_async_with_prefix(
+                module,
+                global_pipeline,
+                sink,
+                parent_route_prefix,
+            )
+            .await
         })
     }
 
@@ -123,9 +210,13 @@ impl ModuleRegistry {
         name: &'static str,
         global_pipeline: &PipelineComponents,
         sink: &mut ModuleRegistrationSink<'_>,
-        parent_route_prefix: &str,
+        state: ActiveModuleRegistration,
     ) -> Result<RegisteredModule> {
-        let route_prefix = module_route_prefix(parent_route_prefix, module.route_prefix())?;
+        let ActiveModuleRegistration {
+            route_prefix,
+            module_ref,
+            exports,
+        } = state;
         let mut imported_modules = Vec::new();
         for imported in module.imports() {
             imported_modules.push(self.register_module_with_prefix(
@@ -135,8 +226,15 @@ impl ModuleRegistry {
                 &route_prefix,
             )?);
         }
+        for imported in module.forward_imports() {
+            imported_modules.push(self.register_forward_module_with_prefix(
+                imported,
+                global_pipeline,
+                sink,
+                &route_prefix,
+            )?);
+        }
 
-        let module_ref = ModuleRef::new();
         module_ref.add_visible_scope(self.global_ref.clone())?;
         for imported in &imported_modules {
             module_ref.add_visible_scope(imported.exports.clone())?;
@@ -148,7 +246,6 @@ impl ModuleRegistry {
         }
         module_ref.initialize_local_singletons()?;
 
-        let exports = ModuleRef::new();
         let export_tokens = module.exports()?;
         for token in &export_tokens {
             exports.export_from(&module_ref, token)?;
@@ -237,10 +334,14 @@ impl ModuleRegistry {
         name: &'static str,
         global_pipeline: &'a PipelineComponents,
         sink: &'a mut ModuleRegistrationSink<'_>,
-        parent_route_prefix: &'a str,
+        state: ActiveModuleRegistration,
     ) -> BoxFuture<'a, Result<RegisteredModule>> {
         Box::pin(async move {
-            let route_prefix = module_route_prefix(parent_route_prefix, module.route_prefix())?;
+            let ActiveModuleRegistration {
+                route_prefix,
+                module_ref,
+                exports,
+            } = state;
             let mut imported_modules = Vec::new();
             for imported in module.imports() {
                 imported_modules.push(
@@ -253,8 +354,18 @@ impl ModuleRegistry {
                     .await?,
                 );
             }
+            for imported in module.forward_imports() {
+                imported_modules.push(
+                    self.register_forward_module_async_with_prefix(
+                        imported,
+                        global_pipeline,
+                        sink,
+                        &route_prefix,
+                    )
+                    .await?,
+                );
+            }
 
-            let module_ref = ModuleRef::new();
             module_ref.add_visible_scope(self.global_ref.clone())?;
             for imported in &imported_modules {
                 module_ref.add_visible_scope(imported.exports.clone())?;
@@ -266,7 +377,6 @@ impl ModuleRegistry {
             }
             module_ref.initialize_local_singletons_async().await?;
 
-            let exports = ModuleRef::new();
             let export_tokens = module.exports()?;
             for token in &export_tokens {
                 exports.export_from(&module_ref, token)?;
