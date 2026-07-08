@@ -29,6 +29,11 @@ pub trait ProviderOnApplicationShutdown: Send + Sync + 'static {
     }
 }
 
+/// Builds an injectable value from the module provider graph.
+pub trait FromModuleRef: Sized + Send + Sync + 'static {
+    fn from_module_ref(module_ref: &ModuleRef) -> Result<Self>;
+}
+
 /// Lifetime strategy for provider resolution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderScope {
@@ -168,6 +173,20 @@ impl ProviderDefinition {
         }
     }
 
+    pub fn injectable<T>() -> Self
+    where
+        T: FromModuleRef,
+    {
+        Self::factory::<T, _>(T::from_module_ref)
+    }
+
+    pub fn named_injectable<T>(token: impl Into<String>) -> Self
+    where
+        T: FromModuleRef,
+    {
+        Self::named_factory::<T, _>(token, T::from_module_ref)
+    }
+
     pub fn alias<T>(target: ProviderToken) -> Self
     where
         T: Send + Sync + 'static,
@@ -221,6 +240,20 @@ impl ProviderDefinition {
         Self::named_factory_arc::<T, _>(token, factory).with_scope(ProviderScope::Transient)
     }
 
+    pub fn transient_injectable<T>() -> Self
+    where
+        T: FromModuleRef,
+    {
+        Self::injectable::<T>().with_scope(ProviderScope::Transient)
+    }
+
+    pub fn named_transient_injectable<T>(token: impl Into<String>) -> Self
+    where
+        T: FromModuleRef,
+    {
+        Self::named_injectable::<T>(token).with_scope(ProviderScope::Transient)
+    }
+
     pub fn request_scoped<T, F>(factory: F) -> Self
     where
         T: Send + Sync + 'static,
@@ -251,6 +284,20 @@ impl ProviderDefinition {
         F: Fn(&ModuleRef) -> Result<Arc<T>> + Send + Sync + 'static,
     {
         Self::named_factory_arc::<T, _>(token, factory).with_scope(ProviderScope::Request)
+    }
+
+    pub fn request_scoped_injectable<T>() -> Self
+    where
+        T: FromModuleRef,
+    {
+        Self::injectable::<T>().with_scope(ProviderScope::Request)
+    }
+
+    pub fn named_request_scoped_injectable<T>(token: impl Into<String>) -> Self
+    where
+        T: FromModuleRef,
+    {
+        Self::named_injectable::<T>(token).with_scope(ProviderScope::Request)
     }
 
     pub fn with_scope(mut self, scope: ProviderScope) -> Self {

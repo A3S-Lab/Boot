@@ -205,7 +205,9 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@ApiOperation(...)` | `#[operation(summary = "...", operation_id = "...")]` on a route method |
 | `@ApiResponse(...)` | `#[response(status = 200, description = "...", schema = CatDto)]` |
 | `@ApiBearerAuth()` | `#[bearer_auth]` on a route method |
-| Constructor injection | Resolve dependencies from `ModuleRef`, store them in the controller, then call `Arc<Self>.controller()?` |
+| Constructor injection | `#[injectable]` fields such as `cats: Arc<CatsService>` plus `CatsController::provider()` |
+| `@Inject("TOKEN")` | `#[inject("token")]` on an `Arc<T>` or `Option<Arc<T>>` field |
+| `@Optional()` | `Option<Arc<T>>` on an injectable field |
 | `@Module({ providers, controllers, imports })` | `impl Module` with `providers()`, `controllers()`, and `imports()` |
 
 These are Rust procedural macros, not TypeScript runtime decorators. They
@@ -271,6 +273,7 @@ impl CatsService {
     }
 }
 
+#[injectable]
 #[derive(Debug)]
 struct CatsController {
     cats: Arc<CatsService>,
@@ -330,12 +333,11 @@ impl Module for CatsModule {
     }
 
     fn providers(&self) -> Result<Vec<ProviderDefinition>> {
-        Ok(vec![CatsService.into_provider()])
+        Ok(vec![CatsService::provider(), CatsController::provider()])
     }
 
     fn controllers(&self, module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
-        let cats = module_ref.get::<CatsService>()?;
-        Ok(vec![Arc::new(CatsController { cats }).controller()?])
+        Ok(vec![module_ref.get::<CatsController>()?.controller()?])
     }
 }
 
@@ -346,8 +348,11 @@ async fn main() -> Result<()> {
 }
 ```
 
-`#[injectable]` adds provider helper methods such as `into_provider()` and
-`from_arc_provider(...)`. `#[controller("/cats")]` adds a
+`#[injectable]` adds auto-wired provider helpers such as `provider()` and
+`request_scoped_provider()`, plus explicit value helpers such as
+`into_provider()` and `from_arc_provider(...)`. It auto-wires fields shaped as
+`Arc<T>` or `Option<Arc<T>>`; add `#[inject("token")]` on a field to resolve a
+named provider. `#[controller("/cats")]` adds a
 `controller(self: Arc<Self>)` method that collects route attributes from the
 impl block. GET, POST, PUT, PATCH, and DELETE route attributes default to JSON.
 Use extractor attributes on method arguments for Nest-style request binding:
@@ -1127,7 +1132,7 @@ use std::sync::Arc;
 
 use a3s_boot::{
     BootApplication, BootRequest, BootResponse, ControllerDefinition, Module, ModuleRef,
-    ProviderDefinition, ProviderToken, Result,
+    FromModuleRef, ProviderDefinition, ProviderToken, Result,
 };
 
 #[derive(Debug)]
@@ -1153,16 +1158,28 @@ struct RequestContext {
     request_id: String,
 }
 
+impl FromModuleRef for Repository {
+    fn from_module_ref(module_ref: &ModuleRef) -> Result<Self> {
+        Ok(Self {
+            client: module_ref.get::<Client>()?,
+        })
+    }
+}
+
+impl FromModuleRef for Formatter {
+    fn from_module_ref(module_ref: &ModuleRef) -> Result<Self> {
+        Ok(Self {
+            client: module_ref.get::<Client>()?,
+        })
+    }
+}
+
 let providers = vec![
     ProviderDefinition::singleton(AppConfig { name: "cats" }),
     ProviderDefinition::factory_arc::<Client, _>(|_module_ref: &ModuleRef| {
         Ok(Arc::new(Client))
     }),
-    ProviderDefinition::factory::<Repository, _>(|module_ref| {
-        Ok(Repository {
-            client: module_ref.get::<Client>()?,
-        })
-    }),
+    ProviderDefinition::injectable::<Repository>(),
     ProviderDefinition::named_factory_arc::<Client, _>("readonly-client", |_| {
         Ok(Arc::new(Client))
     }),
@@ -1175,11 +1192,7 @@ let providers = vec![
             request_id: "generated-per-request".to_string(),
         })
     }),
-    ProviderDefinition::transient::<Formatter, _>(|module_ref| {
-        Ok(Formatter {
-            client: module_ref.get::<Client>()?,
-        })
-    }),
+    ProviderDefinition::transient_injectable::<Formatter>(),
 ];
 
 fn inspect(module_ref: &ModuleRef) -> Result<()> {

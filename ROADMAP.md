@@ -30,7 +30,8 @@ Implemented today:
 - `Module` with imports, providers, controllers, direct routes, and lifecycle hooks.
 - `ProviderDefinition` and `ModuleRef` for typed provider registration,
   singleton/request/transient lifecycle scopes, singleton provider lifecycle
-  hooks, and lookup.
+  hooks, lookup, `FromModuleRef` auto-wired provider factories, and named or
+  optional dependency resolution.
 - `ControllerDefinition` and `RouteDefinition` for HTTP route groups.
 - Nest-style attribute macros: `#[injectable]`, `#[controller]`, `#[get]`,
   `#[post]`, `#[put]`, `#[patch]`, `#[delete]`, `#[sse]`, raw route mode, and
@@ -41,7 +42,9 @@ Implemented today:
   host-scoped controllers and routes, `#[metadata]` for
   Nest-style custom route/controller metadata and `#[http_code]` for Nest-style
   response status metadata, `#[header]` for response headers, and `#[redirect]`
-  for redirect responses.
+  for redirect responses. `#[injectable]` implements `FromModuleRef` for unit
+  structs and named-field structs whose dependencies are `Arc<T>` or
+  `Option<Arc<T>>`, with `#[inject("token")]` for named provider lookup.
 - Host-scoped HTTP routes with `RouteDefinition::with_host(...)` and
   `ControllerDefinition::with_host(...)` for Nest-style host-based controllers.
 - API versioning macros: `#[version]`, `#[versions]`, and

@@ -3,8 +3,9 @@ use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::punctuated::Punctuated;
 use syn::{
-    parse_macro_input, Attribute, Expr, FnArg, GenericArgument, Ident, ImplItem, ImplItemFn, Item,
-    ItemImpl, LitBool, LitInt, LitStr, Pat, PatType, PathArguments, Result, Token, Type,
+    parse_macro_input, Attribute, Expr, Fields, FnArg, GenericArgument, Ident, ImplItem,
+    ImplItemFn, Item, ItemImpl, LitBool, LitInt, LitStr, Pat, PatType, PathArguments, Result,
+    Token, Type,
 };
 
 #[proc_macro_attribute]
@@ -366,14 +367,69 @@ pub fn use_pipe(_attr: TokenStream, item: TokenStream) -> TokenStream {
     pipeline_attribute_outside_controller("use_pipe", item)
 }
 
-fn expand_injectable(item_struct: syn::ItemStruct) -> Result<proc_macro2::TokenStream> {
+fn expand_injectable(mut item_struct: syn::ItemStruct) -> Result<proc_macro2::TokenStream> {
+    let constructor = injectable_constructor(&mut item_struct)?;
     let ident = &item_struct.ident;
+    let mut from_module_ref_generics = item_struct.generics.clone();
+    from_module_ref_generics
+        .make_where_clause()
+        .predicates
+        .push(syn::parse_quote!(Self: ::std::marker::Send + ::std::marker::Sync + 'static));
+    let (from_impl_generics, _, from_where_clause) = from_module_ref_generics.split_for_impl();
     let (impl_generics, ty_generics, where_clause) = item_struct.generics.split_for_impl();
 
     Ok(quote! {
         #item_struct
 
+        impl #from_impl_generics ::a3s_boot::FromModuleRef for #ident #ty_generics #from_where_clause {
+            fn from_module_ref(module_ref: &::a3s_boot::ModuleRef) -> ::a3s_boot::Result<Self> {
+                #constructor
+            }
+        }
+
         impl #impl_generics #ident #ty_generics #where_clause {
+            pub fn provider() -> ::a3s_boot::ProviderDefinition
+            where
+                Self: ::a3s_boot::FromModuleRef,
+            {
+                ::a3s_boot::ProviderDefinition::injectable::<Self>()
+            }
+
+            pub fn named_provider(token: impl Into<String>) -> ::a3s_boot::ProviderDefinition
+            where
+                Self: ::a3s_boot::FromModuleRef,
+            {
+                ::a3s_boot::ProviderDefinition::named_injectable::<Self>(token)
+            }
+
+            pub fn request_scoped_provider() -> ::a3s_boot::ProviderDefinition
+            where
+                Self: ::a3s_boot::FromModuleRef,
+            {
+                ::a3s_boot::ProviderDefinition::request_scoped_injectable::<Self>()
+            }
+
+            pub fn named_request_scoped_provider(token: impl Into<String>) -> ::a3s_boot::ProviderDefinition
+            where
+                Self: ::a3s_boot::FromModuleRef,
+            {
+                ::a3s_boot::ProviderDefinition::named_request_scoped_injectable::<Self>(token)
+            }
+
+            pub fn transient_provider() -> ::a3s_boot::ProviderDefinition
+            where
+                Self: ::a3s_boot::FromModuleRef,
+            {
+                ::a3s_boot::ProviderDefinition::transient_injectable::<Self>()
+            }
+
+            pub fn named_transient_provider(token: impl Into<String>) -> ::a3s_boot::ProviderDefinition
+            where
+                Self: ::a3s_boot::FromModuleRef,
+            {
+                ::a3s_boot::ProviderDefinition::named_transient_injectable::<Self>(token)
+            }
+
             pub fn into_provider(self) -> ::a3s_boot::ProviderDefinition
             where
                 Self: ::std::marker::Send + ::std::marker::Sync + 'static,
@@ -406,6 +462,115 @@ fn expand_injectable(item_struct: syn::ItemStruct) -> Result<proc_macro2::TokenS
             }
         }
     })
+}
+
+fn injectable_constructor(item_struct: &mut syn::ItemStruct) -> Result<proc_macro2::TokenStream> {
+    match &mut item_struct.fields {
+        Fields::Unit => Ok(quote! { Ok(Self) }),
+        Fields::Named(fields) => {
+            let mut values = Vec::new();
+            for field in fields.named.iter_mut() {
+                let ident = field.ident.clone().ok_or_else(|| {
+                    syn::Error::new_spanned(&*field, "#[injectable] requires named fields")
+                })?;
+                let token = take_field_inject_attr(&mut field.attrs)?;
+                let value = match injectable_field_dependency(&field.ty) {
+                    Some(InjectableFieldDependency::Required(inner)) => match token {
+                        Some(token) => quote! { module_ref.get_named::<#inner>(#token)? },
+                        None => quote! { module_ref.get::<#inner>()? },
+                    },
+                    Some(InjectableFieldDependency::Optional(inner)) => match token {
+                        Some(token) => quote! { module_ref.get_optional_named::<#inner>(#token)? },
+                        None => quote! { module_ref.get_optional::<#inner>()? },
+                    },
+                    None => {
+                        return Err(syn::Error::new_spanned(
+                            &field.ty,
+                            "#[injectable] fields must be Arc<T> or Option<Arc<T>>",
+                        ));
+                    }
+                };
+                values.push(quote! { #ident: #value });
+            }
+
+            Ok(quote! {
+                Ok(Self {
+                    #(#values,)*
+                })
+            })
+        }
+        Fields::Unnamed(fields) => Err(syn::Error::new_spanned(
+            fields,
+            "#[injectable] auto-wiring supports unit structs and structs with named fields",
+        )),
+    }
+}
+
+enum InjectableFieldDependency<'a> {
+    Required(&'a Type),
+    Optional(&'a Type),
+}
+
+fn injectable_field_dependency(field_type: &Type) -> Option<InjectableFieldDependency<'_>> {
+    if let Some(inner) = single_type_argument(field_type, "Arc") {
+        return Some(InjectableFieldDependency::Required(inner));
+    }
+
+    let inner = single_type_argument(field_type, "Option")?;
+    let inner = single_type_argument(inner, "Arc")?;
+    Some(InjectableFieldDependency::Optional(inner))
+}
+
+fn single_type_argument<'a>(field_type: &'a Type, outer: &str) -> Option<&'a Type> {
+    let Type::Path(type_path) = field_type else {
+        return None;
+    };
+    let segment = type_path.path.segments.last()?;
+    if segment.ident != outer {
+        return None;
+    }
+    let PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+        return None;
+    };
+    if arguments.args.len() != 1 {
+        return None;
+    }
+    let Some(GenericArgument::Type(inner)) = arguments.args.first() else {
+        return None;
+    };
+    Some(inner)
+}
+
+fn take_field_inject_attr(attrs: &mut Vec<Attribute>) -> Result<Option<LitStr>> {
+    let mut kept = Vec::with_capacity(attrs.len());
+    let mut token = None;
+
+    for attr in attrs.drain(..) {
+        if is_field_inject_attr(&attr) {
+            if token.is_some() {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "duplicate #[inject(...)] field attribute",
+                ));
+            }
+            token = Some(attr.parse_args::<LitStr>().map_err(|_| {
+                syn::Error::new_spanned(&attr, "#[inject(...)] expects a string token")
+            })?);
+        } else {
+            kept.push(attr);
+        }
+    }
+
+    *attrs = kept;
+    Ok(token)
+}
+
+fn is_field_inject_attr(attr: &Attribute) -> bool {
+    attr.path()
+        .segments
+        .last()
+        .map(|segment| segment.ident == "inject")
+        .unwrap_or(false)
 }
 
 fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_macro2::TokenStream> {

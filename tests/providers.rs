@@ -1,6 +1,7 @@
 use a3s_boot::{
     BootApplication, BootError, BootRequest, BootResponse, ControllerDefinition, DynamicModule,
-    ExecutionContext, HttpMethod, Module, ModuleRef, ProviderDefinition, ProviderToken, Result,
+    ExecutionContext, FromModuleRef, HttpMethod, Module, ModuleRef, ProviderDefinition,
+    ProviderToken, Result,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -66,6 +67,34 @@ struct RuntimeConfig {
 #[derive(Debug)]
 struct UsesRuntimeConfig {
     config: Arc<RuntimeConfig>,
+}
+
+#[derive(Debug)]
+struct AutoRepository {
+    config: Arc<SharedConfig>,
+    missing_items: Option<Arc<ItemsService>>,
+}
+
+impl FromModuleRef for AutoRepository {
+    fn from_module_ref(module_ref: &ModuleRef) -> Result<Self> {
+        Ok(Self {
+            config: module_ref.get::<SharedConfig>()?,
+            missing_items: module_ref.get_optional::<ItemsService>()?,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct AutoNamedRepository {
+    config: Arc<SharedConfig>,
+}
+
+impl FromModuleRef for AutoNamedRepository {
+    fn from_module_ref(module_ref: &ModuleRef) -> Result<Self> {
+        Ok(Self {
+            config: module_ref.get_named::<SharedConfig>("named-shared-config")?,
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -533,6 +562,29 @@ impl Module for UsesRuntimeConfigModule {
     }
 }
 
+#[derive(Debug)]
+struct AutoProviderModule;
+
+impl Module for AutoProviderModule {
+    fn name(&self) -> &'static str {
+        "auto-provider"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![
+            ProviderDefinition::singleton(SharedConfig { value: "auto" }),
+            ProviderDefinition::named_singleton(
+                "named-shared-config",
+                SharedConfig {
+                    value: "named-auto",
+                },
+            ),
+            ProviderDefinition::injectable::<AutoRepository>(),
+            ProviderDefinition::named_injectable::<AutoNamedRepository>("named-auto-repository"),
+        ])
+    }
+}
+
 #[test]
 fn module_ref_exposes_optional_lookup_and_presence_checks() {
     let module_ref = ModuleRef::new();
@@ -565,6 +617,42 @@ fn module_ref_exposes_optional_lookup_and_presence_checks() {
     assert!(module_ref.contains_named("named-config").unwrap());
     assert!(tokens.contains(&items_token));
     assert!(tokens.contains(&ProviderToken::named("named-config")));
+}
+
+#[test]
+fn injectable_provider_factories_resolve_dependencies() {
+    let app = BootApplication::builder()
+        .import(AutoProviderModule)
+        .build()
+        .unwrap();
+
+    let repository = app.get::<AutoRepository>().unwrap();
+    let named = app
+        .get_named::<AutoNamedRepository>("named-auto-repository")
+        .unwrap();
+
+    assert_eq!(repository.config.value, "auto");
+    assert!(repository.missing_items.is_none());
+    assert_eq!(named.config.value, "named-auto");
+}
+
+#[test]
+fn transient_injectable_providers_are_rebuilt_per_resolution() {
+    let module_ref = ModuleRef::new();
+    module_ref
+        .register(ProviderDefinition::singleton(SharedConfig {
+            value: "auto",
+        }))
+        .unwrap();
+    module_ref
+        .register(ProviderDefinition::transient_injectable::<AutoRepository>())
+        .unwrap();
+
+    let first = module_ref.get::<AutoRepository>().unwrap();
+    let second = module_ref.get::<AutoRepository>().unwrap();
+
+    assert!(!Arc::ptr_eq(&first, &second));
+    assert!(Arc::ptr_eq(&first.config, &second.config));
 }
 
 #[test]

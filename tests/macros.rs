@@ -35,15 +35,47 @@ impl MacroCatsService {
 }
 
 #[derive(Debug)]
-struct MacroCatsController {
+struct MacroMissingCatsService;
+
+#[injectable]
+#[derive(Debug)]
+struct MacroAutoCatsReader {
     cats: Arc<MacroCatsService>,
+    #[inject("readonly-cats")]
+    readonly: Arc<MacroCatsService>,
+    missing: Option<Arc<MacroMissingCatsService>>,
+    #[inject("missing-cats")]
+    missing_named: Option<Arc<MacroCatsService>>,
 }
 
+impl MacroAutoCatsReader {
+    fn summary(&self) -> String {
+        let cat = self.cats.find_one("auto");
+        let readonly = self.readonly.find_one("readonly");
+        format!(
+            "{}:{}:{}:{}",
+            cat.id,
+            readonly.id,
+            self.missing.is_none(),
+            self.missing_named.is_none()
+        )
+    }
+}
+
+#[injectable]
+#[derive(Debug)]
+struct MacroCatsController {
+    cats: Arc<MacroCatsService>,
+    reader: Arc<MacroAutoCatsReader>,
+}
+
+#[injectable]
 #[derive(Debug)]
 struct MacroCatsGateway {
     cats: Arc<MacroCatsService>,
 }
 
+#[injectable]
 #[derive(Debug)]
 struct MacroCatsMessages {
     cats: Arc<MacroCatsService>,
@@ -274,22 +306,28 @@ impl Module for MacroCatsModule {
     }
 
     fn providers(&self) -> Result<Vec<ProviderDefinition>> {
-        Ok(vec![MacroCatsService.into_provider()])
+        Ok(vec![
+            MacroCatsService::provider(),
+            MacroCatsService.into_named_provider("readonly-cats"),
+            MacroAutoCatsReader::provider(),
+            MacroCatsController::provider(),
+            MacroCatsGateway::provider(),
+            MacroCatsMessages::provider(),
+        ])
     }
 
     fn controllers(&self, module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
-        let cats = module_ref.get::<MacroCatsService>()?;
-        Ok(vec![Arc::new(MacroCatsController { cats }).controller()?])
+        Ok(vec![module_ref
+            .get::<MacroCatsController>()?
+            .controller()?])
     }
 
     fn gateways(&self, module_ref: &ModuleRef) -> Result<Vec<WebSocketGatewayDefinition>> {
-        let cats = module_ref.get::<MacroCatsService>()?;
-        Ok(vec![Arc::new(MacroCatsGateway { cats }).gateway()?])
+        Ok(vec![module_ref.get::<MacroCatsGateway>()?.gateway()?])
     }
 
     fn message_patterns(&self, module_ref: &ModuleRef) -> Result<Vec<MessagePatternDefinition>> {
-        let cats = module_ref.get::<MacroCatsService>()?;
-        Arc::new(MacroCatsMessages { cats }).message_patterns()
+        module_ref.get::<MacroCatsMessages>()?.message_patterns()
     }
 }
 
@@ -604,6 +642,10 @@ async fn macros_register_injectable_services_and_controller_routes() {
     assert_eq!(app.routes().len(), 12);
     assert_eq!(app.gateways().len(), 1);
     assert_eq!(app.message_patterns().len(), 3);
+    let reader = app.get::<MacroAutoCatsReader>().unwrap();
+    let controller = app.get::<MacroCatsController>().unwrap();
+    assert_eq!(reader.summary(), "auto:readonly:true:true");
+    assert!(Arc::ptr_eq(&reader, &controller.reader));
     assert_eq!(
         app.reflector().unwrap().metadata_value(
             a3s_boot::HttpMethod::Get,
