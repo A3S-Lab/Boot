@@ -9,6 +9,8 @@ use std::future::Future;
 use std::ops::Deref;
 use std::sync::Arc;
 
+#[cfg(feature = "kafka-transport")]
+mod kafka;
 #[cfg(feature = "mqtt-transport")]
 mod mqtt;
 #[cfg(feature = "nats-transport")]
@@ -20,6 +22,8 @@ mod redis;
 #[cfg(feature = "tcp-transport")]
 mod tcp;
 
+#[cfg(feature = "kafka-transport")]
+pub use self::kafka::{KafkaTransport, KafkaTransportClient, KafkaTransportOptions};
 #[cfg(feature = "mqtt-transport")]
 pub use self::mqtt::{MqttTransport, MqttTransportClient, MqttTransportOptions, MqttTransportQoS};
 #[cfg(feature = "nats-transport")]

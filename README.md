@@ -133,6 +133,16 @@ serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
+Enable the optional Kafka microservice transport when services need Nest-style
+request-response and event-only message patterns over Kafka topics:
+
+```toml
+[dependencies]
+a3s-boot = { version = "0.1", features = ["kafka-transport"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
 Enable the optional structured logger module when the application needs
 provider-backed logging without forcing a concrete backend:
 
@@ -982,7 +992,7 @@ workers, and single-process dispatch. Enable the `tcp-transport` feature to use
 `TcpTransport` for newline-delimited JSON messages over TCP, or
 `redis-transport` to use Redis Pub/Sub channels, or `nats-transport` to use
 NATS subjects, `mqtt-transport` to use MQTT topics, or `rabbitmq-transport` to
-use RabbitMQ queues.
+use RabbitMQ queues, or `kafka-transport` to use Kafka topics.
 
 ```rust
 use std::sync::Arc;
@@ -1324,6 +1334,54 @@ async fn run_rabbitmq_microservice() -> Result<()> {
 async fn call_rabbitmq_microservice() -> Result<()> {
     let options = RabbitMqTransportOptions::new().with_queue_prefix("cats");
     let client = RabbitMqTransportClient::with_options("amqp://127.0.0.1:5672/%2f", options);
+    let reply = client
+        .send(TransportMessage::json(
+            "cat.find",
+            &FindCatMessage {
+                id: "milo".to_string(),
+            },
+        )?)
+        .await?
+        .unwrap();
+
+    client
+        .emit(TransportMessage::json(
+            "cat.created",
+            &FindCatMessage {
+                id: "luna".to_string(),
+            },
+        )?)
+        .await?;
+
+    assert_eq!(reply.data_as::<CatDto>()?.name, "Milo");
+    Ok(())
+}
+```
+
+With `kafka-transport`, request-response messages are published to a configured
+request topic and receive replies on per-request reply topics. Event messages
+are published to a separate event topic:
+
+```rust
+use std::time::Duration;
+
+use a3s_boot::{
+    BootFactory, KafkaTransport, KafkaTransportClient, KafkaTransportOptions, Result,
+    TransportMessage,
+};
+
+async fn run_kafka_microservice() -> Result<()> {
+    let options = KafkaTransportOptions::new()
+        .with_topic_prefix("cats")
+        .with_request_timeout(Duration::from_secs(5));
+    let transport = KafkaTransport::with_options(["127.0.0.1:9092"], options);
+    let mut service = BootFactory::create_microservice(CatsModule, transport)?;
+    service.listen().await
+}
+
+async fn call_kafka_microservice() -> Result<()> {
+    let options = KafkaTransportOptions::new().with_topic_prefix("cats");
+    let client = KafkaTransportClient::with_options(["127.0.0.1:9092"], options);
     let reply = client
         .send(TransportMessage::json(
             "cat.find",

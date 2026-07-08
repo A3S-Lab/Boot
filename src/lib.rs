@@ -147,6 +147,8 @@ pub use transport::{
     MessagePatternKind, MessageTransport, TransportContext, TransportGuard, TransportInterceptor,
     TransportMessage, TransportPipe, TransportReply,
 };
+#[cfg(feature = "kafka-transport")]
+pub use transport::{KafkaTransport, KafkaTransportClient, KafkaTransportOptions};
 #[cfg(feature = "mqtt-transport")]
 pub use transport::{MqttTransport, MqttTransportClient, MqttTransportOptions, MqttTransportQoS};
 #[cfg(feature = "nats-transport")]

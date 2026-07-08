@@ -28,6 +28,7 @@ logging = []
 macros = ["dep:a3s-boot-macros"]
 openapi-schemas = ["dep:schemars"]
 queue = ["dep:tokio"]
+kafka-transport = ["dep:chrono", "dep:rskafka", "dep:tokio"]
 mqtt-transport = ["dep:rumqttc", "dep:tokio"]
 nats-transport = ["dep:async-nats", "dep:tokio"]
 rabbitmq-transport = ["dep:lapin", "dep:tokio"]
@@ -54,6 +55,7 @@ lapin = { version = "4.10.0", default-features = false, features = ["tokio"], op
 multer = { version = "3", optional = true }
 percent-encoding = "2"
 redis = { version = "1.3.0", default-features = false, features = ["tokio-comp"], optional = true }
+rskafka = { version = "0.6.0", default-features = false, optional = true }
 rumqttc = { version = "0.25.1", default-features = false, optional = true }
 schemars = { version = "1", optional = true }
 serde = { version = "1", features = ["derive"] }

@@ -4,6 +4,8 @@ use a3s_boot::{
     MessageTransport, Module, ModuleRef, ProviderDefinition, Result, TransportContext,
     TransportInterceptor, TransportMessage, TransportReply, Validate,
 };
+#[cfg(feature = "kafka-transport")]
+use a3s_boot::{KafkaTransport, KafkaTransportClient, KafkaTransportOptions};
 #[cfg(feature = "mqtt-transport")]
 use a3s_boot::{MqttTransport, MqttTransportClient, MqttTransportOptions, MqttTransportQoS};
 #[cfg(feature = "nats-transport")]
@@ -18,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 #[cfg(any(
+    feature = "kafka-transport",
     feature = "mqtt-transport",
     feature = "nats-transport",
     feature = "rabbitmq-transport",
@@ -26,6 +29,7 @@ use std::sync::{Arc, Mutex};
 ))]
 use std::time::Duration;
 #[cfg(any(
+    feature = "kafka-transport",
     feature = "mqtt-transport",
     feature = "nats-transport",
     feature = "rabbitmq-transport",
@@ -35,6 +39,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(feature = "tcp-transport")]
 use tokio::net::TcpListener;
 #[cfg(any(
+    feature = "kafka-transport",
     feature = "mqtt-transport",
     feature = "nats-transport",
     feature = "rabbitmq-transport",
@@ -351,6 +356,134 @@ async fn in_process_transport_builds_a_message_client() {
         .unwrap();
 
     assert_eq!(reply.data_as::<NumberPayload>().unwrap().value, 14);
+}
+
+#[cfg(feature = "kafka-transport")]
+#[test]
+fn kafka_transport_builds_a_message_client_with_custom_options() {
+    let brokers = vec!["127.0.0.1:9092".to_string()];
+    let options = KafkaTransportOptions::new()
+        .with_topic_prefix("a3s.boot.test")
+        .with_client_id_prefix("a3s-boot-test")
+        .with_request_timeout(Duration::from_secs(2))
+        .with_partition(1)
+        .with_fetch_batch_size(2, 2048)
+        .with_fetch_max_wait_ms(250)
+        .with_max_message_size(2 * 1024 * 1024)
+        .with_auto_create_topics(true)
+        .with_topic_replication_factor(1);
+    let app = BootApplication::builder().build().unwrap();
+    let client = KafkaTransport::with_options(brokers.clone(), options.clone())
+        .build(app)
+        .unwrap();
+
+    assert_eq!(client.brokers(), brokers.as_slice());
+    assert_eq!(client.options(), &options);
+    assert_eq!(client.options().request_topic(), "a3s.boot.test.requests");
+    assert_eq!(client.options().event_topic(), "a3s.boot.test.events");
+    assert_eq!(
+        client.options().reply_topic_prefix(),
+        "a3s.boot.test.replies"
+    );
+    assert_eq!(client.options().client_id_prefix(), "a3s-boot-test");
+    assert_eq!(client.options().partition(), 1);
+    assert_eq!(client.options().fetch_min_batch_size(), 2);
+    assert_eq!(client.options().fetch_max_batch_size(), 2048);
+    assert_eq!(client.options().fetch_max_wait_ms(), 250);
+    assert_eq!(client.options().max_message_size(), 2 * 1024 * 1024);
+    assert!(client.options().auto_create_topics());
+    assert_eq!(client.options().topic_replication_factor(), 1);
+}
+
+#[cfg(feature = "kafka-transport")]
+#[tokio::test]
+async fn kafka_transport_round_trips_when_kafka_brokers_are_set() {
+    let Some(brokers) = kafka_test_brokers() else {
+        return;
+    };
+    let options = KafkaTransportOptions::new()
+        .with_topic_prefix(unique_transport_prefix("kafka-round-trip"))
+        .with_client_id_prefix("a3s-boot-test")
+        .with_request_timeout(Duration::from_secs(3))
+        .with_fetch_max_wait_ms(100)
+        .with_auto_create_topics(true);
+    let app = BootApplication::builder()
+        .message_pattern(
+            MessagePatternDefinition::request_json(
+                "math.double",
+                |payload: NumberPayload| async move {
+                    Ok(NumberPayload {
+                        value: payload.value * 2,
+                    })
+                },
+            )
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+    let transport = KafkaTransport::with_options(brokers.clone(), options.clone());
+    let server = tokio::spawn({
+        let app = app.clone();
+        async move { transport.serve(app).await }
+    });
+    let client = KafkaTransportClient::with_options(brokers, options);
+
+    let reply = send_kafka_with_retry(
+        &client,
+        TransportMessage::json("math.double", &NumberPayload { value: 9 }).unwrap(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(reply.data_as::<NumberPayload>().unwrap().value, 18);
+    server.abort();
+}
+
+#[cfg(feature = "kafka-transport")]
+#[tokio::test]
+async fn kafka_transport_emits_events_when_kafka_brokers_are_set() {
+    let Some(brokers) = kafka_test_brokers() else {
+        return;
+    };
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let event_log = Arc::clone(&observed);
+    let options = KafkaTransportOptions::new()
+        .with_topic_prefix(unique_transport_prefix("kafka-event"))
+        .with_client_id_prefix("a3s-boot-test")
+        .with_request_timeout(Duration::from_secs(3))
+        .with_fetch_max_wait_ms(100)
+        .with_auto_create_topics(true);
+    let app = BootApplication::builder()
+        .message_pattern(
+            MessagePatternDefinition::event_json("math.observed", move |payload: NumberPayload| {
+                let event_log = Arc::clone(&event_log);
+                async move {
+                    event_log.lock().unwrap().push(payload.value);
+                    Ok(())
+                }
+            })
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+    let transport = KafkaTransport::with_options(brokers.clone(), options.clone());
+    let server = tokio::spawn({
+        let app = app.clone();
+        async move { transport.serve(app).await }
+    });
+    let client = KafkaTransportClient::with_options(brokers, options);
+
+    emit_kafka_until_observed(
+        &client,
+        TransportMessage::json("math.observed", &NumberPayload { value: 11 }).unwrap(),
+        Arc::clone(&observed),
+    )
+    .await
+    .unwrap();
+
+    assert!(observed.lock().unwrap().contains(&11));
+    server.abort();
 }
 
 #[cfg(feature = "mqtt-transport")]
@@ -1042,6 +1175,82 @@ async fn send_tcp_with_retry(
     ))
 }
 
+#[cfg(feature = "kafka-transport")]
+fn kafka_test_brokers() -> Option<Vec<String>> {
+    std::env::var("A3S_BOOT_KAFKA_BROKERS")
+        .ok()
+        .map(|value| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>()
+        })
+        .filter(|brokers| !brokers.is_empty())
+}
+
+#[cfg(feature = "kafka-transport")]
+async fn send_kafka_with_retry(
+    client: &KafkaTransportClient,
+    message: TransportMessage,
+) -> Result<Option<TransportReply>> {
+    let mut last_error = None;
+    for _ in 0..50 {
+        match client.send(message.clone()).await {
+            Ok(reply) => return Ok(reply),
+            Err(BootError::Adapter(message)) if should_retry_kafka_error(&message) => {
+                last_error = Some(BootError::Adapter(message));
+                sleep(Duration::from_millis(50)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_error
+        .unwrap_or_else(|| BootError::Adapter("kafka transport did not start".to_string())))
+}
+
+#[cfg(feature = "kafka-transport")]
+async fn emit_kafka_until_observed(
+    client: &KafkaTransportClient,
+    message: TransportMessage,
+    observed: Arc<Mutex<Vec<i32>>>,
+) -> Result<()> {
+    let mut last_error = None;
+    for _ in 0..50 {
+        match client.emit(message.clone()).await {
+            Ok(()) => {
+                sleep(Duration::from_millis(50)).await;
+                if !observed.lock().unwrap().is_empty() {
+                    return Ok(());
+                }
+            }
+            Err(BootError::Adapter(message)) if should_retry_kafka_error(&message) => {
+                last_error = Some(BootError::Adapter(message));
+                sleep(Duration::from_millis(50)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        BootError::Adapter("kafka transport event was not observed".to_string())
+    }))
+}
+
+#[cfg(feature = "kafka-transport")]
+fn should_retry_kafka_error(message: &str) -> bool {
+    message.contains("UnknownTopicOrPartition")
+        || message.contains("LeaderNotAvailable")
+        || message.contains("NotLeaderOrFollower")
+        || message.contains("Connection")
+        || message.contains("connection")
+        || message.contains("Timeout")
+        || message.contains("timed out")
+        || message.contains("reply topic closed")
+}
+
 #[cfg(feature = "mqtt-transport")]
 fn mqtt_test_endpoint() -> Option<(String, u16)> {
     if let Ok(value) = std::env::var("A3S_BOOT_MQTT_URL") {
@@ -1312,6 +1521,7 @@ async fn emit_redis_until_observed(
 }
 
 #[cfg(any(
+    feature = "kafka-transport",
     feature = "mqtt-transport",
     feature = "nats-transport",
     feature = "rabbitmq-transport",
