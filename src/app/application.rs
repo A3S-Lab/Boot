@@ -154,6 +154,7 @@ impl BootApplication {
         let candidate = &candidates[candidate_index];
 
         let mut methods = Vec::new();
+        let mut has_wildcard = false;
         for route in &self.routes {
             if !route_matches_candidate(
                 route,
@@ -164,9 +165,17 @@ impl BootApplication {
                 continue;
             }
 
+            if route.method().is_wildcard() {
+                has_wildcard = true;
+                continue;
+            }
+
             if !methods.contains(&route.method()) {
                 methods.push(route.method());
             }
+        }
+        if has_wildcard {
+            return HttpMethod::standard_methods().to_vec();
         }
         methods
     }
@@ -260,8 +269,21 @@ impl BootApplication {
             &best_specificity,
             self.api_versioning.as_ref(),
             host,
+            |route| route.method().matches(request.method),
+        ) {
+            let request = request.with_matched_path(candidate.path.clone());
+            return route.call(request).await;
+        }
+
+        if let Some(route) = matching_route_with_specificity(
+            &self.routes,
+            candidate,
+            &best_specificity,
+            self.api_versioning.as_ref(),
+            host,
             |_| true,
         ) {
+            let request = request.with_matched_path(candidate.path.clone());
             return route.call(request).await;
         }
 
@@ -385,13 +407,23 @@ impl BootApplication {
         let (candidate_index, best_specificity) =
             best_path_specificity(&self.routes, candidates, self.api_versioning.as_ref())?;
         let candidate = &candidates[candidate_index];
-        let route = self.routes.iter().find(|route| {
+        let exact = self.routes.iter().find(|route| {
             route_matches_candidate(
                 route,
                 candidate,
                 &best_specificity,
                 self.api_versioning.as_ref(),
             ) && route.method() == method
+        });
+        let route = exact.or_else(|| {
+            self.routes.iter().find(|route| {
+                route_matches_candidate(
+                    route,
+                    candidate,
+                    &best_specificity,
+                    self.api_versioning.as_ref(),
+                ) && route.method().matches(method)
+            })
         })?;
 
         Some(MatchedRoute {

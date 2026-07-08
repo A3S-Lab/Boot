@@ -199,6 +199,22 @@ impl MacroCatsController {
         )))
     }
 
+    #[all("/catch")]
+    async fn catch_all(&self, #[request] request: BootRequest) -> Result<MacroCatDto> {
+        Ok(MacroCatDto {
+            id: request.method().as_str().to_string(),
+            name: "Catch".to_string(),
+        })
+    }
+
+    #[all("/raw-catch", raw)]
+    async fn raw_catch_all(&self, request: BootRequest) -> Result<BootResponse> {
+        Ok(BootResponse::text(format!(
+            "raw:{}",
+            request.method().as_str()
+        )))
+    }
+
     #[post("/", status = 201)]
     #[operation(summary = "Create a macro cat", operation_id = "createMacroCat")]
     #[request_body(schema = MacroCreateCatDto, description = "Cat creation payload")]
@@ -639,7 +655,7 @@ async fn macros_register_injectable_services_and_controller_routes() {
         .build()
         .unwrap();
 
-    assert_eq!(app.routes().len(), 12);
+    assert_eq!(app.routes().len(), 14);
     assert_eq!(app.gateways().len(), 1);
     assert_eq!(app.message_patterns().len(), 3);
     let reader = app.get::<MacroAutoCatsReader>().unwrap();
@@ -737,6 +753,44 @@ async fn macros_register_injectable_services_and_controller_routes() {
         raw.body_text().unwrap(),
         "42:req-raw:macro-test:/macro-cats/42/raw-details"
     );
+
+    let all_get = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-cats/catch",
+        ))
+        .await
+        .unwrap();
+    let all_post = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Post,
+            "/macro-cats/catch",
+        ))
+        .await
+        .unwrap();
+    let raw_all = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Patch,
+            "/macro-cats/raw-catch",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        all_get.body_json::<MacroCatDto>().unwrap(),
+        MacroCatDto {
+            id: "GET".to_string(),
+            name: "Catch".to_string(),
+        }
+    );
+    assert_eq!(
+        all_post.body_json::<MacroCatDto>().unwrap(),
+        MacroCatDto {
+            id: "POST".to_string(),
+            name: "Catch".to_string(),
+        }
+    );
+    assert_eq!(raw_all.body_text().unwrap(), "raw:PATCH");
 
     let create = BootRequest::new(a3s_boot::HttpMethod::Post, "/macro-cats")
         .with_json(&MacroCreateCatDto {

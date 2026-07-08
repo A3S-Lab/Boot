@@ -9,6 +9,43 @@ use serde::Serialize;
 use std::future::Future;
 
 impl RouteDefinition {
+    pub fn all<H>(path: impl Into<String>, handler: H) -> Result<Self>
+    where
+        H: RouteHandler,
+    {
+        Self::new(HttpMethod::All, path, handler)
+    }
+
+    pub fn all_scoped<F, H>(path: impl Into<String>, factory: F) -> Result<Self>
+    where
+        F: Fn(&ModuleRef) -> Result<H> + Send + Sync + 'static,
+        H: RouteHandler,
+    {
+        Self::new_scoped(HttpMethod::All, path, factory)
+    }
+
+    pub fn all_json<H, Fut, R>(path: impl Into<String>, handler: H) -> Result<Self>
+    where
+        H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        Self::all_json_with_status(path, 200, handler)
+    }
+
+    pub fn all_json_with_status<H, Fut, R>(
+        path: impl Into<String>,
+        status: u16,
+        handler: H,
+    ) -> Result<Self>
+    where
+        H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        Self::json_response_with_status(HttpMethod::All, path, status, handler)
+    }
+
     pub fn get<H>(path: impl Into<String>, handler: H) -> Result<Self>
     where
         H: RouteHandler,

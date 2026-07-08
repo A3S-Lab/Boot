@@ -153,6 +153,11 @@ pub fn on_event(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
+pub fn all(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    route_attribute_outside_controller("all", item)
+}
+
+#[proc_macro_attribute]
 pub fn get(_attr: TokenStream, item: TokenStream) -> TokenStream {
     route_attribute_outside_controller("get", item)
 }
@@ -4053,6 +4058,7 @@ struct RouteSpec {
 
 #[derive(Clone, Copy)]
 enum RouteKind {
+    All,
     Get,
     Sse,
     Post,
@@ -4072,6 +4078,7 @@ impl RouteKind {
     fn from_attribute(attr: &Attribute) -> Option<Self> {
         let ident = attr.path().segments.last()?.ident.to_string();
         match ident.as_str() {
+            "all" => Some(Self::All),
             "get" => Some(Self::Get),
             "sse" => Some(Self::Sse),
             "post" => Some(Self::Post),
@@ -4091,6 +4098,7 @@ impl RouteKind {
 
     fn raw_builder_ident(self) -> Ident {
         match self {
+            Self::All => format_ident!("all"),
             Self::Get => format_ident!("get"),
             Self::Sse => format_ident!("get"),
             Self::Post => format_ident!("post"),
@@ -4109,6 +4117,7 @@ impl RouteKind {
 
     fn json_builder_ident(self) -> Option<Ident> {
         match self {
+            Self::All => Some(format_ident!("all_json_with_status")),
             Self::Get | Self::GetJson => Some(format_ident!("get_json_with_status")),
             Self::Post | Self::PostJson => Some(format_ident!("post_json_with_status")),
             Self::Put | Self::PutJson => Some(format_ident!("put_json_with_status")),
@@ -4136,7 +4145,9 @@ impl RouteKind {
 
         match self {
             Self::Sse => RouteFlavor::Sse,
-            Self::Get | Self::GetJson | Self::Delete | Self::DeleteJson => RouteFlavor::JsonRequest,
+            Self::All | Self::Get | Self::GetJson | Self::Delete | Self::DeleteJson => {
+                RouteFlavor::JsonRequest
+            }
             Self::Post
             | Self::PostJson
             | Self::Put

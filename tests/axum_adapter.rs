@@ -72,6 +72,80 @@ async fn axum_adapter_serves_multiple_methods_on_the_same_path() {
 }
 
 #[tokio::test]
+async fn axum_adapter_dispatches_all_routes_with_exact_method_precedence() {
+    use axum::body::{to_bytes, Body};
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    let app = BootApplication::builder()
+        .route(
+            RouteDefinition::all("/items", |request: BootRequest| async move {
+                Ok(BootResponse::text(format!(
+                    "all:{}",
+                    request.method().as_str()
+                )))
+            })
+            .unwrap(),
+        )
+        .route(
+            RouteDefinition::get("/items", |_| async { Ok(BootResponse::text("exact:get")) })
+                .unwrap(),
+        )
+        .build()
+        .unwrap();
+    let router = app.into_adapter(&AxumAdapter::new()).unwrap();
+
+    let get_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/items")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let post_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/items")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let patch_response = router
+        .oneshot(
+            Request::builder()
+                .method("PATCH")
+                .uri("/items")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(get_response.status(), StatusCode::OK);
+    assert_eq!(post_response.status(), StatusCode::OK);
+    assert_eq!(patch_response.status(), StatusCode::OK);
+    assert_eq!(
+        to_bytes(get_response.into_body(), 1024).await.unwrap(),
+        "exact:get"
+    );
+    assert_eq!(
+        to_bytes(post_response.into_body(), 1024).await.unwrap(),
+        "all:POST"
+    );
+    assert_eq!(
+        to_bytes(patch_response.into_body(), 1024).await.unwrap(),
+        "all:PATCH"
+    );
+}
+
+#[tokio::test]
 async fn axum_adapter_dispatches_host_scoped_routes_with_duplicate_paths() {
     use axum::body::{to_bytes, Body};
     use axum::http::{Request, StatusCode};

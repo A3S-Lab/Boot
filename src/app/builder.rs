@@ -466,7 +466,7 @@ fn validate_gateway_route_conflicts(
 ) -> Result<()> {
     let get_routes = routes
         .iter()
-        .filter(|route| route.method() == crate::HttpMethod::Get)
+        .filter(|route| route.method().matches(crate::HttpMethod::Get))
         .map(RouteDefinition::path_shape)
         .collect::<BTreeSet<_>>();
 

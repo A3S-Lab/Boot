@@ -112,6 +112,46 @@ async fn openapi_documents_include_route_metadata_and_auto_path_params() {
         .contains_key("/openapi.json"));
 }
 
+#[test]
+fn openapi_expands_all_routes_and_keeps_exact_method_metadata() {
+    let app = BootApplication::builder()
+        .route(
+            RouteDefinition::all_json("/catch", |request: BootRequest| async move {
+                Ok(OpenApiCatDto {
+                    id: request.method().as_str().to_string(),
+                    name: "Catch".to_string(),
+                })
+            })
+            .unwrap()
+            .with_summary("Catch all methods"),
+        )
+        .route(
+            RouteDefinition::get_json("/catch", |_| async {
+                Ok(OpenApiCatDto {
+                    id: "GET".to_string(),
+                    name: "Exact".to_string(),
+                })
+            })
+            .unwrap()
+            .with_summary("Exact GET"),
+        )
+        .build()
+        .unwrap();
+
+    let document = app.openapi(OpenApiInfo::new("Cats API", "1.0.0"));
+    let value = serde_json::to_value(document).unwrap();
+    let operations = value["paths"]["/catch"].as_object().unwrap();
+
+    for method in ["get", "post", "put", "patch", "delete", "options", "head"] {
+        assert!(
+            operations.contains_key(method),
+            "{method} operation is missing"
+        );
+    }
+    assert_eq!(operations["get"]["summary"], "Exact GET");
+    assert_eq!(operations["post"]["summary"], "Catch all methods");
+}
+
 #[cfg(feature = "openapi-schemas")]
 #[test]
 fn openapi_schema_components_can_be_generated_from_schemars() {

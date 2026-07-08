@@ -221,6 +221,30 @@ fn rejects_duplicate_routes_with_the_same_method_and_path() {
 }
 
 #[test]
+fn rejects_duplicate_all_routes_with_the_same_path() {
+    let result = BootApplication::builder()
+        .route(RouteDefinition::all("/health", |_| async { Ok(BootResponse::text("ok")) }).unwrap())
+        .route(
+            RouteDefinition::all("/health", |_| async { Ok(BootResponse::text("still ok")) })
+                .unwrap(),
+        )
+        .build();
+
+    assert!(matches!(result, Err(BootError::DuplicateRoute(_))));
+}
+
+#[test]
+fn allows_all_routes_to_share_paths_with_exact_methods() {
+    let app = BootApplication::builder()
+        .route(RouteDefinition::all("/items", |_| async { Ok(BootResponse::text("all")) }).unwrap())
+        .route(RouteDefinition::get("/items", |_| async { Ok(BootResponse::text("get")) }).unwrap())
+        .build()
+        .unwrap();
+
+    assert_eq!(app.routes().len(), 2);
+}
+
+#[test]
 fn rejects_routes_with_the_same_method_and_ambiguous_path_shape() {
     let result = BootApplication::builder()
         .route(
@@ -410,6 +434,57 @@ async fn application_call_prefers_static_path_before_method_matching() {
     );
 }
 
+#[tokio::test]
+async fn all_routes_dispatch_standard_methods() {
+    let app = BootApplication::builder()
+        .route(
+            RouteDefinition::all("/items", |request: BootRequest| async move {
+                Ok(BootResponse::text(request.method().as_str()))
+            })
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+
+    for method in HttpMethod::standard_methods() {
+        let response = app.call(BootRequest::new(*method, "/items")).await.unwrap();
+
+        assert_eq!(response.body_text().unwrap(), method.as_str());
+    }
+}
+
+#[tokio::test]
+async fn exact_methods_take_precedence_over_all_routes() {
+    let app = BootApplication::builder()
+        .route(
+            RouteDefinition::all("/items", |request: BootRequest| async move {
+                Ok(BootResponse::text(format!(
+                    "all:{}",
+                    request.method().as_str()
+                )))
+            })
+            .unwrap(),
+        )
+        .route(
+            RouteDefinition::get("/items", |_| async { Ok(BootResponse::text("exact:get")) })
+                .unwrap(),
+        )
+        .build()
+        .unwrap();
+
+    let get = app
+        .call(BootRequest::new(HttpMethod::Get, "/items"))
+        .await
+        .unwrap();
+    let post = app
+        .call(BootRequest::new(HttpMethod::Post, "/items"))
+        .await
+        .unwrap();
+
+    assert_eq!(get.body_text().unwrap(), "exact:get");
+    assert_eq!(post.body_text().unwrap(), "all:POST");
+}
+
 #[test]
 fn allowed_methods_use_the_most_specific_matching_path_shape() {
     let app = BootApplication::builder()
@@ -474,6 +549,26 @@ fn allowed_methods_header_uses_the_most_specific_matching_path_shape() {
 }
 
 #[test]
+fn allowed_methods_expand_all_routes_to_standard_methods() {
+    let app = BootApplication::builder()
+        .route(RouteDefinition::all("/items", |_| async { Ok(BootResponse::text("all")) }).unwrap())
+        .route(
+            RouteDefinition::get("/items", |_| async { Ok(BootResponse::text("exact")) }).unwrap(),
+        )
+        .build()
+        .unwrap();
+
+    assert_eq!(
+        app.allowed_methods("/items"),
+        HttpMethod::standard_methods().to_vec()
+    );
+    assert_eq!(
+        app.allowed_methods_header("/items").as_deref(),
+        Some("GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD")
+    );
+}
+
+#[test]
 fn route_for_uses_the_most_specific_matching_path_shape() {
     let app = BootApplication::builder()
         .route(
@@ -504,6 +599,27 @@ fn route_for_uses_the_most_specific_matching_path_shape() {
     assert_eq!(delete_dynamic_route.path(), "/items/{slug}");
     assert!(app.route_for(HttpMethod::Get, "/items/new").is_none());
     assert!(app.route_for(HttpMethod::Get, "/tools/hammer").is_none());
+}
+
+#[test]
+fn route_for_uses_all_routes_as_method_fallbacks() {
+    let app = BootApplication::builder()
+        .route(
+            RouteDefinition::all("/items/{id}", |_| async { Ok(BootResponse::text("all")) })
+                .unwrap(),
+        )
+        .route(
+            RouteDefinition::get("/items/{id}", |_| async { Ok(BootResponse::text("get")) })
+                .unwrap(),
+        )
+        .build()
+        .unwrap();
+
+    let get = app.route_for(HttpMethod::Get, "/items/hammer").unwrap();
+    let post = app.route_for(HttpMethod::Post, "/items/hammer").unwrap();
+
+    assert_eq!(get.method(), HttpMethod::Get);
+    assert_eq!(post.method(), HttpMethod::All);
 }
 
 #[test]
@@ -542,6 +658,25 @@ fn route_match_returns_route_and_decoded_path_params() {
     assert_eq!(dynamic_match.params().len(), 2);
     assert_eq!(static_match.route().path(), "/files/new/versions/latest");
     assert!(static_match.params().is_empty());
+}
+
+#[test]
+fn route_match_uses_all_routes_as_method_fallbacks() {
+    let app = BootApplication::builder()
+        .route(
+            RouteDefinition::all("/items/{id}", |_| async { Ok(BootResponse::text("all")) })
+                .unwrap(),
+        )
+        .build()
+        .unwrap();
+
+    let matched = app
+        .route_match(HttpMethod::Patch, "/items/hammer")
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(matched.route().method(), HttpMethod::All);
+    assert_eq!(matched.param("id"), Some("hammer"));
 }
 
 #[test]

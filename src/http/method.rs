@@ -5,6 +5,8 @@ use std::str::FromStr;
 /// HTTP method understood by Boot route definitions.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum HttpMethod {
+    /// Route-definition wildcard that matches every standard HTTP method.
+    All,
     Get,
     Post,
     Put,
@@ -15,8 +17,19 @@ pub enum HttpMethod {
 }
 
 impl HttpMethod {
+    pub const STANDARD: [Self; 7] = [
+        Self::Get,
+        Self::Post,
+        Self::Put,
+        Self::Patch,
+        Self::Delete,
+        Self::Options,
+        Self::Head,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::All => "ALL",
             Self::Get => "GET",
             Self::Post => "POST",
             Self::Put => "PUT",
@@ -25,6 +38,22 @@ impl HttpMethod {
             Self::Options => "OPTIONS",
             Self::Head => "HEAD",
         }
+    }
+
+    pub fn standard_methods() -> &'static [Self] {
+        &Self::STANDARD
+    }
+
+    pub fn is_wildcard(self) -> bool {
+        matches!(self, Self::All)
+    }
+
+    pub fn is_standard(self) -> bool {
+        !self.is_wildcard()
+    }
+
+    pub fn matches(self, request_method: Self) -> bool {
+        self == request_method || (self.is_wildcard() && request_method.is_standard())
     }
 }
 

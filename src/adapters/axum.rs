@@ -50,7 +50,10 @@ impl HttpAdapter for AxumAdapter {
 
     fn build(&self, app: BootApplication) -> Result<Self::Output> {
         let fallback_routing = app.api_versioning().is_some()
-            || app.routes().iter().any(|route| route.host().is_some());
+            || app
+                .routes()
+                .iter()
+                .any(|route| route.host().is_some() || route.method().is_wildcard());
         let mut router = if fallback_routing {
             let body_limit = self.body_limit;
             let app = app.clone();
@@ -127,6 +130,13 @@ fn route_to_method_router(
 
 fn method_filter(method: HttpMethod) -> MethodFilter {
     match method {
+        HttpMethod::All => MethodFilter::GET
+            .or(MethodFilter::POST)
+            .or(MethodFilter::PUT)
+            .or(MethodFilter::PATCH)
+            .or(MethodFilter::DELETE)
+            .or(MethodFilter::OPTIONS)
+            .or(MethodFilter::HEAD),
         HttpMethod::Get => MethodFilter::GET,
         HttpMethod::Post => MethodFilter::POST,
         HttpMethod::Put => MethodFilter::PUT,

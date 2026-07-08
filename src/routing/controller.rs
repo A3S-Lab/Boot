@@ -217,6 +217,46 @@ impl ControllerDefinition {
         self.metadata.get(key)
     }
 
+    pub fn all<H>(self, path: impl Into<String>, handler: H) -> Result<Self>
+    where
+        H: RouteHandler,
+    {
+        self.route(RouteDefinition::all(path, handler)?)
+    }
+
+    pub fn all_scoped<F, H>(self, path: impl Into<String>, factory: F) -> Result<Self>
+    where
+        F: Fn(&ModuleRef) -> Result<H> + Send + Sync + 'static,
+        H: RouteHandler,
+    {
+        self.route(RouteDefinition::all_scoped(path, factory)?)
+    }
+
+    pub fn all_json<H, Fut, R>(self, path: impl Into<String>, handler: H) -> Result<Self>
+    where
+        H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        self.all_json_with_status(path, 200, handler)
+    }
+
+    pub fn all_json_with_status<H, Fut, R>(
+        self,
+        path: impl Into<String>,
+        status: u16,
+        handler: H,
+    ) -> Result<Self>
+    where
+        H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        self.route(RouteDefinition::all_json_with_status(
+            path, status, handler,
+        )?)
+    }
+
     pub fn get<H>(self, path: impl Into<String>, handler: H) -> Result<Self>
     where
         H: RouteHandler,

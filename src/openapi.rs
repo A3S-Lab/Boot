@@ -50,21 +50,23 @@ impl OpenApiDocument {
                 continue;
             }
 
-            let Some(method) = openapi_method(route.method()) else {
-                continue;
-            };
-
             let operation = OpenApiOperation::from_route(route);
             for tag in &operation.tags {
                 tag_names.insert(tag.clone());
             }
             components.merge_schemas(route.openapi().schema_components.clone());
 
-            paths
-                .entry(route.path().to_string())
-                .or_default()
-                .operations
-                .insert(method.to_string(), operation);
+            let path = paths.entry(route.path().to_string()).or_default();
+            for method in openapi_methods(route.method()) {
+                if route.method().is_wildcard() {
+                    path.operations
+                        .entry(method.to_string())
+                        .or_insert_with(|| operation.clone());
+                } else {
+                    path.operations
+                        .insert(method.to_string(), operation.clone());
+                }
+            }
         }
 
         Self {
@@ -385,15 +387,16 @@ impl Serialize for OpenApiSchema {
 /// OpenAPI security requirement object.
 pub type OpenApiSecurityRequirement = BTreeMap<String, Vec<String>>;
 
-fn openapi_method(method: HttpMethod) -> Option<&'static str> {
+fn openapi_methods(method: HttpMethod) -> &'static [&'static str] {
     match method {
-        HttpMethod::Get => Some("get"),
-        HttpMethod::Post => Some("post"),
-        HttpMethod::Put => Some("put"),
-        HttpMethod::Patch => Some("patch"),
-        HttpMethod::Delete => Some("delete"),
-        HttpMethod::Options => Some("options"),
-        HttpMethod::Head => Some("head"),
+        HttpMethod::All => &["get", "post", "put", "patch", "delete", "options", "head"],
+        HttpMethod::Get => &["get"],
+        HttpMethod::Post => &["post"],
+        HttpMethod::Put => &["put"],
+        HttpMethod::Patch => &["patch"],
+        HttpMethod::Delete => &["delete"],
+        HttpMethod::Options => &["options"],
+        HttpMethod::Head => &["head"],
     }
 }
 

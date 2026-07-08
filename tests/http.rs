@@ -8,9 +8,14 @@ use std::time::Duration;
 
 #[test]
 fn http_methods_display_and_parse_canonical_names() {
+    assert_eq!(HttpMethod::All.to_string(), "ALL");
     assert_eq!(HttpMethod::Post.to_string(), "POST");
     assert_eq!("GET".parse::<HttpMethod>().unwrap(), HttpMethod::Get);
     assert_eq!("HEAD".parse::<HttpMethod>().unwrap(), HttpMethod::Head);
+    assert!(matches!(
+        "ALL".parse::<HttpMethod>().unwrap_err(),
+        BootError::MethodNotAllowed(message) if message == "ALL"
+    ));
 
     let error = "TRACE".parse::<HttpMethod>().unwrap_err();
 

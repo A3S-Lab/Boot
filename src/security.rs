@@ -86,7 +86,7 @@ impl CorsOptions {
     }
 
     pub fn allow_method(mut self, method: HttpMethod) -> Self {
-        self.allowed_methods.insert(method);
+        insert_http_method(&mut self.allowed_methods, method);
         self
     }
 
@@ -94,7 +94,7 @@ impl CorsOptions {
     where
         I: IntoIterator<Item = HttpMethod>,
     {
-        self.allowed_methods = methods.into_iter().collect();
+        self.allowed_methods = collect_http_methods(methods);
         self
     }
 
@@ -464,7 +464,7 @@ impl CsrfOptions {
     }
 
     pub fn protect_method(mut self, method: HttpMethod) -> Self {
-        self.protected_methods.insert(method);
+        insert_http_method(&mut self.protected_methods, method);
         self
     }
 
@@ -472,12 +472,16 @@ impl CsrfOptions {
     where
         I: IntoIterator<Item = HttpMethod>,
     {
-        self.protected_methods = methods.into_iter().collect();
+        self.protected_methods = collect_http_methods(methods);
         self
     }
 
     pub fn skip_method(mut self, method: HttpMethod) -> Self {
-        self.protected_methods.remove(&method);
+        if method.is_wildcard() {
+            self.protected_methods.clear();
+        } else {
+            self.protected_methods.remove(&method);
+        }
         self
     }
 
@@ -822,6 +826,25 @@ fn cors_methods_header(methods: &BTreeSet<HttpMethod>) -> String {
         .map(HttpMethod::as_str)
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn collect_http_methods<I>(methods: I) -> BTreeSet<HttpMethod>
+where
+    I: IntoIterator<Item = HttpMethod>,
+{
+    let mut collected = BTreeSet::new();
+    for method in methods {
+        insert_http_method(&mut collected, method);
+    }
+    collected
+}
+
+fn insert_http_method(methods: &mut BTreeSet<HttpMethod>, method: HttpMethod) {
+    if method.is_wildcard() {
+        methods.extend(HttpMethod::standard_methods().iter().copied());
+    } else {
+        methods.insert(method);
+    }
 }
 
 fn parse_cors_header_list(value: &str) -> Vec<String> {

@@ -37,9 +37,10 @@ Implemented today:
   optional dependency resolution.
 - `TestingModule` with provider overrides and typed route pipeline overrides
   for guards, interceptors, exception filters, and pipes.
-- `ControllerDefinition` and `RouteDefinition` for HTTP route groups.
-- Nest-style attribute macros: `#[injectable]`, `#[controller]`, `#[get]`,
-  `#[post]`, `#[put]`, `#[patch]`, `#[delete]`, `#[sse]`, raw route mode, and
+- `ControllerDefinition` and `RouteDefinition` for HTTP route groups, including
+  Nest-style ALL method routes with exact-method precedence.
+- Nest-style attribute macros: `#[injectable]`, `#[controller]`, `#[all]`,
+  `#[get]`, `#[post]`, `#[put]`, `#[patch]`, `#[delete]`, `#[sse]`, raw route mode, and
   method argument extractors including `#[body]`, `#[request]`,
   `#[param("name")]`, `#[params]`, `#[query]`, `#[query("name")]`,
   `#[header("name")]`, `#[headers]`, `#[host_param("name")]`, `#[ip]`, and

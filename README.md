@@ -169,6 +169,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@Controller({ host: ":account.example.com" })` | `#[host("{account}.example.com")]` below `#[controller]` |
 | `@Get(":id")` | `#[get("/{id}")]` on an async method |
 | `@Post()` | `#[post("/", status = 201)]` on an async method |
+| `@All("catch")` | `#[all("/catch")]` on an async method that handles every standard HTTP method |
 | `@Param("id")` | `#[param("id")]` on a method argument |
 | `@HostParam("account")` | `#[host_param("account")]` on a method argument |
 | `@Query()` / `@Query("page")` | `#[query]` for a DTO or `#[query("page")]` for one value |
@@ -225,7 +226,7 @@ into:
 use std::sync::Arc;
 
 use a3s_boot::{
-    controller, injectable, AxumAdapter, BootError, BootFactory, BootResponse,
+    controller, injectable, AxumAdapter, BootError, BootFactory, BootRequest, BootResponse,
     ControllerDefinition, Module, ModuleRef, ProviderDefinition, Result, SseEvent, SseStream,
     Validate,
 };
@@ -314,6 +315,14 @@ impl CatsController {
     #[response(status = 201, description = "Cat created", schema = CatDto)]
     async fn create(&self, #[body] dto: CreateCatDto) -> Result<CatDto> {
         Ok(self.cats.create(dto))
+    }
+
+    #[all("/catch")]
+    async fn catch_all(&self, #[request] request: BootRequest) -> Result<CatDto> {
+        Ok(CatDto {
+            id: request.method().as_str().to_string(),
+            name: "catch".to_string(),
+        })
     }
 
     #[get("/health", raw)]

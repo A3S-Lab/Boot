@@ -51,7 +51,7 @@ mod websocket;
 
 #[cfg(feature = "macros")]
 pub use a3s_boot_macros::{
-    bearer_auth, body, controller, delete, delete_json, event_pattern, extract, get, get_json,
+    all, bearer_auth, body, controller, delete, delete_json, event_pattern, extract, get, get_json,
     head, header, headers, hide_from_openapi, host, host_param, http_code, injectable, ip,
     message_controller, message_pattern, metadata, operation, options, param, params, patch,
     patch_json, post, post_json, put, put_json, query, redirect, request, request_body, response,

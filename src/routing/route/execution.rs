@@ -4,7 +4,7 @@ use crate::{BootError, BootRequest, BootResponse, ExecutionContext, MiddlewareOu
 
 impl RouteDefinition {
     pub async fn call(&self, mut request: BootRequest) -> Result<BootResponse> {
-        if request.method != self.method {
+        if !self.method.matches(request.method) {
             let message = format!("{} {}", request.method.as_str(), request.path);
             return self
                 .handle_error(

@@ -444,6 +444,13 @@ async fn controller_routes_support_additional_methods_and_json_responses() {
         .options("/raw", |_| async { Ok(BootResponse::text("options")) })
         .unwrap()
         .head("/raw", |_| async { Ok(BootResponse::no_content()) })
+        .unwrap()
+        .all("/catch", |request: BootRequest| async move {
+            Ok(BootResponse::text(format!(
+                "all:{}",
+                request.method().as_str()
+            )))
+        })
         .unwrap();
 
     let get_route = controller
@@ -471,6 +478,11 @@ async fn controller_routes_support_additional_methods_and_json_responses() {
         .iter()
         .find(|route| route.method() == HttpMethod::Head)
         .unwrap();
+    let all_route = controller
+        .routes()
+        .iter()
+        .find(|route| route.method() == HttpMethod::All)
+        .unwrap();
 
     let get_response = get_route
         .call(BootRequest::new(HttpMethod::Get, "/tools/hammer"))
@@ -492,6 +504,14 @@ async fn controller_routes_support_additional_methods_and_json_responses() {
         .call(BootRequest::new(HttpMethod::Head, "/tools/raw"))
         .await
         .unwrap();
+    let all_get_response = all_route
+        .call(BootRequest::new(HttpMethod::Get, "/tools/catch"))
+        .await
+        .unwrap();
+    let all_post_response = all_route
+        .call(BootRequest::new(HttpMethod::Post, "/tools/catch"))
+        .await
+        .unwrap();
 
     assert_eq!(
         serde_json::from_slice::<ItemDto>(&get_response.body).unwrap(),
@@ -511,6 +531,8 @@ async fn controller_routes_support_additional_methods_and_json_responses() {
     assert_eq!(options_response.body, b"options");
     assert_eq!(head_response.status, 204);
     assert!(head_response.body.is_empty());
+    assert_eq!(all_get_response.body, b"all:GET");
+    assert_eq!(all_post_response.body, b"all:POST");
 }
 
 #[derive(Debug, Deserialize)]
