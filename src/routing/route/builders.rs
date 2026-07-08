@@ -2,6 +2,7 @@ use super::definition::RouteDefinition;
 use crate::routing::handler::RouteHandler;
 use crate::{
     BootRequest, BootResponse, HttpMethod, ModuleRef, OpenApiResponse, Result, SseEvent, Validate,
+    ViewRenderer,
 };
 use futures_core::Stream;
 use serde::de::DeserializeOwned;
@@ -83,6 +84,33 @@ impl RouteDefinition {
         Self::json_response_with_status(HttpMethod::Get, path, status, handler)
     }
 
+    pub fn get_view<H, Fut, R>(
+        path: impl Into<String>,
+        view: impl Into<String>,
+        handler: H,
+    ) -> Result<Self>
+    where
+        H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        Self::get_view_with_status(path, view, 200, handler)
+    }
+
+    pub fn get_view_with_status<H, Fut, R>(
+        path: impl Into<String>,
+        view: impl Into<String>,
+        status: u16,
+        handler: H,
+    ) -> Result<Self>
+    where
+        H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        Self::view_with_status(HttpMethod::Get, path, view, status, handler)
+    }
+
     pub fn sse<H, Fut, S>(path: impl Into<String>, handler: H) -> Result<Self>
     where
         H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
@@ -137,6 +165,33 @@ impl RouteDefinition {
         R: Serialize + Send + 'static,
     {
         Self::json_with_status(HttpMethod::Post, path, status, handler)
+    }
+
+    pub fn post_view<H, Fut, R>(
+        path: impl Into<String>,
+        view: impl Into<String>,
+        handler: H,
+    ) -> Result<Self>
+    where
+        H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        Self::post_view_with_status(path, view, 200, handler)
+    }
+
+    pub fn post_view_with_status<H, Fut, R>(
+        path: impl Into<String>,
+        view: impl Into<String>,
+        status: u16,
+        handler: H,
+    ) -> Result<Self>
+    where
+        H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        Self::view_with_status(HttpMethod::Post, path, view, status, handler)
     }
 
     pub fn post_validated_json<T, H, Fut, R>(path: impl Into<String>, handler: H) -> Result<Self>
@@ -398,6 +453,54 @@ impl RouteDefinition {
             async move {
                 let body = future?.await?;
                 BootResponse::json_with_status(status, &body)
+            }
+        })
+        .map(|route| route.with_response(status, OpenApiResponse::description("Success")))
+    }
+
+    pub fn view<H, Fut, R>(
+        method: HttpMethod,
+        path: impl Into<String>,
+        view: impl Into<String>,
+        handler: H,
+    ) -> Result<Self>
+    where
+        H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        Self::view_with_status(method, path, view, 200, handler)
+    }
+
+    pub fn view_with_status<H, Fut, R>(
+        method: HttpMethod,
+        path: impl Into<String>,
+        view: impl Into<String>,
+        status: u16,
+        handler: H,
+    ) -> Result<Self>
+    where
+        H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        let view = view.into();
+        Self::new(method, path, move |request: BootRequest| {
+            let view = view.clone();
+            let future = request
+                .get::<ViewRenderer>()
+                .map(|renderer| (renderer, handler(request)));
+            async move {
+                let (renderer, future) = future?;
+                let context = future.await?;
+                let context = serde_json::to_value(&context).map_err(|error| {
+                    crate::BootError::Internal(format!(
+                        "failed to serialize view context `{view}`: {error}"
+                    ))
+                })?;
+                renderer
+                    .render_value_response_with_status(status, view, context)
+                    .await
             }
         })
         .map(|route| route.with_response(status, OpenApiResponse::description("Success")))

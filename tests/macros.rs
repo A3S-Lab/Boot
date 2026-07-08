@@ -7,8 +7,8 @@ use a3s_boot::{
     controller, injectable, ApiVersioning, BootApplication, BootError, BootRequest, BootResponse,
     BoxFuture, ControllerDefinition, ExceptionFilter, ExecutionContext, Guard, Interceptor,
     MessagePatternDefinition, Module, ModuleRef, OpenApiInfo, Pipe, ProviderDefinition, Result,
-    SseEvent, SseStream, TransportMessage, TransportReply, Validate, WebSocketGatewayDefinition,
-    WebSocketMessage,
+    SseEvent, SseStream, StringTemplateViewEngine, TransportMessage, TransportReply, Validate,
+    ViewModule, WebSocketGatewayDefinition, WebSocketMessage,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -176,6 +176,12 @@ impl MacroCatsController {
     async fn find_one_json(&self, request: BootRequest) -> Result<MacroCatDto> {
         let id = request.param("id").unwrap_or("unknown");
         Ok(self.cats.find_one(id))
+    }
+
+    #[get("/{id}/card")]
+    #[render("cats/card")]
+    async fn find_one_card(&self, #[param("id")] id: String) -> Result<MacroCatDto> {
+        Ok(self.cats.find_one(&id))
     }
 
     #[get("/{id}/details")]
@@ -374,6 +380,14 @@ struct MacroCatsModule;
 impl Module for MacroCatsModule {
     fn name(&self) -> &'static str {
         "macro-cats"
+    }
+
+    fn imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(ViewModule::new(
+            "macro-views",
+            StringTemplateViewEngine::new()
+                .with_template("cats/card", "<article>{{ id }}:{{ name }}</article>"),
+        ))]
     }
 
     fn providers(&self) -> Result<Vec<ProviderDefinition>> {
@@ -716,7 +730,7 @@ async fn macros_register_injectable_services_and_controller_routes() {
         .build()
         .unwrap();
 
-    assert_eq!(app.routes().len(), 15);
+    assert_eq!(app.routes().len(), 16);
     assert_eq!(app.gateways().len(), 1);
     assert_eq!(app.message_patterns().len(), 3);
     let reader = app.get::<MacroAutoCatsReader>().unwrap();
@@ -763,6 +777,16 @@ async fn macros_register_injectable_services_and_controller_routes() {
             name: "Milo".to_string(),
         }
     );
+
+    let card = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-cats/42/card",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(card.content_type(), Some("text/html; charset=utf-8"));
+    assert_eq!(card.body_text().unwrap(), "<article>42:Milo</article>");
 
     let details = app
         .call(

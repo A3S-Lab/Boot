@@ -166,6 +166,14 @@ impl BootResponse {
         Self::new(status, body.into()).with_header("content-type", "text/plain; charset=utf-8")
     }
 
+    pub fn html(body: impl Into<String>) -> Self {
+        Self::html_with_status(200, body)
+    }
+
+    pub fn html_with_status(status: u16, body: impl Into<String>) -> Self {
+        Self::new(status, body.into()).with_header("content-type", "text/html; charset=utf-8")
+    }
+
     pub fn json<T>(body: &T) -> Result<Self>
     where
         T: Serialize,

@@ -76,6 +76,10 @@ Implemented today:
   `StreamableFileOptions`, `BootResponse::streamable_file(...)`,
   `BootResponse::download(...)`, byte-stream support, content disposition, and
   Axum streaming support.
+- Nest-style MVC view rendering with `ViewEngine`, `ViewRenderer`,
+  `ViewModule`, `StringTemplateViewEngine`, `RouteDefinition::get_view(...)`,
+  `ControllerDefinition::get_view(...)`, `BootResponse::html(...)`, and the
+  `#[render("view")]` route macro.
 - Global, module, controller-level, and route-level middleware plus global and
   controller-level `Pipe`, `Guard`, `Interceptor`, and `ExceptionFilter`
   support.
@@ -572,6 +576,7 @@ Nest equivalent areas:
 - API versioning (implemented)
 - serialization (implemented)
 - compression (implemented)
+- MVC view rendering and `@Render()`-style responses (implemented)
 - streamable file and download responses (implemented)
 - file upload (implemented)
 - static assets and SPA shells (implemented)
@@ -644,6 +649,10 @@ Acceptance:
 - Streamable file responses can wrap in-memory bytes or byte streams, set
   content type, content length, inline or attachment content disposition, and
   reach adapters as streamed bytes instead of SSE events. (Covered)
+- View rendering can register a provider-backed renderer, render serializable
+  route return values into HTML responses, use module imports/exports, expose
+  explicit route/controller helpers, and mirror Nest `@Render()` with
+  `#[render(...)]`. (Covered)
 - File upload can parse adapter-neutral multipart forms, expose repeated text
   fields and uploaded files, reject non-multipart or malformed requests, and
   enforce body, field, file, and count limits. (Covered)

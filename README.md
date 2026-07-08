@@ -333,6 +333,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@HttpCode(202)` | `#[http_code(202)]` on a JSON route method |
 | `@Header("cache-control", "max-age=60")` | `#[header("cache-control", "max-age=60")]` on a route method |
 | `@Redirect("/new", 301)` | `#[redirect("/new", status = 301)]` on a route method |
+| `@Render("cats/show")` | `#[render("cats/show")]` on a route method returning a serializable view model |
 | `@ApiTags("cats")` | `#[tag("cats")]` below `#[controller]` |
 | `@ApiOperation(...)` | `#[operation(summary = "...", operation_id = "...")]` on a route method |
 | `@ApiResponse(...)` | `#[response(status = 200, description = "...", schema = CatDto)]` |
@@ -3418,6 +3419,83 @@ fn from_error(error: &a3s_boot::BootError) -> BootResponse {
 }
 ```
 
+## View Rendering
+
+Boot supports Nest-style MVC responses through a provider-backed
+`ViewRenderer`. Register `ViewModule` with any `ViewEngine` implementation, then
+return a serializable view model from a route. `StringTemplateViewEngine` is a
+small built-in engine for tests and lightweight HTML; production apps can adapt
+Tera, Handlebars, Askama, or another renderer behind the `ViewEngine` trait.
+
+```rust
+use a3s_boot::{
+    BootApplication, BootRequest, Result, RouteDefinition, StringTemplateViewEngine,
+    ViewModule,
+};
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct CatView {
+    id: String,
+    name: String,
+}
+
+fn app() -> Result<BootApplication> {
+    BootApplication::builder()
+        .import(
+            ViewModule::new(
+                "views",
+                StringTemplateViewEngine::new()
+                    .with_template("cats/show", "<h1>{{ name }}</h1><p>{{ id }}</p>"),
+            )
+            .global(),
+        )
+        .route(RouteDefinition::get_view(
+            "/cats/{id}",
+            "cats/show",
+            |request: BootRequest| async move {
+                Ok(CatView {
+                    id: request.param("id").unwrap_or("unknown").to_string(),
+                    name: "Milo".to_string(),
+                })
+            },
+        )?)
+        .build()
+}
+```
+
+The decorator-style form mirrors Nest's `@Render()`:
+
+```rust
+# use a3s_boot::Result;
+# use serde::Serialize;
+#[derive(Serialize)]
+struct CatView {
+    id: String,
+    name: String,
+}
+
+#[derive(Debug)]
+struct CatsController;
+
+#[a3s_boot::controller("/cats")]
+impl CatsController {
+    #[a3s_boot::get("/{id}")]
+    #[a3s_boot::render("cats/show")]
+    async fn show(&self, #[a3s_boot::param("id")] id: String) -> Result<CatView> {
+        Ok(CatView {
+            id,
+            name: "Milo".to_string(),
+        })
+    }
+}
+```
+
+`ViewRenderer` returns `text/html; charset=utf-8` by default and can be
+customized with `with_content_type(...)`. View routes keep the normal pipeline:
+middleware, guards, pipes, interceptors, filters, metadata, and request-scoped
+providers still run around the rendered response.
+
 ## Streamable Files And Downloads
 
 Boot includes Nest-style streamable file responses for controller methods that
@@ -4185,6 +4263,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | Queue | Optional provider-backed background jobs through `QueueModule` |
 | Logger | Optional provider-backed structured logging through `LoggingModule` |
 | Compression | Optional gzip response compression through `CompressionInterceptor` |
+| View rendering | Provider-backed MVC rendering through `ViewModule`, `ViewRenderer`, and `#[render]` |
 | File upload | Optional multipart form parsing through `BootRequest` helpers |
 | File response | Streamable file and download helpers through `StreamableFile` and `BootResponse` |
 | Static assets | Optional provider-backed static file module for assets and SPA fallback |
@@ -4238,6 +4317,7 @@ src/
 ├── transport/    # Adapter-neutral microservice message patterns and transports
 ├── validation.rs # DTO validation trait and route validation hooks
 ├── versioning.rs # Adapter-neutral API versioning strategies and route metadata
+├── view.rs       # Provider-backed MVC view rendering
 ├── websocket/    # Adapter-neutral WebSocket gateways, messages, and pipeline hooks
 ├── error.rs
 ├── file_upload.rs # Optional multipart form and file upload helpers

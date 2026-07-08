@@ -266,6 +266,39 @@ impl ControllerDefinition {
         )?)
     }
 
+    pub fn view<H, Fut, R>(
+        self,
+        method: crate::HttpMethod,
+        path: impl Into<String>,
+        view: impl Into<String>,
+        handler: H,
+    ) -> Result<Self>
+    where
+        H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        self.view_with_status(method, path, view, 200, handler)
+    }
+
+    pub fn view_with_status<H, Fut, R>(
+        self,
+        method: crate::HttpMethod,
+        path: impl Into<String>,
+        view: impl Into<String>,
+        status: u16,
+        handler: H,
+    ) -> Result<Self>
+    where
+        H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        self.route(RouteDefinition::view_with_status(
+            method, path, view, status, handler,
+        )?)
+    }
+
     pub fn get<H>(self, path: impl Into<String>, handler: H) -> Result<Self>
     where
         H: RouteHandler,
@@ -303,6 +336,37 @@ impl ControllerDefinition {
     {
         self.route(RouteDefinition::get_json_with_status(
             path, status, handler,
+        )?)
+    }
+
+    pub fn get_view<H, Fut, R>(
+        self,
+        path: impl Into<String>,
+        view: impl Into<String>,
+        handler: H,
+    ) -> Result<Self>
+    where
+        H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        self.get_view_with_status(path, view, 200, handler)
+    }
+
+    pub fn get_view_with_status<H, Fut, R>(
+        self,
+        path: impl Into<String>,
+        view: impl Into<String>,
+        status: u16,
+        handler: H,
+    ) -> Result<Self>
+    where
+        H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        self.route(RouteDefinition::get_view_with_status(
+            path, view, status, handler,
         )?)
     }
 
@@ -354,6 +418,37 @@ impl ControllerDefinition {
     {
         self.route(RouteDefinition::post_json_with_status(
             path, status, handler,
+        )?)
+    }
+
+    pub fn post_view<H, Fut, R>(
+        self,
+        path: impl Into<String>,
+        view: impl Into<String>,
+        handler: H,
+    ) -> Result<Self>
+    where
+        H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        self.post_view_with_status(path, view, 200, handler)
+    }
+
+    pub fn post_view_with_status<H, Fut, R>(
+        self,
+        path: impl Into<String>,
+        view: impl Into<String>,
+        status: u16,
+        handler: H,
+    ) -> Result<Self>
+    where
+        H: Fn(BootRequest) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<R>> + Send + 'static,
+        R: Serialize + Send + 'static,
+    {
+        self.route(RouteDefinition::post_view_with_status(
+            path, view, status, handler,
         )?)
     }
 

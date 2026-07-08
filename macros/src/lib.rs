@@ -333,6 +333,11 @@ pub fn redirect(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
+pub fn render(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    render_attribute_outside_controller("render", item)
+}
+
+#[proc_macro_attribute]
 pub fn http_code(_attr: TokenStream, item: TokenStream) -> TokenStream {
     http_code_attribute_outside_controller("http_code", item)
 }
@@ -646,6 +651,7 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
         let (clean_attrs, http_code, http_code_errors) = take_route_http_code_attrs(&clean_attrs);
         let (clean_attrs, response_specs, response_errors) =
             take_route_response_attrs(&clean_attrs);
+        let (clean_attrs, render_spec, render_errors) = take_route_render_attrs(&clean_attrs);
         let (clean_attrs, pipeline_specs, pipeline_errors) =
             take_route_pipeline_attrs(&clean_attrs);
         let (clean_attrs, host_specs, host_errors) = take_route_host_attrs(&clean_attrs);
@@ -669,6 +675,9 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
             push_error(&mut errors, error);
         }
         for error in response_errors {
+            push_error(&mut errors, error);
+        }
+        for error in render_errors {
             push_error(&mut errors, error);
         }
         for error in pipeline_errors {
@@ -698,6 +707,15 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
                 syn::Error::new_spanned(
                     &method.sig.ident,
                     "response route attributes must be used on route methods",
+                ),
+            );
+        }
+        if method_routes.is_empty() && render_spec.is_some() {
+            push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &method.sig.ident,
+                    "render route attributes must be used on route methods",
                 ),
             );
         }
@@ -792,6 +810,7 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
                 &metadata_specs,
                 http_code.as_ref(),
                 &response_specs,
+                render_spec.as_ref(),
                 &pipeline_specs,
                 host_specs.as_ref(),
                 version_specs.as_ref(),
@@ -1609,6 +1628,7 @@ fn route_registration(
     metadata_specs: &[MetadataSpec],
     http_code: Option<&LitInt>,
     response_specs: &[RouteResponseSpec],
+    render_spec: Option<&RenderSpec>,
     pipeline_specs: &[PipelineSpec],
     host_spec: Option<&HostSpec>,
     version_spec: Option<&VersionSpec>,
@@ -1635,94 +1655,127 @@ fn route_registration(
             "raw is not supported on *_json route attributes",
         ));
     }
+    if let Some(render_spec) = render_spec {
+        if raw {
+            return Err(syn::Error::new_spanned(
+                &render_spec.view,
+                "render is not supported on raw route attributes",
+            ));
+        }
+        if route.kind == RouteKind::Sse {
+            return Err(syn::Error::new_spanned(
+                &render_spec.view,
+                "render is not supported on SSE route attributes",
+            ));
+        }
+        if route.kind.is_explicit_json() {
+            return Err(syn::Error::new_spanned(
+                &render_spec.view,
+                "render is not supported on *_json route attributes",
+            ));
+        }
+    }
 
     let flavor = route.kind.flavor(raw);
     let mut json_success_status = None;
-    let route_definition = match flavor {
-        RouteFlavor::Sse => {
-            if let Some(status) = explicit_status {
-                return Err(syn::Error::new_spanned(
-                    status,
-                    "status is not supported on SSE route attributes",
-                ));
-            }
-            if route.args.raw.is_some() {
-                return Err(syn::Error::new_spanned(
-                    route.args.raw.unwrap(),
-                    "raw is not supported on SSE route attributes",
-                ));
-            }
-            let handler = if input.has_extractors() {
-                extracted_sse_handler(method_ident, input)?
-            } else {
-                raw_or_json_request_handler(method_ident, input)?
-            };
-            quote! {
-                ::a3s_boot::RouteDefinition::sse(#path, #handler)?
-            }
+    let route_definition = if let Some(render_spec) = render_spec {
+        let builder = route.kind.raw_builder_ident();
+        let view = &render_spec.view;
+        let handler = rendered_view_handler(method_ident, input.clone(), view, status.clone())?;
+        quote! {
+            ::a3s_boot::RouteDefinition::#builder(#path, #handler)?
+                .with_response(#status, ::a3s_boot::OpenApiResponse::description("Success"))
+                .with_metadata("render:view", #view)?
         }
-        RouteFlavor::Raw => {
-            if let Some(status) = explicit_status {
-                return Err(syn::Error::new_spanned(
-                    status,
-                    "status is only supported on JSON route attributes",
-                ));
-            }
-            let builder = route.kind.raw_builder_ident();
-            let handler = if input.has_extractors() {
-                extracted_raw_handler(method_ident, input)?
-            } else {
-                raw_or_json_request_handler(method_ident, input)?
-            };
-            quote! {
-                ::a3s_boot::RouteDefinition::#builder(#path, #handler)?
-            }
-        }
-        RouteFlavor::JsonRequest => {
-            if input.has_extractors() {
-                let builder = route.kind.raw_builder_ident();
-                let handler = extracted_json_response_handler(method_ident, input, status.clone())?;
-                json_success_status = Some(status.clone());
-                quote! {
-                    ::a3s_boot::RouteDefinition::#builder(#path, #handler)?
-                }
-            } else {
-                let builder = route.kind.json_builder_ident().ok_or_else(|| {
-                    syn::Error::new_spanned(
-                        &method.sig.ident,
-                        "this HTTP method does not support JSON route inference",
-                    )
-                })?;
-                let handler = raw_or_json_request_handler(method_ident, input)?;
-                quote! {
-                    ::a3s_boot::RouteDefinition::#builder(#path, #status, #handler)?
-                }
-            }
-        }
-        RouteFlavor::JsonBody => {
-            if input.has_extractors() {
-                let builder = route.kind.raw_builder_ident();
-                let handler = extracted_json_response_handler(method_ident, input, status.clone())?;
-                json_success_status = Some(status.clone());
-                quote! {
-                    ::a3s_boot::RouteDefinition::#builder(#path, #handler)?
-                }
-            } else {
-                let Some(input) = input.into_legacy_arg()? else {
+    } else {
+        match flavor {
+            RouteFlavor::Sse => {
+                if let Some(status) = explicit_status {
                     return Err(syn::Error::new_spanned(
-                        &method.sig.ident,
-                        "JSON body routes must accept one DTO argument after &self",
+                        status,
+                        "status is not supported on SSE route attributes",
                     ));
+                }
+                if route.args.raw.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        route.args.raw.unwrap(),
+                        "raw is not supported on SSE route attributes",
+                    ));
+                }
+                let handler = if input.has_extractors() {
+                    extracted_sse_handler(method_ident, input)?
+                } else {
+                    raw_or_json_request_handler(method_ident, input)?
                 };
-                let builder = route.kind.json_builder_ident().ok_or_else(|| {
-                    syn::Error::new_spanned(
-                        &method.sig.ident,
-                        "this HTTP method does not support JSON route inference",
-                    )
-                })?;
-                let handler = json_body_handler(method_ident, input);
                 quote! {
-                    ::a3s_boot::RouteDefinition::#builder(#path, #status, #handler)?
+                    ::a3s_boot::RouteDefinition::sse(#path, #handler)?
+                }
+            }
+            RouteFlavor::Raw => {
+                if let Some(status) = explicit_status {
+                    return Err(syn::Error::new_spanned(
+                        status,
+                        "status is only supported on JSON route attributes",
+                    ));
+                }
+                let builder = route.kind.raw_builder_ident();
+                let handler = if input.has_extractors() {
+                    extracted_raw_handler(method_ident, input)?
+                } else {
+                    raw_or_json_request_handler(method_ident, input)?
+                };
+                quote! {
+                    ::a3s_boot::RouteDefinition::#builder(#path, #handler)?
+                }
+            }
+            RouteFlavor::JsonRequest => {
+                if input.has_extractors() {
+                    let builder = route.kind.raw_builder_ident();
+                    let handler =
+                        extracted_json_response_handler(method_ident, input, status.clone())?;
+                    json_success_status = Some(status.clone());
+                    quote! {
+                        ::a3s_boot::RouteDefinition::#builder(#path, #handler)?
+                    }
+                } else {
+                    let builder = route.kind.json_builder_ident().ok_or_else(|| {
+                        syn::Error::new_spanned(
+                            &method.sig.ident,
+                            "this HTTP method does not support JSON route inference",
+                        )
+                    })?;
+                    let handler = raw_or_json_request_handler(method_ident, input)?;
+                    quote! {
+                        ::a3s_boot::RouteDefinition::#builder(#path, #status, #handler)?
+                    }
+                }
+            }
+            RouteFlavor::JsonBody => {
+                if input.has_extractors() {
+                    let builder = route.kind.raw_builder_ident();
+                    let handler =
+                        extracted_json_response_handler(method_ident, input, status.clone())?;
+                    json_success_status = Some(status.clone());
+                    quote! {
+                        ::a3s_boot::RouteDefinition::#builder(#path, #handler)?
+                    }
+                } else {
+                    let Some(input) = input.into_legacy_arg()? else {
+                        return Err(syn::Error::new_spanned(
+                            &method.sig.ident,
+                            "JSON body routes must accept one DTO argument after &self",
+                        ));
+                    };
+                    let builder = route.kind.json_builder_ident().ok_or_else(|| {
+                        syn::Error::new_spanned(
+                            &method.sig.ident,
+                            "this HTTP method does not support JSON route inference",
+                        )
+                    })?;
+                    let handler = json_body_handler(method_ident, input);
+                    quote! {
+                        ::a3s_boot::RouteDefinition::#builder(#path, #status, #handler)?
+                    }
                 }
             }
         }
@@ -1999,6 +2052,73 @@ fn extracted_json_response_handler(
                 }
             }
         }
+    })
+}
+
+fn rendered_view_handler(
+    method_ident: &Ident,
+    input: RouteMethodInput,
+    view: &LitStr,
+    status: proc_macro2::TokenStream,
+) -> Result<proc_macro2::TokenStream> {
+    let controller_name = format_ident!("__a3s_boot_{}", method_ident);
+
+    if input.has_extractors() {
+        let (extractors, args) = extracted_arguments(input)?;
+        return Ok(quote! {
+            {
+                let #controller_name = ::std::sync::Arc::clone(&self);
+                move |__a3s_boot_request: ::a3s_boot::BootRequest| {
+                    let #controller_name = ::std::sync::Arc::clone(&#controller_name);
+                    async move {
+                        let __a3s_boot_renderer = __a3s_boot_request
+                            .get::<::a3s_boot::ViewRenderer>()?;
+                        #(#extractors)*
+                        let __a3s_boot_context =
+                            #controller_name.#method_ident(#(#args),*).await?;
+                        __a3s_boot_renderer
+                            .render_response_with_status(#status, #view, &__a3s_boot_context)
+                            .await
+                    }
+                }
+            }
+        });
+    }
+
+    Ok(match input.into_legacy_arg()? {
+        Some(MethodArg { ident, ty, .. }) => quote! {
+            {
+                let #controller_name = ::std::sync::Arc::clone(&self);
+                move |__a3s_boot_request: ::a3s_boot::BootRequest| {
+                    let #controller_name = ::std::sync::Arc::clone(&#controller_name);
+                    async move {
+                        let __a3s_boot_renderer = __a3s_boot_request
+                            .get::<::a3s_boot::ViewRenderer>()?;
+                        let #ident: #ty = __a3s_boot_request.clone();
+                        let __a3s_boot_context = #controller_name.#method_ident(#ident).await?;
+                        __a3s_boot_renderer
+                            .render_response_with_status(#status, #view, &__a3s_boot_context)
+                            .await
+                    }
+                }
+            }
+        },
+        None => quote! {
+            {
+                let #controller_name = ::std::sync::Arc::clone(&self);
+                move |__a3s_boot_request: ::a3s_boot::BootRequest| {
+                    let #controller_name = ::std::sync::Arc::clone(&#controller_name);
+                    async move {
+                        let __a3s_boot_renderer = __a3s_boot_request
+                            .get::<::a3s_boot::ViewRenderer>()?;
+                        let __a3s_boot_context = #controller_name.#method_ident().await?;
+                        __a3s_boot_renderer
+                            .render_response_with_status(#status, #view, &__a3s_boot_context)
+                            .await
+                    }
+                }
+            }
+        },
     })
 }
 
@@ -2594,6 +2714,40 @@ fn take_route_response_attrs(
     (clean_attrs, specs, errors)
 }
 
+fn take_route_render_attrs(
+    attrs: &[Attribute],
+) -> (Vec<Attribute>, Option<RenderSpec>, Vec<syn::Error>) {
+    let mut clean_attrs = Vec::new();
+    let mut spec = None;
+    let mut errors = Vec::new();
+
+    for attr in attrs {
+        if !is_render_attribute(attr) {
+            clean_attrs.push(attr.clone());
+            continue;
+        }
+
+        match attr.parse_args::<LitStr>() {
+            Ok(view) => {
+                if spec.is_some() {
+                    errors.push(syn::Error::new_spanned(
+                        attr,
+                        "route methods can use at most one #[render(...)] attribute",
+                    ));
+                } else {
+                    spec = Some(RenderSpec { view });
+                }
+            }
+            Err(_) => errors.push(syn::Error::new_spanned(
+                attr,
+                "#[render] requires one string literal argument",
+            )),
+        }
+    }
+
+    (clean_attrs, spec, errors)
+}
+
 fn take_controller_pipeline_attrs(
     attrs: &[Attribute],
 ) -> (Vec<Attribute>, ControllerPipelineAttrs, Vec<syn::Error>) {
@@ -2860,6 +3014,13 @@ fn is_http_code_attribute(attr: &Attribute) -> bool {
         .segments
         .last()
         .is_some_and(|segment| segment.ident == "http_code")
+}
+
+fn is_render_attribute(attr: &Attribute) -> bool {
+    attr.path()
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == "render")
 }
 
 #[derive(Default)]
@@ -3204,6 +3365,11 @@ impl RouteResponseSpec {
             }
         }
     }
+}
+
+#[derive(Clone)]
+struct RenderSpec {
+    view: LitStr,
 }
 
 #[derive(Clone)]
@@ -3957,6 +4123,17 @@ fn response_attribute_outside_controller(name: &str, item: TokenStream) -> Token
     .into()
 }
 
+fn render_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
+    let item = proc_macro2::TokenStream::from(item);
+    let message =
+        format!("#[{name}] must be used inside an impl block annotated with #[controller]");
+    quote! {
+        compile_error!(#message);
+        #item
+    }
+    .into()
+}
+
 fn http_code_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
     let item = proc_macro2::TokenStream::from(item);
     let message =
@@ -4168,7 +4345,7 @@ struct RouteSpec {
     args: RouteArgs,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum RouteKind {
     All,
     Get,
