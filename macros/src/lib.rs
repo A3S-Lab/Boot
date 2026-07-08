@@ -35,6 +35,21 @@ pub fn injectable(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
+pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(attr as ModuleArgs);
+    let item = parse_macro_input!(item as Item);
+
+    match item {
+        Item::Struct(item_struct) => expand_module(args, item_struct)
+            .unwrap_or_else(syn::Error::into_compile_error)
+            .into(),
+        item => syn::Error::new_spanned(item, "#[module] can only be used on structs")
+            .to_compile_error()
+            .into(),
+    }
+}
+
+#[proc_macro_attribute]
 pub fn controller(attr: TokenStream, item: TokenStream) -> TokenStream {
     let prefix = parse_macro_input!(attr as LitStr);
     let item_impl = parse_macro_input!(item as ItemImpl);
@@ -472,6 +487,136 @@ fn expand_injectable(mut item_struct: syn::ItemStruct) -> Result<proc_macro2::To
             }
         }
     })
+}
+
+fn expand_module(
+    args: ModuleArgs,
+    item_struct: syn::ItemStruct,
+) -> Result<proc_macro2::TokenStream> {
+    let ident = &item_struct.ident;
+    let module_name = args.name.unwrap_or_else(|| {
+        LitStr::new(
+            &item_struct.ident.to_string(),
+            proc_macro2::Span::call_site(),
+        )
+    });
+    let imports = args.imports;
+    let provider_tokens = args.providers.iter().map(provider_registration_token);
+    let exports = args.exports.iter().map(export_registration_token);
+    let controllers = args.controllers;
+    let routes = args.routes;
+    let gateways = args.gateways;
+    let message_controllers = args.message_controllers;
+    let controllers_body = if controllers.is_empty() {
+        quote!({
+            let _ = module_ref;
+            Ok(::std::vec::Vec::new())
+        })
+    } else {
+        quote! {
+            Ok(::std::vec![
+                #(module_ref.get::<#controllers>()?.controller()?,)*
+            ])
+        }
+    };
+    let gateways_body = if gateways.is_empty() {
+        quote!({
+            let _ = module_ref;
+            Ok(::std::vec::Vec::new())
+        })
+    } else {
+        quote! {
+            Ok(::std::vec![
+                #(module_ref.get::<#gateways>()?.gateway()?,)*
+            ])
+        }
+    };
+    let message_patterns_body = if message_controllers.is_empty() {
+        quote!({
+            let _ = module_ref;
+            Ok(::std::vec::Vec::new())
+        })
+    } else {
+        quote! {
+            let mut __a3s_boot_patterns = ::std::vec::Vec::new();
+            #(
+                __a3s_boot_patterns.extend(
+                    module_ref.get::<#message_controllers>()?.message_patterns()?
+                );
+            )*
+            Ok(__a3s_boot_patterns)
+        }
+    };
+    let global = args.global;
+    let (impl_generics, ty_generics, where_clause) = item_struct.generics.split_for_impl();
+
+    Ok(quote! {
+        #item_struct
+
+        impl #impl_generics ::a3s_boot::Module for #ident #ty_generics #where_clause {
+            fn name(&self) -> &'static str {
+                #module_name
+            }
+
+            fn imports(&self) -> ::std::vec::Vec<::std::sync::Arc<dyn ::a3s_boot::Module>> {
+                ::std::vec![#(::std::sync::Arc::new(#imports),)*]
+            }
+
+            fn providers(&self) -> ::a3s_boot::Result<::std::vec::Vec<::a3s_boot::ProviderDefinition>> {
+                Ok(::std::vec![#(#provider_tokens,)*])
+            }
+
+            fn exports(&self) -> ::a3s_boot::Result<::std::vec::Vec<::a3s_boot::ProviderToken>> {
+                Ok(::std::vec![#(#exports,)*])
+            }
+
+            fn is_global(&self) -> bool {
+                #global
+            }
+
+            fn controllers(
+                &self,
+                module_ref: &::a3s_boot::ModuleRef,
+            ) -> ::a3s_boot::Result<::std::vec::Vec<::a3s_boot::ControllerDefinition>> {
+                #controllers_body
+            }
+
+            fn routes(&self) -> ::a3s_boot::Result<::std::vec::Vec<::a3s_boot::RouteDefinition>> {
+                Ok(::std::vec![#(#routes,)*])
+            }
+
+            fn gateways(
+                &self,
+                module_ref: &::a3s_boot::ModuleRef,
+            ) -> ::a3s_boot::Result<::std::vec::Vec<::a3s_boot::WebSocketGatewayDefinition>> {
+                #gateways_body
+            }
+
+            fn message_patterns(
+                &self,
+                module_ref: &::a3s_boot::ModuleRef,
+            ) -> ::a3s_boot::Result<::std::vec::Vec<::a3s_boot::MessagePatternDefinition>> {
+                #message_patterns_body
+            }
+        }
+    })
+}
+
+fn provider_registration_token(expr: &Expr) -> proc_macro2::TokenStream {
+    match expr {
+        Expr::Path(path) if path.qself.is_none() => {
+            let path = &path.path;
+            quote!(#path::provider())
+        }
+        expr => quote!(#expr),
+    }
+}
+
+fn export_registration_token(spec: &ModuleExportSpec) -> proc_macro2::TokenStream {
+    match spec {
+        ModuleExportSpec::Type(ty) => quote!(::a3s_boot::ProviderToken::of::<#ty>()),
+        ModuleExportSpec::Named(token) => quote!(::a3s_boot::ProviderToken::named(#token)),
+    }
 }
 
 fn injectable_constructor(item_struct: &mut syn::ItemStruct) -> Result<proc_macro2::TokenStream> {
@@ -3021,6 +3166,109 @@ fn is_render_attribute(attr: &Attribute) -> bool {
         .segments
         .last()
         .is_some_and(|segment| segment.ident == "render")
+}
+
+#[derive(Default)]
+struct ModuleArgs {
+    name: Option<LitStr>,
+    imports: Vec<Expr>,
+    providers: Vec<Expr>,
+    controllers: Vec<Type>,
+    routes: Vec<Expr>,
+    gateways: Vec<Type>,
+    message_controllers: Vec<Type>,
+    exports: Vec<ModuleExportSpec>,
+    global: bool,
+}
+
+impl Parse for ModuleArgs {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let mut args = Self::default();
+        let mut global_seen = false;
+
+        while !input.is_empty() {
+            let name = input.parse::<Ident>()?;
+            let key = name.to_string();
+
+            if key == "global" {
+                if global_seen {
+                    return Err(syn::Error::new_spanned(name, "duplicate `global` option"));
+                }
+                global_seen = true;
+                if input.peek(Token![=]) {
+                    input.parse::<Token![=]>()?;
+                    args.global = input.parse::<LitBool>()?.value;
+                } else {
+                    args.global = true;
+                }
+                parse_optional_comma(input)?;
+                continue;
+            }
+
+            input.parse::<Token![=]>()?;
+            match key.as_str() {
+                "name" => set_once(&mut args.name, input.parse::<LitStr>()?, name)?,
+                "imports" => args.imports.extend(parse_expr_array(input)?),
+                "providers" => args.providers.extend(parse_expr_array(input)?),
+                "controllers" => args.controllers.extend(parse_type_array(input)?),
+                "routes" => args.routes.extend(parse_expr_array(input)?),
+                "gateways" => args.gateways.extend(parse_type_array(input)?),
+                "message_controllers" | "messages" => {
+                    args.message_controllers.extend(parse_type_array(input)?);
+                }
+                "exports" => args.exports.extend(parse_module_export_array(input)?),
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        name,
+                        "expected `name`, `imports`, `providers`, `controllers`, `routes`, `gateways`, `message_controllers`, `exports`, or `global`",
+                    ));
+                }
+            }
+            parse_optional_comma(input)?;
+        }
+
+        Ok(args)
+    }
+}
+
+enum ModuleExportSpec {
+    Type(Type),
+    Named(LitStr),
+}
+
+impl Parse for ModuleExportSpec {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        if input.peek(LitStr) {
+            return Ok(Self::Named(input.parse()?));
+        }
+        Ok(Self::Type(input.parse()?))
+    }
+}
+
+fn parse_expr_array(input: ParseStream<'_>) -> Result<Vec<Expr>> {
+    let content;
+    syn::bracketed!(content in input);
+    Ok(Punctuated::<Expr, Token![,]>::parse_terminated(&content)?
+        .into_iter()
+        .collect())
+}
+
+fn parse_type_array(input: ParseStream<'_>) -> Result<Vec<Type>> {
+    let content;
+    syn::bracketed!(content in input);
+    Ok(Punctuated::<Type, Token![,]>::parse_terminated(&content)?
+        .into_iter()
+        .collect())
+}
+
+fn parse_module_export_array(input: ParseStream<'_>) -> Result<Vec<ModuleExportSpec>> {
+    let content;
+    syn::bracketed!(content in input);
+    Ok(
+        Punctuated::<ModuleExportSpec, Token![,]>::parse_terminated(&content)?
+            .into_iter()
+            .collect(),
+    )
 }
 
 #[derive(Default)]

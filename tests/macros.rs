@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use a3s_boot::{
     controller, injectable, ApiVersioning, BootApplication, BootError, BootRequest, BootResponse,
-    BoxFuture, ControllerDefinition, ExceptionFilter, ExecutionContext, Guard, Interceptor,
-    MessagePatternDefinition, Module, ModuleRef, OpenApiInfo, Pipe, ProviderDefinition, Result,
-    SseEvent, SseStream, StringTemplateViewEngine, TransportMessage, TransportReply, Validate,
-    ViewModule, WebSocketGatewayDefinition, WebSocketMessage,
+    BoxFuture, ControllerDefinition, ExceptionFilter, ExecutionContext, Guard, Interceptor, Module,
+    ModuleRef, OpenApiInfo, Pipe, ProviderToken, Result, SseEvent, SseStream,
+    StringTemplateViewEngine, TransportMessage, TransportReply, Validate, ViewModule,
+    WebSocketMessage,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -374,47 +374,30 @@ struct MacroCatDetailsDto {
     tenant: String,
 }
 
-#[derive(Debug)]
-struct MacroCatsModule;
-
-impl Module for MacroCatsModule {
-    fn name(&self) -> &'static str {
-        "macro-cats"
-    }
-
-    fn imports(&self) -> Vec<Arc<dyn Module>> {
-        vec![Arc::new(ViewModule::new(
+#[a3s_boot::module(
+    name = "macro-cats",
+    imports = [
+        ViewModule::new(
             "macro-views",
             StringTemplateViewEngine::new()
                 .with_template("cats/card", "<article>{{ id }}:{{ name }}</article>"),
-        ))]
-    }
-
-    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
-        Ok(vec![
-            MacroCatsService::provider(),
-            MacroCatsService.into_named_provider("readonly-cats"),
-            MacroAutoCatsReader::provider(),
-            MacroCatsController::provider(),
-            MacroCatsGateway::provider(),
-            MacroCatsMessages::provider(),
-        ])
-    }
-
-    fn controllers(&self, module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
-        Ok(vec![module_ref
-            .get::<MacroCatsController>()?
-            .controller()?])
-    }
-
-    fn gateways(&self, module_ref: &ModuleRef) -> Result<Vec<WebSocketGatewayDefinition>> {
-        Ok(vec![module_ref.get::<MacroCatsGateway>()?.gateway()?])
-    }
-
-    fn message_patterns(&self, module_ref: &ModuleRef) -> Result<Vec<MessagePatternDefinition>> {
-        module_ref.get::<MacroCatsMessages>()?.message_patterns()
-    }
-}
+        )
+    ],
+    providers = [
+        MacroCatsService,
+        MacroCatsService.into_named_provider("readonly-cats"),
+        MacroAutoCatsReader,
+        MacroCatsController,
+        MacroCatsGateway,
+        MacroCatsMessages,
+    ],
+    controllers = [MacroCatsController],
+    gateways = [MacroCatsGateway],
+    message_controllers = [MacroCatsMessages],
+    exports = [MacroCatsService, "readonly-cats"],
+)]
+#[derive(Debug)]
+struct MacroCatsModule;
 
 #[derive(Debug)]
 struct MacroValidationController;
@@ -553,6 +536,7 @@ impl ExceptionFilter for MacroBadRequestFilter {
     }
 }
 
+#[injectable]
 #[derive(Debug)]
 struct MacroPipelineController;
 
@@ -580,18 +564,13 @@ impl MacroPipelineController {
     }
 }
 
+#[a3s_boot::module(
+    name = "macro-pipeline",
+    providers = [MacroPipelineController],
+    controllers = [MacroPipelineController],
+)]
 #[derive(Debug)]
 struct MacroPipelineModule;
-
-impl Module for MacroPipelineModule {
-    fn name(&self) -> &'static str {
-        "macro-pipeline"
-    }
-
-    fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
-        Ok(vec![Arc::new(MacroPipelineController).controller()?])
-    }
-}
 
 #[derive(Debug)]
 struct MacroHostController;
@@ -733,6 +712,9 @@ async fn macros_register_injectable_services_and_controller_routes() {
     assert_eq!(app.routes().len(), 16);
     assert_eq!(app.gateways().len(), 1);
     assert_eq!(app.message_patterns().len(), 3);
+    let exports = MacroCatsModule.exports().unwrap();
+    assert!(exports.contains(&ProviderToken::of::<MacroCatsService>()));
+    assert!(exports.contains(&ProviderToken::named("readonly-cats")));
     let reader = app.get::<MacroAutoCatsReader>().unwrap();
     let controller = app.get::<MacroCatsController>().unwrap();
     assert_eq!(reader.summary(), "auto:readonly:true:true");

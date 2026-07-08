@@ -43,9 +43,9 @@ Implemented today:
 - `ControllerDefinition` and `RouteDefinition` for HTTP route groups, including
   specificity-aware path params, catch-all route params, and Nest-style ALL
   method routes with exact-method precedence.
-- Nest-style attribute macros: `#[injectable]`, `#[controller]`, `#[all]`,
-  `#[get]`, `#[post]`, `#[put]`, `#[patch]`, `#[delete]`, `#[sse]`, raw route mode, and
-  method argument extractors including `#[body]`, `#[request]`,
+- Nest-style attribute macros: `#[module]`, `#[injectable]`, `#[controller]`,
+  `#[all]`, `#[get]`, `#[post]`, `#[put]`, `#[patch]`, `#[delete]`, `#[sse]`,
+  raw route mode, and method argument extractors including `#[body]`, `#[request]`,
   `#[param("name")]`, `#[params]`, `#[query]`, `#[query("name")]`,
   `#[header("name")]`, `#[headers]`, `#[host_param("name")]`, `#[ip]`, and
   custom `#[extract(...)]` request value binding. Single-value extractors can
@@ -58,6 +58,9 @@ Implemented today:
   for redirect responses. `#[injectable]` implements `FromModuleRef` for unit
   structs and named-field structs whose dependencies are `Arc<T>` or
   `Option<Arc<T>>`, with `#[inject("token")]` for named provider lookup.
+  `#[module]` implements `Module` from Nest-style metadata lists for imports,
+  providers, controllers, routes, gateways, message controllers, exports, and
+  global modules.
 - Host-scoped HTTP routes with `RouteDefinition::with_host(...)` and
   `ControllerDefinition::with_host(...)` for Nest-style host-based controllers.
 - API versioning macros: `#[version]`, `#[versions]`, and

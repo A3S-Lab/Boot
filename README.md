@@ -341,7 +341,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | Constructor injection | `#[injectable]` fields such as `cats: Arc<CatsService>` plus `CatsController::provider()` |
 | `@Inject("TOKEN")` | `#[inject("token")]` on an `Arc<T>` or `Option<Arc<T>>` field |
 | `@Optional()` | `Option<Arc<T>>` on an injectable field |
-| `@Module({ providers, controllers, imports })` | `impl Module` with `providers()`, `controllers()`, and `imports()` |
+| `@Module({ imports, providers, controllers, exports })` | `#[module(...)]` on a module struct, or an explicit `impl Module` |
 | `NestFactory.create(AppModule)` | `BootFactory::create(AppModule)?` |
 | `app.listen(3000)` | `app.listen_with(&AxumAdapter::new(), addr).await` |
 | `app.close()` | `app.close().await` |
@@ -358,8 +358,8 @@ into:
 use std::sync::Arc;
 
 use a3s_boot::{
-    controller, injectable, AxumAdapter, BootError, BootFactory, BootRequest, BootResponse,
-    ControllerDefinition, Module, ModuleRef, ProviderDefinition, Result, SseEvent, SseStream,
+    controller, injectable, module, AxumAdapter, BootError, BootFactory, BootRequest, BootResponse,
+    Result, SseEvent, SseStream,
     Validate,
 };
 use serde::{Deserialize, Serialize};
@@ -470,22 +470,14 @@ impl CatsController {
     }
 }
 
+#[module(
+    name = "cats",
+    providers = [CatsService, CatsController],
+    controllers = [CatsController],
+    exports = [CatsService],
+)]
 #[derive(Debug)]
 struct CatsModule;
-
-impl Module for CatsModule {
-    fn name(&self) -> &'static str {
-        "cats"
-    }
-
-    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
-        Ok(vec![CatsService::provider(), CatsController::provider()])
-    }
-
-    fn controllers(&self, module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
-        Ok(vec![module_ref.get::<CatsController>()?.controller()?])
-    }
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -500,7 +492,15 @@ async fn main() -> Result<()> {
 `Arc<T>` or `Option<Arc<T>>`; add `#[inject("token")]` on a field to resolve a
 named provider. `#[controller("/cats")]` adds a
 `controller(self: Arc<Self>)` method that collects route attributes from the
-impl block. GET, POST, PUT, PATCH, and DELETE route attributes default to JSON.
+impl block. `#[module(...)]` implements `Module` for a struct from Nest-style
+metadata lists: `imports = [...]`, `providers = [...]`, `controllers = [...]`,
+`gateways = [...]`, `message_controllers = [...]`, `routes = [...]`,
+`exports = [...]`, and `global`. Provider entries that are plain type paths
+expand to `Type::provider()`; entries that are full expressions are used as
+`ProviderDefinition` values. Controller, gateway, and message-controller entries
+are resolved from the module's `ModuleRef`, so they should usually be listed in
+`providers` as injectables. GET, POST, PUT, PATCH, and DELETE route attributes
+default to JSON.
 Use extractor attributes on method arguments for Nest-style request binding:
 `#[param("id")]`, `#[params]`, `#[query]`, `#[query("name")]`, `#[body]`,
 `#[header("name")]`, `#[headers]`, `#[host_param("account")]`, `#[ip]`, and
@@ -4237,7 +4237,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 
 | Concept | Direction |
 | --- | --- |
-| Module | A named feature boundary with imports, providers, and routes |
+| Module | A named feature boundary declared with `#[module]` or explicit `impl Module` |
 | ModuleRef | Typed provider container used by controllers and hosts |
 | Testing module | Test-only module compilation with provider overrides and in-process calls |
 | Discovery/Reflector | Runtime snapshots and metadata lookup for modules, routes, gateways, and message patterns |
