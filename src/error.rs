@@ -43,7 +43,56 @@ pub enum BootError {
     Io(#[from] std::io::Error),
 }
 
+/// Stable category for a [`BootError`], useful for Nest-style catch filters.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum BootErrorKind {
+    EmptyModuleName,
+    InvalidRoutePath,
+    InvalidHostPattern,
+    DuplicateRoute,
+    NotFound,
+    MethodNotAllowed,
+    DuplicateProvider,
+    MissingProvider,
+    ProviderTypeMismatch,
+    Forbidden,
+    Unauthorized,
+    BadRequest,
+    PayloadTooLarge,
+    UnsupportedMediaType,
+    NotAcceptable,
+    TooManyRequests,
+    Adapter,
+    Internal,
+    Io,
+}
+
 impl BootError {
+    /// Stable category for this error.
+    pub fn kind(&self) -> BootErrorKind {
+        match self {
+            Self::EmptyModuleName => BootErrorKind::EmptyModuleName,
+            Self::InvalidRoutePath(_) => BootErrorKind::InvalidRoutePath,
+            Self::InvalidHostPattern(_) => BootErrorKind::InvalidHostPattern,
+            Self::DuplicateRoute(_) => BootErrorKind::DuplicateRoute,
+            Self::NotFound(_) => BootErrorKind::NotFound,
+            Self::MethodNotAllowed(_) => BootErrorKind::MethodNotAllowed,
+            Self::DuplicateProvider(_) => BootErrorKind::DuplicateProvider,
+            Self::MissingProvider(_) => BootErrorKind::MissingProvider,
+            Self::ProviderTypeMismatch(_) => BootErrorKind::ProviderTypeMismatch,
+            Self::Forbidden(_) => BootErrorKind::Forbidden,
+            Self::Unauthorized(_) => BootErrorKind::Unauthorized,
+            Self::BadRequest(_) => BootErrorKind::BadRequest,
+            Self::PayloadTooLarge(_) => BootErrorKind::PayloadTooLarge,
+            Self::UnsupportedMediaType(_) => BootErrorKind::UnsupportedMediaType,
+            Self::NotAcceptable(_) => BootErrorKind::NotAcceptable,
+            Self::TooManyRequests(_) => BootErrorKind::TooManyRequests,
+            Self::Adapter(_) => BootErrorKind::Adapter,
+            Self::Internal(_) => BootErrorKind::Internal,
+            Self::Io(_) => BootErrorKind::Io,
+        }
+    }
+
     /// HTTP status code that adapters should use for this error.
     pub fn http_status_code(&self) -> u16 {
         match self {

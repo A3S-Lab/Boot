@@ -1,6 +1,6 @@
 use a3s_boot::{
-    BootApplication, BootError, BootRequest, BootResponse, BoxFuture, ControllerDefinition,
-    ExecutionContext, ExecutionInterceptor, Guard, HttpMethod, Interceptor,
+    BootApplication, BootError, BootErrorKind, BootRequest, BootResponse, BoxFuture,
+    ControllerDefinition, ExecutionContext, ExecutionInterceptor, Guard, HttpMethod, Interceptor,
     MessagePatternDefinition, Middleware, MiddlewareOutcome, Module, ModuleRef, Result,
     RouteDefinition, TransportMessage, TransportReply, WebSocketGatewayDefinition,
     WebSocketMessage,
@@ -320,6 +320,104 @@ async fn route_filters_return_original_error_when_all_decline() {
         .unwrap_err();
 
     assert!(matches!(error, BootError::BadRequest(message) if message == "bad input"));
+}
+
+#[tokio::test]
+async fn catch_filters_only_handle_matching_error_kinds() {
+    let bad_request_route = RouteDefinition::get("/bad", |_| async {
+        Err(BootError::BadRequest("bad input".to_string()))
+    })
+    .unwrap()
+    .with_filter(|context: ExecutionContext, error: BootError| async move {
+        Ok(Some(
+            BootResponse::text(format!("fallback:{}:{error}", context.route_path)).with_status(500),
+        ))
+    })
+    .with_catch_filter(
+        [BootErrorKind::BadRequest],
+        |context: ExecutionContext, error: BootError| async move {
+            Ok(Some(
+                BootResponse::text(format!("bad:{}:{error}", context.route_path)).with_status(400),
+            ))
+        },
+    );
+
+    let internal_route = RouteDefinition::get("/internal", |_| async {
+        Err(BootError::Internal("boom".to_string()))
+    })
+    .unwrap()
+    .with_filter(|context: ExecutionContext, error: BootError| async move {
+        Ok(Some(
+            BootResponse::text(format!("fallback:{}:{error}", context.route_path)).with_status(500),
+        ))
+    })
+    .with_catch_filter(
+        [BootErrorKind::BadRequest],
+        |context: ExecutionContext, error: BootError| async move {
+            Ok(Some(
+                BootResponse::text(format!("bad:{}:{error}", context.route_path)).with_status(400),
+            ))
+        },
+    );
+
+    let bad_response = bad_request_route
+        .call(BootRequest::new(HttpMethod::Get, "/bad"))
+        .await
+        .unwrap();
+    let internal_response = internal_route
+        .call(BootRequest::new(HttpMethod::Get, "/internal"))
+        .await
+        .unwrap();
+
+    assert_eq!(bad_response.status(), 400);
+    assert_eq!(
+        bad_response.body_text().unwrap(),
+        "bad:/bad:bad request: bad input"
+    );
+    assert_eq!(internal_response.status(), 500);
+    assert_eq!(
+        internal_response.body_text().unwrap(),
+        "fallback:/internal:internal error: boom"
+    );
+}
+
+#[tokio::test]
+async fn global_catch_filters_apply_to_matching_error_kinds() {
+    let app = BootApplication::builder()
+        .use_global_filter(|context: ExecutionContext, error: BootError| async move {
+            Ok(Some(
+                BootResponse::text(format!("fallback:{}:{error}", context.route_path))
+                    .with_status(500),
+            ))
+        })
+        .use_global_catch_filter(
+            [BootErrorKind::Unauthorized],
+            |context: ExecutionContext, error: BootError| async move {
+                Ok(Some(
+                    BootResponse::text(format!("auth:{}:{error}", context.route_path))
+                        .with_status(401),
+                ))
+            },
+        )
+        .route(
+            RouteDefinition::get("/private", |_| async {
+                Err(BootError::Unauthorized("missing token".to_string()))
+            })
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+
+    let response = app
+        .call(BootRequest::new(HttpMethod::Get, "/private"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 401);
+    assert_eq!(
+        response.body_text().unwrap(),
+        "auth:/private:request was unauthorized: missing token"
+    );
 }
 
 #[derive(Clone)]

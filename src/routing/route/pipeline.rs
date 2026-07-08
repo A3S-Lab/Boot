@@ -3,8 +3,8 @@ use crate::pipeline::{
     ExecutionInterceptorAdapter, PipelineComponent, PipelineComponents, PipelineOverrides,
 };
 use crate::{
-    body_validator, params_validator, query_validator, ExceptionFilter, ExecutionInterceptor,
-    Guard, Interceptor, Middleware, Pipe, Validate,
+    body_validator, params_validator, query_validator, BootErrorKind, ExceptionFilter,
+    ExecutionInterceptor, Guard, Interceptor, Middleware, Pipe, Validate,
 };
 use serde::de::DeserializeOwned;
 use std::sync::Arc;
@@ -77,6 +77,14 @@ impl RouteDefinition {
         self.filters
             .push(PipelineComponent::<dyn ExceptionFilter>::new(filter));
         self
+    }
+
+    pub fn with_catch_filter<I, F>(self, kinds: I, filter: F) -> Self
+    where
+        I: IntoIterator<Item = BootErrorKind>,
+        F: ExceptionFilter,
+    {
+        self.with_filter(crate::catch_errors(kinds, filter))
     }
 
     pub fn with_validation(mut self) -> Self {

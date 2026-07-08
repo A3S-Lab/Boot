@@ -4,8 +4,8 @@ use super::path::normalize_prefix;
 use super::route::RouteDefinition;
 use crate::pipeline::PipelineComponents;
 use crate::{
-    BootRequest, ExceptionFilter, ExecutionInterceptor, Guard, Interceptor, Middleware, ModuleRef,
-    Pipe, Result, RouteVersioning, SerializationOptions, SseEvent, Validate,
+    BootErrorKind, BootRequest, ExceptionFilter, ExecutionInterceptor, Guard, Interceptor,
+    Middleware, ModuleRef, Pipe, Result, RouteVersioning, SerializationOptions, SseEvent, Validate,
 };
 use futures_core::Stream;
 use serde::de::DeserializeOwned;
@@ -114,6 +114,15 @@ impl ControllerDefinition {
         F: ExceptionFilter,
     {
         self.pipeline.push_filter(filter);
+        self
+    }
+
+    pub fn with_catch_filter<I, F>(mut self, kinds: I, filter: F) -> Self
+    where
+        I: IntoIterator<Item = BootErrorKind>,
+        F: ExceptionFilter,
+    {
+        self.pipeline.push_catch_filter(kinds, filter);
         self
     }
 

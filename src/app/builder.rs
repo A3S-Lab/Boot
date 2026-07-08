@@ -2,8 +2,8 @@ use super::application::BootApplication;
 use super::registration::{ModuleRegistrationSink, ModuleRegistry};
 use crate::pipeline::PipelineComponents;
 use crate::{
-    ApiVersioning, BootError, BootResponse, ExceptionFilter, ExecutionInterceptor, Guard,
-    Interceptor, MessagePatternDefinition, Middleware, Module, ModuleRef, OpenApiDocument,
+    ApiVersioning, BootError, BootErrorKind, BootResponse, ExceptionFilter, ExecutionInterceptor,
+    Guard, Interceptor, MessagePatternDefinition, Middleware, Module, ModuleRef, OpenApiDocument,
     OpenApiInfo, Pipe, ProviderDefinition, ProviderToken, Result, RouteDefinition,
     SerializationInterceptor, WebSocketGatewayDefinition,
 };
@@ -228,6 +228,16 @@ impl BootApplicationBuilder {
         F: ExceptionFilter,
     {
         self.global_pipeline.push_filter(filter);
+        self
+    }
+
+    /// Add an application-wide exception filter for selected error kinds.
+    pub fn use_global_catch_filter<I, F>(mut self, kinds: I, filter: F) -> Self
+    where
+        I: IntoIterator<Item = BootErrorKind>,
+        F: ExceptionFilter,
+    {
+        self.global_pipeline.push_catch_filter(kinds, filter);
         self
     }
 

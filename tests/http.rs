@@ -1,5 +1,6 @@
 use a3s_boot::{
-    BootError, BootRequest, BootResponse, CookieOptions, CookieSameSite, HttpMethod, SseEvent,
+    BootError, BootErrorKind, BootRequest, BootResponse, CookieOptions, CookieSameSite, HttpMethod,
+    SseEvent,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -40,31 +41,43 @@ fn boot_errors_expose_http_status_codes_and_response_messages() {
     let internal = BootError::Internal("database failed".to_string());
 
     assert_eq!(not_found.http_status_code(), 404);
+    assert_eq!(not_found.kind(), BootErrorKind::NotFound);
     assert_eq!(not_found.http_response_message(), "GET /missing");
     assert_eq!(method_not_allowed.http_status_code(), 405);
+    assert_eq!(method_not_allowed.kind(), BootErrorKind::MethodNotAllowed);
     assert_eq!(method_not_allowed.http_response_message(), "POST /items");
     assert_eq!(unauthorized.http_status_code(), 401);
+    assert_eq!(unauthorized.kind(), BootErrorKind::Unauthorized);
     assert_eq!(unauthorized.http_response_message(), "missing bearer token");
     assert_eq!(forbidden.http_status_code(), 403);
+    assert_eq!(forbidden.kind(), BootErrorKind::Forbidden);
     assert_eq!(forbidden.http_response_message(), "GET /private");
     assert_eq!(bad_request.http_status_code(), 400);
+    assert_eq!(bad_request.kind(), BootErrorKind::BadRequest);
     assert_eq!(bad_request.http_response_message(), "invalid input");
     assert_eq!(payload_too_large.http_status_code(), 413);
+    assert_eq!(payload_too_large.kind(), BootErrorKind::PayloadTooLarge);
     assert_eq!(
         payload_too_large.http_response_message(),
         "request body exceeds 4 bytes"
     );
     assert_eq!(unsupported_media_type.http_status_code(), 415);
     assert_eq!(
+        unsupported_media_type.kind(),
+        BootErrorKind::UnsupportedMediaType
+    );
+    assert_eq!(
         unsupported_media_type.http_response_message(),
         "expected JSON content type"
     );
     assert_eq!(not_acceptable.http_status_code(), 406);
+    assert_eq!(not_acceptable.kind(), BootErrorKind::NotAcceptable);
     assert_eq!(
         not_acceptable.http_response_message(),
         "expected client to accept JSON response"
     );
     assert_eq!(internal.http_status_code(), 500);
+    assert_eq!(internal.kind(), BootErrorKind::Internal);
     assert_eq!(
         internal.http_response_message(),
         "internal error: database failed"

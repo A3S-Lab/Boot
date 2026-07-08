@@ -80,7 +80,7 @@ pub use discovery::{
     DiscoveredGateway, DiscoveredMessagePattern, DiscoveredModule, DiscoveredRoute,
     DiscoveryService, Reflector,
 };
-pub use error::BootError;
+pub use error::{BootError, BootErrorKind};
 #[cfg(feature = "events")]
 pub use events::{
     EventContext, EventEmitter, EventEnvelope, EventListener, EventListenerDefinition, EventModule,
@@ -109,9 +109,9 @@ pub use openapi::{
     OpenApiSecurityRequirement, OpenApiTag,
 };
 pub use pipeline::{
-    ExceptionFilter, ExecutionContext, ExecutionInterceptor, ExecutionProtocol,
-    ExecutionTransportKind, Guard, Interceptor, Middleware, MiddlewareOutcome, Pipe,
-    TransportExecutionContext, WebSocketExecutionContext,
+    catch_errors, CatchFilter, ExceptionFilter, ExecutionContext, ExecutionInterceptor,
+    ExecutionProtocol, ExecutionTransportKind, Guard, Interceptor, Middleware, MiddlewareOutcome,
+    Pipe, TransportExecutionContext, WebSocketExecutionContext,
 };
 pub use provider::{
     FromModuleRef, ModuleRef, ProviderDefinition, ProviderOnApplicationBootstrap,

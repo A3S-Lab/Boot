@@ -1,7 +1,8 @@
 use super::{
-    ExceptionFilter, ExecutionInterceptor, ExecutionInterceptorAdapter, Guard, Interceptor,
-    Middleware, Pipe,
+    catch_errors, ExceptionFilter, ExecutionInterceptor, ExecutionInterceptorAdapter, Guard,
+    Interceptor, Middleware, Pipe,
 };
+use crate::BootErrorKind;
 use std::any::TypeId;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -195,6 +196,14 @@ impl PipelineComponents {
     {
         self.filters
             .push(PipelineComponent::<dyn ExceptionFilter>::new(filter));
+    }
+
+    pub fn push_catch_filter<I, F>(&mut self, kinds: I, filter: F)
+    where
+        I: IntoIterator<Item = BootErrorKind>,
+        F: ExceptionFilter,
+    {
+        self.push_filter(catch_errors(kinds, filter));
     }
 
     pub fn enable_validation(&mut self) {

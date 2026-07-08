@@ -189,6 +189,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@UseGuards(AuthGuard)` | `#[use_guard(AuthGuard)]` on a controller impl or route method |
 | `@UseInterceptors(TraceInterceptor)` | `#[use_interceptor(TraceInterceptor)]` on a controller impl or route method |
 | `@UseFilters(HttpErrorFilter)` | `#[use_filter(HttpErrorFilter)]` on a controller impl or route method |
+| `@Catch(BadRequestException)` | `catch_errors([BootErrorKind::BadRequest], BadRequestFilter)` inside `#[use_filter(...)]` or `with_catch_filter(...)` |
 | `@UsePipes(ParsePipe)` | `#[use_pipe(ParsePipe)]` on a controller impl or route method |
 | `@UsePipes(new ValidationPipe())` | `#[validate]` on a controller impl or route method for DTO validation |
 | `@SetMetadata("roles", ["admin"])` | `#[metadata("roles", ["admin"])]` below `#[controller]` or on a route method |
@@ -2342,13 +2343,16 @@ with `body_text()` and `body_json()`, or check status classes with helpers like
 header name/value checks in adapter order; the individual `validate_status()`,
 `validate_content_length()`, `validate_body_allowed()`, and `validate_headers()`
 helpers remain available for focused checks. Error responses can reuse the
-framework's standard HTTP error mapping. Routes can also attach static response
-headers or redirect successful handler results declaratively, mirroring Nest's
-`@Header()` and `@Redirect()` decorators while keeping the behavior
-adapter-neutral:
+framework's standard HTTP error mapping. `BootErrorKind` and
+`catch_errors(...)` provide Nest-style catch filters for selected error kinds;
+use `with_catch_filter(...)` or `#[use_filter(catch_errors(...))]` when a filter
+should only handle errors such as `BootErrorKind::BadRequest`. Routes can also
+attach static response headers or redirect successful handler results
+declaratively, mirroring Nest's `@Header()` and `@Redirect()` decorators while
+keeping the behavior adapter-neutral:
 
 ```rust
-use a3s_boot::{BootResponse, Result, RouteDefinition};
+use a3s_boot::{BootErrorKind, BootResponse, Result, RouteDefinition};
 
 fn deleted() -> BootResponse {
     BootResponse::no_content()
@@ -2377,6 +2381,17 @@ fn cached_route() -> Result<RouteDefinition> {
 fn moved_route() -> Result<RouteDefinition> {
     RouteDefinition::get("/old", |_| async { Ok(BootResponse::text("ignored")) })
         .map(|route| route.with_redirect_status(301, "/new"))
+}
+
+fn bad_request_route() -> Result<RouteDefinition> {
+    RouteDefinition::get("/bad", |_| async {
+        Err(a3s_boot::BootError::BadRequest("invalid cat".to_string()))
+    })
+    .map(|route| {
+        route.with_catch_filter([BootErrorKind::BadRequest], |_, error| async move {
+            Ok(Some(BootResponse::text(error.to_string()).with_status(400)))
+        })
+    })
 }
 
 fn read_response(response: &BootResponse) -> Result<CatDto> {

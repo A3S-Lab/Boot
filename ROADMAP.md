@@ -60,6 +60,8 @@ Implemented today:
   skip_null)]` at controller and route scope.
 - Nest-style generic pipeline macros: `#[use_guard]`, `#[use_interceptor]`,
   `#[use_filter]`, and `#[use_pipe]` at controller and route scope.
+- Nest-style catch-filter targeting with `BootErrorKind`, `catch_errors(...)`,
+  `with_catch_filter(...)`, and `use_global_catch_filter(...)`.
 - JSON body and JSON response helpers.
 - SSE responses with `SseEvent`, `SseStream`, `BootResponse::sse(...)`,
   `RouteDefinition::sse(...)`, `ControllerDefinition::sse(...)`, and Axum
