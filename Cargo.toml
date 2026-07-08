@@ -1,6 +1,6 @@
 [package]
 name = "a3s-boot"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["A3S Lab"]
 license = "MIT"
@@ -45,7 +45,7 @@ tcp-transport = ["dep:tokio"]
 
 [dependencies]
 a3s-acl = { version = "0.2.1", optional = true }
-a3s-boot-macros = { version = "0.1.0", path = "macros", optional = true }
+a3s-boot-macros = { version = "0.1.1", path = "macros", optional = true }
 async-nats = { version = "0.49.1", default-features = false, optional = true }
 axum = { version = "0.8", features = ["ws"], optional = true }
 bytes = { version = "1", optional = true }
