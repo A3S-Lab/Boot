@@ -21,6 +21,8 @@ mod compression;
 mod config;
 #[cfg(feature = "cqrs")]
 mod cqrs;
+#[cfg(feature = "database")]
+mod database;
 mod discovery;
 mod error;
 #[cfg(feature = "events")]
@@ -95,6 +97,12 @@ pub use cqrs::{
     Command, CommandBus, CommandHandler, CommandHandlerDefinition, CqrsContext, CqrsEvent,
     CqrsModule, EventBus, EventHandler, EventHandlerDefinition, Query, QueryBus, QueryHandler,
     QueryHandlerDefinition,
+};
+#[cfg(feature = "database")]
+pub use database::{
+    Database, DatabaseBackend, DatabaseModule, DatabaseResult, DatabaseRow, DatabaseStatement,
+    DatabaseTransaction, DatabaseTransactionBackend, InMemoryDatabaseBackend,
+    InMemoryDatabaseTransactionLog,
 };
 pub use discovery::{
     DiscoveredGateway, DiscoveredMessagePattern, DiscoveredModule, DiscoveredRoute,

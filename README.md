@@ -74,6 +74,17 @@ serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
+Enable the optional database module when the application needs a provider-backed
+database facade with replaceable backends:
+
+```toml
+[dependencies]
+a3s-boot = { version = "0.1", features = ["database"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
 Enable the optional scheduler module when the application needs Nest-style
 scheduled jobs:
 
@@ -2546,6 +2557,96 @@ Use `ConfigModule::from_acl_file(...)` for file-backed configuration,
 to export a named provider, or `.global()` to make the config visible to every
 module scope after registration.
 
+## Database
+
+Enable the `database` feature to register `DatabaseModule` and inject a
+provider-backed `Database` facade. Boot does not force a concrete ORM or SQL
+driver into the core; production adapters implement `DatabaseBackend`, while
+tests can use `InMemoryDatabaseBackend` to observe statements and transaction
+behavior.
+
+```rust
+use std::sync::Arc;
+
+use a3s_boot::{
+    BootApplication, Database, DatabaseModule, DatabaseRow, InMemoryDatabaseBackend,
+    Module, ModuleRef, ProviderDefinition, Result,
+};
+use serde_json::json;
+
+#[derive(Debug)]
+struct CatsRepository {
+    database: Arc<Database>,
+}
+
+impl CatsRepository {
+    async fn create(&self, name: &str) -> Result<()> {
+        self.database
+            .transaction(|transaction| async move {
+                transaction
+                    .execute("insert into cats(name) values (?)", [json!(name)])
+                    .await?;
+                Ok(())
+            })
+            .await
+    }
+
+    async fn names(&self) -> Result<Vec<String>> {
+        let rows = self
+            .database
+            .query("select name from cats", Vec::<serde_json::Value>::new())
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                row.get::<String>("name")?
+                    .ok_or_else(|| a3s_boot::BootError::Internal("missing name".to_string()))
+            })
+            .collect()
+    }
+}
+
+#[derive(Debug)]
+struct CatsModule {
+    database: DatabaseModule,
+}
+
+impl Module for CatsModule {
+    fn name(&self) -> &'static str {
+        "cats"
+    }
+
+    fn imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(self.database.clone())]
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::factory::<CatsRepository, _>(
+            |module_ref: &ModuleRef| {
+                Ok(CatsRepository {
+                    database: module_ref.get::<Database>()?,
+                })
+            },
+        )])
+    }
+}
+
+let backend = InMemoryDatabaseBackend::new()
+    .with_query_result(
+        "select name from cats",
+        [DatabaseRow::new().with("name", &"Milo")?],
+    )?;
+let app = BootApplication::builder()
+    .import(CatsModule {
+        database: DatabaseModule::from_backend("database", backend),
+    })
+    .build()?;
+```
+
+Use `DatabaseModule::from_backend(...)` for a concrete driver,
+`from_backend_arc(...)` for shared driver handles, and `.named("token")` when
+a module needs multiple database providers. `Database::transaction(...)` commits
+when the callback returns `Ok` and rolls back when it returns an error.
+
 ## HTTP Client
 
 Enable the `http-client` feature to use `HttpModule` and `HttpService`, Boot's
@@ -3947,6 +4048,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | Authentication | Optional strategy-backed auth provider and `AuthGuard` |
 | Health check | Optional provider-backed readiness/liveness reports |
 | Configuration | Optional ACL-backed typed providers through `ConfigModule` |
+| Database | Optional provider-backed database facade through `DatabaseModule` |
 | HTTP client | Optional provider-backed outbound HTTP client through `HttpModule` |
 | Cache | Optional typed cache provider through `CacheModule` |
 | Scheduler | Optional provider-backed task scheduling through `ScheduleModule` |
@@ -3982,6 +4084,7 @@ src/
 ├── compression.rs # Optional gzip response compression interceptor
 ├── config.rs     # Optional ACL-backed typed configuration module
 ├── cqrs.rs       # Optional command, query, and event buses
+├── database.rs   # Optional provider-backed database facade and backend traits
 ├── discovery.rs  # Runtime discovery snapshots and metadata reflector
 ├── events.rs     # Optional in-process application event emitter module
 ├── health.rs     # Optional provider-backed health check module

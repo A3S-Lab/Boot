@@ -128,6 +128,9 @@ Implemented today:
 - Optional provider-backed authentication with `AuthModule`, `AuthService`,
   bearer or custom strategies, `AuthGuard`, route/controller auth metadata,
   roles/scopes checks, public-route bypass, and `BootRequest` principals.
+- Optional provider-backed database facade with `DatabaseModule`, `Database`,
+  backend and transaction traits, adapter-neutral statements/rows/results,
+  named/global provider exports, and an in-memory backend for tests.
 - Typed cache modules with `CacheModule`, `Cache`, in-memory storage,
   default TTLs, named/global provider exports, and cache-store abstraction.
 - Provider-backed task scheduling with `ScheduleModule`, `Scheduler`,
@@ -550,6 +553,7 @@ Nest equivalent areas:
 - application events (implemented)
 - CQRS command, query, and event buses (implemented)
 - authentication strategies and guards (implemented)
+- database providers and transactions (implemented)
 - health checks (implemented)
 - outbound HTTP client module (implemented)
 - logging (implemented)
@@ -587,6 +591,10 @@ Acceptance:
 - Authentication can register bearer or custom strategies, select strategies
   from guard configuration or route metadata, attach principals to requests,
   allow public routes, and enforce role/scope metadata. (Covered)
+- Database can register a provider-backed facade, use replaceable backends,
+  execute statements, query adapter-neutral rows, run commit/rollback
+  transactions, support named/global exports, and expose an in-memory backend
+  for tests. (Covered)
 - Cache can register typed providers, cache serde values with TTL, and
   participate in module imports/exports. (Covered)
 - Schedule can register typed providers, run timeout/interval/cron jobs through
