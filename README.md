@@ -171,6 +171,15 @@ serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
+Enable the optional CQRS module when an application wants Nest-style command,
+query, and event buses:
+
+```toml
+[dependencies]
+a3s-boot = { version = "0.1", features = ["cqrs"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
 Enable the optional gzip compression interceptor when the application should
 compress eligible responses for clients that send `Accept-Encoding: gzip`:
 
@@ -1581,6 +1590,111 @@ do not need an impl-level macro.
 `EventModule::global()` exports the emitter across module boundaries, and
 `EventModule::named(...)` can register a named emitter provider when a service
 needs separate event channels.
+
+## CQRS
+
+Enable the `cqrs` feature to use `CqrsModule`, `CommandBus`, `QueryBus`, and
+`EventBus`, similar to Nest's CQRS recipe. Commands and queries have exactly one
+handler. Events can have multiple handlers and are published in registration
+order. Handlers receive a `CqrsContext`, so they can resolve providers from the
+same module scope.
+
+```rust
+use a3s_boot::{
+    BootApplication, Command, CommandBus, CqrsContext, CqrsModule, EventBus,
+    ProviderDefinition, Query, QueryBus, Result,
+};
+
+#[derive(Debug)]
+struct CatStore;
+
+impl CatStore {
+    fn rename(&self, id: u64, name: &str) -> String {
+        format!("cat:{id}={name}")
+    }
+
+    fn find(&self, id: u64) -> String {
+        format!("cat:{id}")
+    }
+}
+
+#[derive(Debug)]
+struct RenameCat {
+    id: u64,
+    name: String,
+}
+
+impl Command for RenameCat {
+    type Output = String;
+}
+
+#[derive(Debug)]
+struct FindCat {
+    id: u64,
+}
+
+impl Query for FindCat {
+    type Output = String;
+}
+
+#[derive(Debug, Clone)]
+struct CatRenamed {
+    id: u64,
+    name: String,
+}
+
+async fn app() -> Result<()> {
+    let app = BootApplication::builder()
+        .import(
+            CqrsModule::new("cats-cqrs")
+                .provider(ProviderDefinition::singleton(CatStore))
+                .command_handler::<RenameCat, _>(
+                    |command: RenameCat, context: CqrsContext| async move {
+                        let store = context.get::<CatStore>()?;
+                        Ok(store.rename(command.id, &command.name))
+                    },
+                )
+                .query_handler::<FindCat, _>(
+                    |query: FindCat, context: CqrsContext| async move {
+                        let store = context.get::<CatStore>()?;
+                        Ok(store.find(query.id))
+                    },
+                )
+                .event_handler::<CatRenamed, _>(|event: CatRenamed, _| async move {
+                    println!("cat {} renamed to {}", event.id, event.name);
+                    Ok(())
+                }),
+        )
+        .build()?;
+
+    let commands = app.get::<CommandBus>()?;
+    let queries = app.get::<QueryBus>()?;
+    let events = app.get::<EventBus>()?;
+
+    let renamed = commands
+        .execute(RenameCat {
+            id: 1,
+            name: "Milo".to_string(),
+        })
+        .await?;
+    let found = queries.execute(FindCat { id: 1 }).await?;
+    events
+        .publish(CatRenamed {
+            id: 1,
+            name: "Milo".to_string(),
+        })
+        .await?;
+
+    let _ = (renamed, found);
+    Ok(())
+}
+```
+
+`CqrsModule` can also import other modules and register local providers used by
+handlers. `CqrsModule::global()` exports the three buses to every module after
+registration. The buses can be used directly in tests with
+`CommandBus::register(...)`, `QueryBus::register(...)`, and
+`EventBus::register(...)`.
 
 ## Health Checks
 
@@ -3759,6 +3873,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | WebSocket gateway | Event-based bidirectional message handlers |
 | Message transport | Adapter-neutral request-response and event-only message patterns |
 | Event emitter | Optional provider-backed in-process application events |
+| CQRS | Optional command, query, and event buses through `CqrsModule` |
 | Health check | Optional provider-backed readiness/liveness reports |
 | Configuration | Optional ACL-backed typed providers through `ConfigModule` |
 | HTTP client | Optional provider-backed outbound HTTP client through `HttpModule` |
@@ -3794,6 +3909,7 @@ src/
 ├── cache.rs      # Optional typed cache module and in-memory store
 ├── compression.rs # Optional gzip response compression interceptor
 ├── config.rs     # Optional ACL-backed typed configuration module
+├── cqrs.rs       # Optional command, query, and event buses
 ├── discovery.rs  # Runtime discovery snapshots and metadata reflector
 ├── events.rs     # Optional in-process application event emitter module
 ├── health.rs     # Optional provider-backed health check module

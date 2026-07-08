@@ -17,6 +17,8 @@ mod cache;
 mod compression;
 #[cfg(feature = "config")]
 mod config;
+#[cfg(feature = "cqrs")]
+mod cqrs;
 mod discovery;
 mod error;
 #[cfg(feature = "events")]
@@ -79,6 +81,12 @@ pub use compression::{CompressionInterceptor, CompressionOptions};
 #[cfg(feature = "config")]
 pub use config::{
     acl_document_to_json, parse_acl_config, parse_validated_acl_config, ConfigModule,
+};
+#[cfg(feature = "cqrs")]
+pub use cqrs::{
+    Command, CommandBus, CommandHandler, CommandHandlerDefinition, CqrsContext, CqrsEvent,
+    CqrsModule, EventBus, EventHandler, EventHandlerDefinition, Query, QueryBus, QueryHandler,
+    QueryHandlerDefinition,
 };
 pub use discovery::{
     DiscoveredGateway, DiscoveredMessagePattern, DiscoveredModule, DiscoveredRoute,
