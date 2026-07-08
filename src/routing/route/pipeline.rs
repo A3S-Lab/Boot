@@ -20,6 +20,7 @@ impl RouteDefinition {
         self.filters = prepend_component(&pipeline.filters, self.filters);
         if !self.validation_disabled {
             self.validation_enabled = pipeline.validation_enabled || self.validation_enabled;
+            self.validation_options = pipeline.validation_options.merge(self.validation_options);
         }
         self
     }
@@ -97,6 +98,13 @@ impl RouteDefinition {
     pub fn with_validation(mut self) -> Self {
         self.validation_enabled = true;
         self.validation_disabled = false;
+        self
+    }
+
+    pub fn with_validation_options(mut self, options: ValidationOptions) -> Self {
+        self.validation_enabled = true;
+        self.validation_disabled = false;
+        self.validation_options = self.validation_options.merge(options);
         self
     }
 

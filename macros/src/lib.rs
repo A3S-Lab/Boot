@@ -402,6 +402,14 @@ pub fn skip_validation(_attr: TokenStream, item: TokenStream) -> TokenStream {
     validation_attribute_outside_controller("skip_validation", item)
 }
 
+#[proc_macro_derive(ValidationSchema, attributes(serde))]
+pub fn derive_validation_schema(item: TokenStream) -> TokenStream {
+    let item_struct = parse_macro_input!(item as syn::ItemStruct);
+    expand_validation_schema(item_struct)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
 #[proc_macro_attribute]
 pub fn use_guard(_attr: TokenStream, item: TokenStream) -> TokenStream {
     pipeline_attribute_outside_controller("use_guard", item)
@@ -517,6 +525,55 @@ fn expand_injectable(mut item_struct: syn::ItemStruct) -> Result<proc_macro2::To
             }
         }
     })
+}
+
+fn expand_validation_schema(item_struct: syn::ItemStruct) -> Result<proc_macro2::TokenStream> {
+    let struct_ident = item_struct.ident;
+    let generics = item_struct.generics;
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+    let Fields::Named(fields) = item_struct.fields else {
+        return Err(syn::Error::new_spanned(
+            struct_ident,
+            "ValidationSchema can only be derived for structs with named fields",
+        ));
+    };
+
+    let mut field_names = Vec::new();
+    for field in fields.named {
+        let Some(ident) = field.ident else {
+            continue;
+        };
+        field_names.push(validation_schema_field_name(&ident, &field.attrs)?);
+    }
+
+    Ok(quote! {
+        impl #impl_generics ::a3s_boot::ValidationSchema for #struct_ident #ty_generics #where_clause {
+            fn allowed_fields() -> &'static [&'static str] {
+                &[#(#field_names),*]
+            }
+        }
+    })
+}
+
+fn validation_schema_field_name(ident: &Ident, attrs: &[Attribute]) -> Result<LitStr> {
+    for attr in attrs {
+        if !attr.path().is_ident("serde") {
+            continue;
+        }
+        let mut renamed = None;
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("rename") {
+                meta.input.parse::<Token![=]>()?;
+                renamed = Some(meta.input.parse::<LitStr>()?);
+            }
+            Ok(())
+        })?;
+        if let Some(name) = renamed {
+            return Ok(name);
+        }
+    }
+
+    Ok(LitStr::new(&ident.to_string(), ident.span()))
 }
 
 fn expand_module(
@@ -1087,13 +1144,13 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
             let Some(input) = input.clone() else {
                 continue;
             };
-            let validation_enabled = route_validation.enabled(controller_validation.enabled);
+            let validation_options = route_validation.enabled_options(controller_validation);
             let validation_skipped = route_validation.skip;
             match route_registration(
                 route,
                 method,
                 input,
-                validation_enabled,
+                validation_options,
                 validation_skipped,
                 &metadata_specs,
                 http_code.as_ref(),
@@ -1347,9 +1404,9 @@ fn expand_message_controller(mut item_impl: ItemImpl) -> Result<proc_macro2::Tok
             continue;
         }
 
-        let validation_enabled = route_validation.enabled(controller_validation.enabled);
+        let validation_options = route_validation.enabled_options(controller_validation);
         for spec in specs {
-            match message_pattern_registration(method, input.clone(), spec, validation_enabled) {
+            match message_pattern_registration(method, input.clone(), spec, validation_options) {
                 Ok(pattern) => patterns.push(pattern),
                 Err(error) => push_error(&mut errors, error),
             }
@@ -1873,7 +1930,7 @@ fn message_pattern_registration(
     method: &ImplItemFn,
     input: RouteMethodInput,
     spec: MessagePatternSpec,
-    validation_enabled: bool,
+    validation_options: Option<ValidationAttrOptions>,
 ) -> Result<proc_macro2::TokenStream> {
     let method_ident = &method.sig.ident;
     let pattern = spec.args.pattern;
@@ -1893,7 +1950,7 @@ fn message_pattern_registration(
         }
     };
 
-    let definition = message_validation_definition(definition, input, validation_enabled)?;
+    let definition = message_validation_definition(definition, input, validation_options)?;
     Ok(definition)
 }
 
@@ -2023,11 +2080,11 @@ fn message_event_handler(
 fn message_validation_definition(
     definition: proc_macro2::TokenStream,
     input: RouteMethodInput,
-    validation_enabled: bool,
+    validation_options: Option<ValidationAttrOptions>,
 ) -> Result<proc_macro2::TokenStream> {
-    if !validation_enabled {
+    let Some(options) = validation_options else {
         return Ok(definition);
-    }
+    };
 
     let Some(arg) = input.into_legacy_arg()? else {
         return Err(syn::Error::new(
@@ -2044,9 +2101,16 @@ fn message_validation_definition(
     }
 
     let ty = arg.ty;
-    Ok(quote! {
-        (#definition).with_payload_validation::<#ty>()
-    })
+    if options.is_empty() {
+        Ok(quote! {
+            (#definition).with_payload_validation::<#ty>()
+        })
+    } else {
+        let options = options.token();
+        Ok(quote! {
+            (#definition).with_payload_validation_options::<#ty>(#options)
+        })
+    }
 }
 
 fn take_route_attrs(attrs: &[Attribute]) -> (Vec<Attribute>, Vec<RouteSpec>, Vec<syn::Error>) {
@@ -2073,7 +2137,7 @@ fn route_registration(
     route: RouteSpec,
     method: &ImplItemFn,
     input: RouteMethodInput,
-    validation_enabled: bool,
+    validation_options: Option<ValidationAttrOptions>,
     validation_skipped: bool,
     metadata_specs: &[MetadataSpec],
     http_code: Option<&LitInt>,
@@ -2235,7 +2299,7 @@ fn route_registration(
         route_definition,
         &metadata_input,
         flavor,
-        validation_enabled,
+        validation_options,
         validation_skipped,
     )?;
 
@@ -2347,7 +2411,7 @@ fn validation_route_definition(
     mut route_definition: proc_macro2::TokenStream,
     input: &RouteMethodInput,
     flavor: RouteFlavor,
-    validation_enabled: bool,
+    validation_options: Option<ValidationAttrOptions>,
     validation_skipped: bool,
 ) -> Result<proc_macro2::TokenStream> {
     if validation_skipped {
@@ -2356,33 +2420,49 @@ fn validation_route_definition(
         });
     }
 
-    if !validation_enabled {
+    let Some(options) = validation_options else {
         return Ok(route_definition);
-    }
+    };
 
-    for token in extractor_validation_tokens(input, flavor) {
+    for token in extractor_validation_tokens(input, flavor, options) {
         route_definition = quote! {
             (#route_definition).#token
         };
     }
 
-    Ok(quote! {
-        (#route_definition).with_validation()
-    })
+    if options.is_empty() {
+        Ok(quote! {
+            (#route_definition).with_validation()
+        })
+    } else {
+        let options = options.token();
+        Ok(quote! {
+            (#route_definition).with_validation_options(#options)
+        })
+    }
 }
 
 fn extractor_validation_tokens(
     input: &RouteMethodInput,
     flavor: RouteFlavor,
+    options: ValidationAttrOptions,
 ) -> Vec<proc_macro2::TokenStream> {
     let mut tokens = Vec::new();
+    let use_options = !options.is_empty();
+    let options_token = options.token();
 
     if matches!(flavor, RouteFlavor::JsonBody) && !input.has_extractors() {
         if let Some(arg) = input.args.first() {
             let ty = &arg.ty;
-            tokens.push(quote! {
-                with_body_validation::<#ty>()
-            });
+            if use_options {
+                tokens.push(quote! {
+                    with_body_validation_options::<#ty>(#options_token)
+                });
+            } else {
+                tokens.push(quote! {
+                    with_body_validation::<#ty>()
+                });
+            }
         }
     }
 
@@ -2393,17 +2473,39 @@ fn extractor_validation_tokens(
         let ty = &arg.ty;
 
         match extractor {
-            Extractor::Body => tokens.push(quote! {
-                with_body_validation::<#ty>()
-            }),
-            Extractor::Params => tokens.push(quote! {
-                with_params_validation::<#ty>()
-            }),
+            Extractor::Body => {
+                if use_options {
+                    tokens.push(quote! {
+                        with_body_validation_options::<#ty>(#options_token)
+                    });
+                } else {
+                    tokens.push(quote! {
+                        with_body_validation::<#ty>()
+                    });
+                }
+            }
+            Extractor::Params => {
+                if use_options {
+                    tokens.push(quote! {
+                        with_params_validation_options::<#ty>(#options_token)
+                    });
+                } else {
+                    tokens.push(quote! {
+                        with_params_validation::<#ty>()
+                    });
+                }
+            }
             Extractor::Query(query) => {
                 if query.name.is_none() {
-                    tokens.push(quote! {
-                        with_query_validation::<#ty>()
-                    });
+                    if use_options {
+                        tokens.push(quote! {
+                            with_query_validation_options::<#ty>(#options_token)
+                        });
+                    } else {
+                        tokens.push(quote! {
+                            with_query_validation::<#ty>()
+                        });
+                    }
                 }
             }
             Extractor::Request
@@ -3026,15 +3128,21 @@ fn take_controller_validation_attrs(
 
         match kind {
             ValidationAttrKind::Validate => {
-                if let Err(error) = expect_no_extractor_args(attr, "validate") {
-                    errors.push(error);
-                } else if validation.enabled {
+                let options = match parse_validation_options(attr) {
+                    Ok(options) => options,
+                    Err(error) => {
+                        errors.push(error);
+                        continue;
+                    }
+                };
+                if validation.enabled {
                     errors.push(syn::Error::new_spanned(
                         attr,
                         "duplicate #[validate] attribute",
                     ));
                 } else {
                     validation.enabled = true;
+                    validation.options = options;
                 }
             }
             ValidationAttrKind::SkipValidation => errors.push(syn::Error::new_spanned(
@@ -3060,14 +3168,32 @@ fn take_route_validation_attrs(
             continue;
         };
 
-        if let Err(error) = expect_no_extractor_args(attr, kind.name()) {
-            errors.push(error);
-            continue;
-        }
-
         match kind {
-            ValidationAttrKind::Validate => validation.validate = true,
-            ValidationAttrKind::SkipValidation => validation.skip = true,
+            ValidationAttrKind::Validate => {
+                let options = match parse_validation_options(attr) {
+                    Ok(options) => options,
+                    Err(error) => {
+                        errors.push(error);
+                        continue;
+                    }
+                };
+                if validation.validate {
+                    errors.push(syn::Error::new_spanned(
+                        attr,
+                        "duplicate #[validate] attribute",
+                    ));
+                } else {
+                    validation.validate = true;
+                    validation.options = Some(options);
+                }
+            }
+            ValidationAttrKind::SkipValidation => {
+                if let Err(error) = expect_no_extractor_args(attr, kind.name()) {
+                    errors.push(error);
+                    continue;
+                }
+                validation.skip = true;
+            }
         }
     }
 
@@ -4089,14 +4215,96 @@ impl ValidationAttrKind {
 }
 
 #[derive(Clone, Copy, Default)]
+struct ValidationAttrOptions {
+    whitelist: bool,
+    forbid_non_whitelisted: bool,
+}
+
+impl ValidationAttrOptions {
+    fn is_empty(self) -> bool {
+        !self.whitelist && !self.forbid_non_whitelisted
+    }
+
+    fn merge(self, other: Self) -> Self {
+        Self {
+            whitelist: self.whitelist || other.whitelist,
+            forbid_non_whitelisted: self.forbid_non_whitelisted || other.forbid_non_whitelisted,
+        }
+    }
+
+    fn token(self) -> proc_macro2::TokenStream {
+        let whitelist = self
+            .whitelist
+            .then(|| quote!(.whitelist(true)))
+            .unwrap_or_default();
+        let forbid_non_whitelisted = self
+            .forbid_non_whitelisted
+            .then(|| quote!(.forbid_non_whitelisted(true)))
+            .unwrap_or_default();
+        quote! {
+            ::a3s_boot::ValidationOptions::new() #whitelist #forbid_non_whitelisted
+        }
+    }
+}
+
+impl Parse for ValidationAttrOptions {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let mut options = Self::default();
+
+        while !input.is_empty() {
+            let name = input.parse::<Ident>()?;
+            let enabled = if input.peek(Token![=]) {
+                input.parse::<Token![=]>()?;
+                input.parse::<LitBool>()?.value
+            } else {
+                true
+            };
+
+            match name.to_string().as_str() {
+                "whitelist" => options.whitelist = enabled,
+                "forbid_non_whitelisted" | "forbidNonWhitelisted" => {
+                    options.forbid_non_whitelisted = enabled;
+                }
+                "transform" => {
+                    return Err(syn::Error::new_spanned(
+                        name,
+                        "ValidationPipe transform is not supported yet",
+                    ));
+                }
+                _ => {
+                    return Err(syn::Error::new_spanned(name, "unsupported validate option"));
+                }
+            }
+
+            parse_optional_comma(input)?;
+        }
+
+        Ok(options)
+    }
+}
+
+fn parse_validation_options(attr: &Attribute) -> Result<ValidationAttrOptions> {
+    match &attr.meta {
+        Meta::Path(_) => Ok(ValidationAttrOptions::default()),
+        Meta::List(_) => attr.parse_args::<ValidationAttrOptions>(),
+        Meta::NameValue(_) => Err(syn::Error::new_spanned(
+            attr,
+            "#[validate] expects flags such as #[validate(whitelist)]",
+        )),
+    }
+}
+
+#[derive(Clone, Copy, Default)]
 struct ControllerValidationAttrs {
     enabled: bool,
+    options: ValidationAttrOptions,
 }
 
 #[derive(Clone, Copy, Default)]
 struct RouteValidationAttrs {
     validate: bool,
     skip: bool,
+    options: Option<ValidationAttrOptions>,
 }
 
 impl RouteValidationAttrs {
@@ -4104,8 +4312,19 @@ impl RouteValidationAttrs {
         self.validate || self.skip
     }
 
-    fn enabled(self, controller_enabled: bool) -> bool {
-        !self.skip && (controller_enabled || self.validate)
+    fn enabled_options(
+        self,
+        controller: ControllerValidationAttrs,
+    ) -> Option<ValidationAttrOptions> {
+        if self.skip || (!controller.enabled && !self.validate) {
+            return None;
+        }
+
+        let options = self
+            .options
+            .map(|options| controller.options.merge(options))
+            .unwrap_or(controller.options);
+        Some(options)
     }
 }
 

@@ -330,8 +330,8 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@Catch(BadRequestException)` | `#[catch(BadRequest)]` on a filter struct, used through `BadRequestFilter::catch_filter()` |
 | `@UsePipes(ParsePipe)` | `#[use_pipe(ParsePipe)]` on a controller impl or route method |
 | `@UsePipes(new ValidationPipe())` | `#[validate]` on a controller impl or route method for DTO validation |
-| `new ValidationPipe({ whitelist: true })` | `ValidationOptions::new().whitelist(true)` with `ValidationSchema` |
-| `new ValidationPipe({ forbidNonWhitelisted: true })` | `ValidationOptions::new().forbid_non_whitelisted(true)` |
+| `new ValidationPipe({ whitelist: true })` | `#[validate(whitelist)]` or `ValidationOptions::new().whitelist(true)` with `ValidationSchema` |
+| `new ValidationPipe({ forbidNonWhitelisted: true })` | `#[validate(forbidNonWhitelisted)]` or `ValidationOptions::new().forbid_non_whitelisted(true)` |
 | `@SetMetadata("roles", ["admin"])` | `#[metadata("roles", ["admin"])]` below `#[controller]` or on a route method |
 | `@Version("1")` | `#[version("1")]` below `#[controller]` or on a route method |
 | `@Version(["1", "2"])` | `#[versions("1", "2")]` below `#[controller]` or on a route method |
@@ -804,28 +804,35 @@ Manual handlers can also call `BootRequest::validated_json::<T>()`,
 validated unless they register validators explicitly, for example with
 `RouteDefinition::with_body_validation::<T>()`.
 
-For Nest-style whitelist policies, implement `ValidationSchema` on the DTO and
-register validation options. `whitelist(true)` strips unknown body, query, or
-path fields before the handler runs; `forbid_non_whitelisted(true)` rejects the
-request instead:
+For Nest-style whitelist policies, derive or implement `ValidationSchema` on the
+DTO and register validation options. `whitelist(true)` strips unknown body,
+query, path, or transport payload fields before the handler runs;
+`forbid_non_whitelisted(true)` rejects the request instead. In macro
+controllers, use `#[validate(whitelist)]` or
+`#[validate(forbidNonWhitelisted)]`:
 
 ```rust
 use a3s_boot::{
-    BootRequest, BootResponse, Result, RouteDefinition, Validate, ValidationOptions,
-    ValidationSchema,
+    body, controller, post, validate, BootRequest, BootResponse, Result, RouteDefinition,
+    Validate, ValidationOptions,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, a3s_boot::ValidationSchema)]
 struct CreateCatDto {
     name: String,
 }
 
 impl Validate for CreateCatDto {}
 
-impl ValidationSchema for CreateCatDto {
-    fn allowed_fields() -> &'static [&'static str] {
-        &["name"]
+struct CatsController;
+
+#[controller("/cats")]
+impl CatsController {
+    #[post("/", status = 201)]
+    #[validate(whitelist)]
+    async fn create(&self, #[body] dto: CreateCatDto) -> Result<CreateCatDto> {
+        Ok(dto)
     }
 }
 
@@ -833,12 +840,16 @@ let route = RouteDefinition::post("/", |request: BootRequest| async move {
     BootResponse::json(&request.json::<serde_json::Value>()?)
 })?
 .with_body_validation_options::<CreateCatDto>(
-    ValidationOptions::new()
-        .whitelist(true)
-        .forbid_non_whitelisted(false),
+    ValidationOptions::new().whitelist(true),
 )
 .with_validation();
 ```
+
+The same options can be applied at controller or application scope with
+`ControllerDefinition::with_validation_options(...)` and
+`BootApplication::builder().use_global_validation_options(...)`. Global options
+apply to routes that have registered `ValidationSchema`-aware validators, for
+example routes created with `with_body_validation_options::<T>(...)`.
 
 ## Server-Sent Events
 

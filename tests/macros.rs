@@ -589,6 +589,15 @@ impl Validate for MacroValidatedSearch {
     }
 }
 
+#[derive(Debug, Deserialize, Serialize, a3s_boot::ValidationSchema)]
+struct MacroWhitelistCreateDto {
+    name: String,
+    #[serde(rename = "displayName")]
+    display_name: Option<String>,
+}
+
+impl Validate for MacroWhitelistCreateDto {}
+
 #[derive(Debug)]
 struct MacroValidationModule;
 
@@ -601,6 +610,7 @@ impl Module for MacroValidationModule {
         Ok(vec![
             Arc::new(MacroValidationController).controller()?,
             Arc::new(MacroRouteValidationController).controller()?,
+            Arc::new(MacroWhitelistValidationController).controller()?,
         ])
     }
 }
@@ -615,6 +625,31 @@ impl MacroRouteValidationController {
     async fn create(&self, #[body] dto: MacroValidatedCreateDto) -> Result<MacroCatDto> {
         Ok(MacroCatDto {
             id: "route".to_string(),
+            name: dto.name,
+        })
+    }
+}
+
+#[derive(Debug)]
+struct MacroWhitelistValidationController;
+
+#[controller("/macro-whitelist-validation")]
+impl MacroWhitelistValidationController {
+    #[post("/", status = 201)]
+    #[validate(whitelist)]
+    async fn create(
+        &self,
+        #[request] request: BootRequest,
+        #[body] _dto: MacroWhitelistCreateDto,
+    ) -> Result<serde_json::Value> {
+        request.json::<serde_json::Value>()
+    }
+
+    #[post("/strict", status = 201)]
+    #[validate(forbidNonWhitelisted)]
+    async fn create_strict(&self, #[body] dto: MacroWhitelistCreateDto) -> Result<MacroCatDto> {
+        Ok(MacroCatDto {
+            id: "strict".to_string(),
             name: dto.name,
         })
     }
@@ -1811,6 +1846,25 @@ async fn validate_macro_enables_body_and_query_dto_validation() {
         )
         .await
         .unwrap_err();
+    let whitelisted = app
+        .call(
+            BootRequest::new(a3s_boot::HttpMethod::Post, "/macro-whitelist-validation")
+                .with_content_type("application/json")
+                .with_body(r#"{"name":"Milo","displayName":"Mr. Milo","role":"admin"}"#),
+        )
+        .await
+        .unwrap();
+    let forbidden = app
+        .call(
+            BootRequest::new(
+                a3s_boot::HttpMethod::Post,
+                "/macro-whitelist-validation/strict",
+            )
+            .with_content_type("application/json")
+            .with_body(r#"{"name":"Milo","role":"admin"}"#),
+        )
+        .await
+        .unwrap_err();
 
     assert!(
         matches!(body_error, BootError::BadRequest(message) if message.contains("name is required"))
@@ -1827,5 +1881,15 @@ async fn validate_macro_enables_body_and_query_dto_validation() {
     );
     assert!(
         matches!(route_error, BootError::BadRequest(message) if message.contains("name is required"))
+    );
+    assert_eq!(
+        whitelisted.body_json::<serde_json::Value>().unwrap(),
+        json!({
+            "displayName": "Mr. Milo",
+            "name": "Milo"
+        })
+    );
+    assert!(
+        matches!(forbidden, BootError::BadRequest(message) if message == "non-whitelisted body properties: role")
     );
 }

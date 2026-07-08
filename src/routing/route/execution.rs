@@ -123,7 +123,7 @@ impl RouteDefinition {
         if self.validation_enabled {
             for validator in &self.validators {
                 let context_request = request.clone();
-                request = match validator(request) {
+                request = match validator(request, self.validation_options) {
                     Ok(request) => request,
                     Err(error) => {
                         return self

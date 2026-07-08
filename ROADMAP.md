@@ -118,7 +118,10 @@ Implemented today:
 - DTO validation with `Validate`, body/query/params validation hooks, global,
   controller-level, route-level validation switches, Nest-style whitelist and
   forbid-non-whitelisted options through `ValidationOptions` and
-  `ValidationSchema`, and `#[validate]` / `#[skip_validation]` macros.
+  `ValidationSchema`, `ValidationSchema` derive support for named DTO structs,
+  global/controller/route validation options, and `#[validate]` /
+  `#[skip_validation]` macros including `#[validate(whitelist)]` and
+  `#[validate(forbidNonWhitelisted)]`.
 - Module-scoped provider registries, explicit provider exports, transitive
   re-exports, global module exports, module route prefixes, and `DynamicModule`
   for runtime-built provider modules, with provider-only lazy module loading,
@@ -390,6 +393,12 @@ Tasks:
 - Support Nest-style whitelist and forbid-non-whitelisted policies for body,
   query, and params validators. (Implemented with `ValidationOptions` and
   explicit `ValidationSchema` field metadata)
+- Support Nest-style validation option macros and scoped option APIs.
+  (Implemented with `#[validate(...)]`,
+  `ControllerDefinition::with_validation_options(...)`, and
+  `BootApplicationBuilder::use_global_validation_options(...)`)
+- Reduce whitelist metadata boilerplate for common DTOs. (Implemented with
+  `#[derive(ValidationSchema)]` for named structs)
 - Add consistent validation error response mapping. (Implemented through
   `BootError::BadRequest` / HTTP 400)
 
@@ -400,6 +409,8 @@ Acceptance:
 - Whitelist validation can strip unknown body, query, and path fields before
   handlers run, or reject those requests when forbid-non-whitelisted is enabled.
   (Covered)
+- Validation options can be applied through Nest-style route/controller macros
+  and through global/controller builder APIs. (Covered)
 - Validation can be enabled globally, controller-level, and route-level.
   (Covered through `use_global_validation`, `ControllerDefinition::with_validation`,
   `RouteDefinition::with_validation`, and `#[validate]`)

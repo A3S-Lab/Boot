@@ -2,7 +2,8 @@ use a3s_boot::{
     BootApplication, BootError, BoxFuture, ExecutionContext, ExecutionInterceptor,
     ExecutionProtocol, ExecutionTransportKind, Guard, InProcessTransport, MessagePatternDefinition,
     MessageTransport, Module, ModuleRef, ProviderDefinition, Result, TransportContext,
-    TransportInterceptor, TransportMessage, TransportReply, Validate,
+    TransportInterceptor, TransportMessage, TransportReply, Validate, ValidationOptions,
+    ValidationSchema,
 };
 #[cfg(feature = "grpc-transport")]
 use a3s_boot::{GrpcTransport, GrpcTransportClient, GrpcTransportOptions};
@@ -231,6 +232,34 @@ async fn message_patterns_validate_payloads() {
     assert!(
         matches!(error, BootError::BadRequest(message) if message.contains("name is required"))
     );
+}
+
+#[tokio::test]
+async fn message_patterns_whitelist_payload_properties() {
+    let app = BootApplication::builder()
+        .message_pattern(
+            MessagePatternDefinition::request(
+                "cat.create",
+                |message: TransportMessage| async move { Ok(message.data) },
+            )
+            .unwrap()
+            .with_payload_validation_options::<CreateTransportCat>(
+                ValidationOptions::new().whitelist(true),
+            ),
+        )
+        .build()
+        .unwrap();
+
+    let reply = app
+        .dispatch_message(TransportMessage::new(
+            "cat.create",
+            json!({ "name": "Milo", "role": "admin" }),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(reply.data, json!({ "name": "Milo" }));
 }
 
 #[tokio::test]
@@ -1189,6 +1218,12 @@ impl Validate for CreateTransportCat {
             return Err(BootError::BadRequest("name is required".to_string()));
         }
         Ok(())
+    }
+}
+
+impl ValidationSchema for CreateTransportCat {
+    fn allowed_fields() -> &'static [&'static str] {
+        &["name"]
     }
 }
 

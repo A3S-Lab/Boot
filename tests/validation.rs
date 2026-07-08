@@ -160,6 +160,62 @@ async fn global_validation_enables_registered_body_validators() {
 }
 
 #[tokio::test]
+async fn global_validation_options_whitelist_unknown_body_properties() {
+    let route = RouteDefinition::post("/", |request: BootRequest| async move {
+        BootResponse::json(&request.json::<serde_json::Value>()?)
+    })
+    .unwrap()
+    .with_body_validation_options::<ValidatedCreateItemDto>(ValidationOptions::default());
+    let app = BootApplication::builder()
+        .use_global_validation_options(ValidationOptions::new().whitelist(true))
+        .route(route)
+        .build()
+        .unwrap();
+
+    let response = app
+        .call(
+            BootRequest::new(HttpMethod::Post, "/")
+                .with_content_type("application/json")
+                .with_body(r#"{"name":"Milo","role":"admin"}"#),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.body_json::<serde_json::Value>().unwrap(),
+        json!({ "name": "Milo" })
+    );
+}
+
+#[tokio::test]
+async fn controller_validation_options_whitelist_unknown_body_properties() {
+    let route = RouteDefinition::post("/", |request: BootRequest| async move {
+        BootResponse::json(&request.json::<serde_json::Value>()?)
+    })
+    .unwrap()
+    .with_body_validation_options::<ValidatedCreateItemDto>(ValidationOptions::default());
+    let controller = ControllerDefinition::new("/items")
+        .unwrap()
+        .with_validation_options(ValidationOptions::new().whitelist(true))
+        .route(route)
+        .unwrap();
+
+    let response = controller.routes()[0]
+        .call(
+            BootRequest::new(HttpMethod::Post, "/items")
+                .with_content_type("application/json")
+                .with_body(r#"{"name":"Milo","role":"admin"}"#),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.body_json::<serde_json::Value>().unwrap(),
+        json!({ "name": "Milo" })
+    );
+}
+
+#[tokio::test]
 async fn route_validation_rejects_query_and_param_dtos() {
     let route = RouteDefinition::get("/{id}", |_| async { Ok(BootResponse::text("ok")) })
         .unwrap()

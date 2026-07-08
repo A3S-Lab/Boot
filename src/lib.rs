@@ -71,6 +71,7 @@ pub use a3s_boot_macros::{
     post, post_json, put, put_json, query, redirect, render, request, request_body, response,
     serialize, skip_validation, sse, subscribe_message, tag, use_filter, use_guard,
     use_interceptor, use_pipe, validate, version, version_neutral, versions, websocket_gateway,
+    ValidationSchema,
 };
 #[cfg(all(feature = "macros", feature = "schedule"))]
 pub use a3s_boot_macros::{cron, interval, schedule, timeout};
@@ -211,7 +212,8 @@ pub use transport::{RedisTransport, RedisTransportClient, RedisTransportOptions}
 pub use transport::{TcpTransport, TcpTransportClient, TcpTransportOptions};
 pub(crate) use validation::{
     body_validator, body_validator_with_options, params_validator, params_validator_with_options,
-    query_validator, query_validator_with_options, validate_value, RequestValidator,
+    query_validator, query_validator_with_options, validate_json_value_with_options,
+    validate_value, RequestValidator,
 };
 pub use validation::{Validate, ValidationOptions, ValidationSchema};
 pub use versioning::{ApiVersioning, ApiVersioningStrategy, RouteVersioning};

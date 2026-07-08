@@ -1,6 +1,7 @@
 use crate::{
-    validate_value, BootError, BoxFuture, ExecutionContext, ExecutionInterceptor,
-    ExecutionTransportKind, Guard, Result, Validate,
+    validate_json_value_with_options, validate_value, BootError, BoxFuture, ExecutionContext,
+    ExecutionInterceptor, ExecutionTransportKind, Guard, Result, Validate, ValidationOptions,
+    ValidationSchema,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -318,7 +319,7 @@ where
 }
 
 type TransportHandlerFuture = BoxFuture<'static, Result<Option<TransportReply>>>;
-type MessageValidator = Arc<dyn Fn(&TransportMessage) -> Result<()> + Send + Sync>;
+type MessageValidator = Arc<dyn Fn(TransportMessage) -> Result<TransportMessage> + Send + Sync>;
 
 trait TransportMessageHandler: Send + Sync + 'static {
     fn call(&self, message: TransportMessage) -> TransportHandlerFuture;
@@ -529,7 +530,25 @@ impl MessagePatternDefinition {
         T: DeserializeOwned + Validate + 'static,
     {
         self.validators.push(Arc::new(|message| {
-            message.validated_data::<T>().map(|_| ())
+            message.validated_data::<T>().map(|_| message)
+        }));
+        self
+    }
+
+    pub fn with_payload_validation_options<T>(mut self, options: ValidationOptions) -> Self
+    where
+        T: DeserializeOwned + Validate + ValidationSchema + 'static,
+    {
+        self.validators.push(Arc::new(move |mut message| {
+            let data = validate_json_value_with_options::<T>(
+                message.data.clone(),
+                options,
+                "message property",
+            )?;
+            if options.whitelist {
+                message.data = data;
+            }
+            Ok(message)
         }));
         self
     }
@@ -562,7 +581,7 @@ impl MessagePatternDefinition {
         }
 
         for validator in &self.validators {
-            validator(&message)?;
+            message = validator(message)?;
         }
 
         let mut reply = self.handler.call(message).await?;

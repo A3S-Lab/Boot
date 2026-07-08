@@ -1,7 +1,7 @@
 use crate::pipeline::PipelineComponent;
 use crate::{
     BootError, ExceptionFilter, Guard, HttpMethod, Interceptor, Middleware, OpenApiRouteMetadata,
-    Pipe, RequestValidator, Result, RouteVersioning, SerializationOptions,
+    Pipe, RequestValidator, Result, RouteVersioning, SerializationOptions, ValidationOptions,
 };
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -36,6 +36,7 @@ pub struct RouteDefinition {
     pub(super) validators: Vec<RequestValidator>,
     pub(super) validation_enabled: bool,
     pub(super) validation_disabled: bool,
+    pub(super) validation_options: ValidationOptions,
     pub(super) module_name: Option<String>,
     pub(super) controller_prefix: Option<String>,
     pub(super) module_ref: Option<ModuleRef>,
@@ -65,6 +66,7 @@ impl RouteDefinition {
             validators: Vec::new(),
             validation_enabled: false,
             validation_disabled: false,
+            validation_options: ValidationOptions::default(),
             module_name: None,
             controller_prefix: None,
             module_ref: None,

@@ -6,6 +6,7 @@ use crate::pipeline::PipelineComponents;
 use crate::{
     BootErrorKind, BootRequest, ExceptionFilter, ExecutionInterceptor, Guard, Interceptor,
     Middleware, ModuleRef, Pipe, Result, RouteVersioning, SerializationOptions, SseEvent, Validate,
+    ValidationOptions,
 };
 use futures_core::Stream;
 use serde::de::DeserializeOwned;
@@ -128,6 +129,11 @@ impl ControllerDefinition {
 
     pub fn with_validation(mut self) -> Self {
         self.pipeline.enable_validation();
+        self
+    }
+
+    pub fn with_validation_options(mut self, options: ValidationOptions) -> Self {
+        self.pipeline.enable_validation_with_options(options);
         self
     }
 

@@ -8,7 +8,7 @@ use crate::{
     ApiVersioning, BootError, BootErrorKind, BootResponse, ExceptionFilter, ExecutionInterceptor,
     Guard, Interceptor, MessagePatternDefinition, Middleware, MiddlewareRoute, Module, ModuleRef,
     OpenApiDocument, OpenApiInfo, Pipe, ProviderDefinition, ProviderToken, Result, RouteDefinition,
-    SerializationInterceptor, WebSocketGatewayDefinition,
+    SerializationInterceptor, ValidationOptions, WebSocketGatewayDefinition,
 };
 #[cfg(feature = "compression")]
 use crate::{CompressionInterceptor, CompressionOptions};
@@ -288,6 +288,12 @@ impl BootApplicationBuilder {
     /// Enable DTO validation for routes that carry validation metadata.
     pub fn use_global_validation(mut self) -> Self {
         self.global_pipeline.enable_validation();
+        self
+    }
+
+    /// Enable DTO validation with Nest-style validation options.
+    pub fn use_global_validation_options(mut self, options: ValidationOptions) -> Self {
+        self.global_pipeline.enable_validation_with_options(options);
         self
     }
 

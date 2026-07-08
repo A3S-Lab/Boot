@@ -38,18 +38,26 @@ impl ValidationOptions {
         self
     }
 
-    fn checks_unknown_fields(self) -> bool {
+    pub fn merge(self, other: Self) -> Self {
+        Self {
+            whitelist: self.whitelist || other.whitelist,
+            forbid_non_whitelisted: self.forbid_non_whitelisted || other.forbid_non_whitelisted,
+        }
+    }
+
+    pub(crate) fn checks_unknown_fields(self) -> bool {
         self.whitelist || self.forbid_non_whitelisted
     }
 }
 
-pub(crate) type RequestValidator = Arc<dyn Fn(BootRequest) -> Result<BootRequest> + Send + Sync>;
+pub(crate) type RequestValidator =
+    Arc<dyn Fn(BootRequest, ValidationOptions) -> Result<BootRequest> + Send + Sync>;
 
 pub(crate) fn body_validator<T>() -> RequestValidator
 where
     T: DeserializeOwned + Validate + 'static,
 {
-    Arc::new(|request| {
+    Arc::new(|request, _| {
         request.require_json_content_type()?;
         validate_value(request.json::<T>()?).map(|_| request)
     })
@@ -59,14 +67,11 @@ pub(crate) fn body_validator_with_options<T>(options: ValidationOptions) -> Requ
 where
     T: DeserializeOwned + Validate + ValidationSchema + 'static,
 {
-    Arc::new(move |mut request| {
+    Arc::new(move |mut request, inherited_options| {
+        let options = inherited_options.merge(options);
         request.require_json_content_type()?;
         let value = request.json::<Value>()?;
-        let value = apply_json_field_options::<T>(value, options, "body property")?;
-        validate_value(
-            serde_json::from_value::<T>(value.clone())
-                .map_err(|err| BootError::BadRequest(err.to_string()))?,
-        )?;
+        let value = validate_json_value_with_options::<T>(value, options, "body property")?;
         if options.whitelist {
             let body =
                 serde_json::to_vec(&value).map_err(|err| BootError::Internal(err.to_string()))?;
@@ -80,14 +85,15 @@ pub(crate) fn params_validator<T>() -> RequestValidator
 where
     T: DeserializeOwned + Validate + 'static,
 {
-    Arc::new(|request| validate_value(request.params::<T>()?).map(|_| request))
+    Arc::new(|request, _| validate_value(request.params::<T>()?).map(|_| request))
 }
 
 pub(crate) fn params_validator_with_options<T>(options: ValidationOptions) -> RequestValidator
 where
     T: DeserializeOwned + Validate + ValidationSchema + 'static,
 {
-    Arc::new(move |mut request| {
+    Arc::new(move |mut request, inherited_options| {
+        let options = inherited_options.merge(options);
         apply_map_field_options::<T>(&mut request.params, options, "path parameter")?;
         validate_value(request.params::<T>()?)?;
         Ok(request)
@@ -98,14 +104,15 @@ pub(crate) fn query_validator<T>() -> RequestValidator
 where
     T: DeserializeOwned + Validate + 'static,
 {
-    Arc::new(|request| validate_value(request.query::<T>()?).map(|_| request))
+    Arc::new(|request, _| validate_value(request.query::<T>()?).map(|_| request))
 }
 
 pub(crate) fn query_validator_with_options<T>(options: ValidationOptions) -> RequestValidator
 where
     T: DeserializeOwned + Validate + ValidationSchema + 'static,
 {
-    Arc::new(move |mut request| {
+    Arc::new(move |mut request, inherited_options| {
+        let options = inherited_options.merge(options);
         let pairs = request.query_pairs()?;
         apply_pair_field_options::<T>(&pairs, &mut request.query, options, "query parameter")?;
         if options.whitelist {
@@ -133,6 +140,22 @@ fn validation_bad_request(error: BootError, type_name: &'static str) -> BootErro
         }
         error => error,
     }
+}
+
+pub(crate) fn validate_json_value_with_options<T>(
+    value: Value,
+    options: ValidationOptions,
+    label: &'static str,
+) -> Result<Value>
+where
+    T: DeserializeOwned + Validate + ValidationSchema,
+{
+    let value = apply_json_field_options::<T>(value, options, label)?;
+    validate_value(
+        serde_json::from_value::<T>(value.clone())
+            .map_err(|err| BootError::BadRequest(err.to_string()))?,
+    )?;
+    Ok(value)
 }
 
 fn apply_json_field_options<T>(
@@ -243,6 +266,7 @@ fn handle_unknown_fields(
 fn plural_label(label: &'static str) -> &'static str {
     match label {
         "body property" => "body properties",
+        "message property" => "message properties",
         "path parameter" => "path parameters",
         "query parameter" => "query parameters",
         value => value,

@@ -2,7 +2,7 @@ use super::{
     catch_errors, ExceptionFilter, ExecutionInterceptor, ExecutionInterceptorAdapter, Guard,
     Interceptor, Middleware, Pipe,
 };
-use crate::BootErrorKind;
+use crate::{BootErrorKind, ValidationOptions};
 use std::any::TypeId;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -138,6 +138,7 @@ pub(crate) struct PipelineComponents {
     pub interceptors: Vec<PipelineComponent<dyn Interceptor>>,
     pub filters: Vec<PipelineComponent<dyn ExceptionFilter>>,
     pub validation_enabled: bool,
+    pub validation_options: ValidationOptions,
 }
 
 impl PipelineComponents {
@@ -208,6 +209,11 @@ impl PipelineComponents {
 
     pub fn enable_validation(&mut self) {
         self.validation_enabled = true;
+    }
+
+    pub fn enable_validation_with_options(&mut self, options: ValidationOptions) {
+        self.validation_enabled = true;
+        self.validation_options = self.validation_options.merge(options);
     }
 }
 
