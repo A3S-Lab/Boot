@@ -333,6 +333,9 @@ impl BootApplication {
                 .on_application_bootstrap(instance.module_ref.clone())
                 .await?;
         }
+        for gateway in &self.gateways {
+            gateway.after_init().await?;
+        }
         Ok(())
     }
 

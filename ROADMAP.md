@@ -63,6 +63,8 @@ Implemented today:
   `#[module]` implements `Module` from Nest-style metadata lists for imports,
   providers, controllers, routes, gateways, message controllers, exports,
   route prefixes, and global modules.
+- WebSocket lifecycle macros: `#[on_gateway_init]`,
+  `#[on_gateway_connection]`, and `#[on_gateway_disconnect]`.
 - Host-scoped HTTP routes with `RouteDefinition::with_host(...)` and
   `ControllerDefinition::with_host(...)` for Nest-style host-based controllers.
 - API versioning macros: `#[version]`, `#[versions]`, and
@@ -132,8 +134,9 @@ Implemented today:
   include/exclude rules, filter integration for errors, and adapter validation
   before middleware execution.
 - WebSocket gateways with adapter-neutral messages and connections, gateway
-  pipes/guards/interceptors, provider-backed handlers, Nest-style gateway
-  macros, and Axum WebSocket route registration.
+  init/connection/disconnect lifecycle hooks, pipes/guards/interceptors,
+  provider-backed handlers, Nest-style gateway macros, and Axum WebSocket route
+  registration.
 - Microservice transports with adapter-neutral `TransportMessage` /
   `TransportReply`, request-response and event-only message patterns,
   provider-backed handlers, validation helpers, transport pipes/guards/
@@ -541,6 +544,10 @@ Tasks:
 - Add gateway registration API. (Implemented through `WebSocketGatewayDefinition`,
   `Module::gateways`, `DynamicModule::gateway`, and application builder support)
 - Add `#[websocket_gateway]` and `#[subscribe_message]` macros. (Implemented)
+- Add gateway lifecycle hooks comparable to Nest `OnGatewayInit`,
+  `OnGatewayConnection`, and `OnGatewayDisconnect`. (Implemented with
+  `#[on_gateway_init]`, `#[on_gateway_connection]`,
+  `#[on_gateway_disconnect]`, and explicit hook builders)
 - Implement Axum WebSocket adapter support behind the `axum` feature.
   (Implemented)
 - Reuse DI and pipeline concepts where possible. (Implemented with provider-backed
@@ -550,6 +557,8 @@ Acceptance:
 
 - A gateway can accept a WebSocket connection and dispatch messages by event
   name. (Covered)
+- Gateway init, connection, and disconnect hooks run through explicit APIs,
+  provider-backed macros, and application bootstrap. (Covered)
 - Gateway handlers can use providers. (Covered)
 - Gateway guards/interceptors/pipes run in Nest-style deterministic order.
   (Covered)

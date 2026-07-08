@@ -316,6 +316,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@Sse("events")` | `#[sse("/events")]` on an async method returning an SSE event stream |
 | `@WebSocketGateway()` | `#[websocket_gateway("/ws")]` on an inherent `impl` block |
 | `@SubscribeMessage("cat.find")` | `#[subscribe_message("cat.find")]` on an async gateway method |
+| `OnGatewayInit` / `OnGatewayConnection` / `OnGatewayDisconnect` | `#[on_gateway_init]`, `#[on_gateway_connection]`, and `#[on_gateway_disconnect]` |
 | Microservice controller | `#[message_controller]` on an inherent `impl` block |
 | `@MessagePattern("cat.find")` | `#[message_pattern("cat.find")]` on an async message method |
 | `@EventPattern("cat.created")` | `#[event_pattern("cat.created")]` on an async event method |
@@ -1030,17 +1031,20 @@ let route = RouteDefinition::get_json("/cats/{id}", |request: BootRequest| async
 ## WebSocket Gateways
 
 WebSocket gateways mirror Nest's `@WebSocketGateway()` and
-`@SubscribeMessage()` style while keeping the runtime adapter-neutral. Messages
-are JSON objects with an `event` string and optional `data` value. The Axum
-adapter registers gateway paths as WebSocket upgrade routes behind the `axum`
-feature.
+`@SubscribeMessage()` style while keeping the runtime adapter-neutral. Gateway
+lifecycle hooks mirror Nest's `OnGatewayInit`, `OnGatewayConnection`, and
+`OnGatewayDisconnect` interfaces. Messages are JSON objects with an `event`
+string and optional `data` value. The Axum adapter registers gateway paths as
+WebSocket upgrade routes behind the `axum` feature.
 
 ```rust
 use std::sync::Arc;
 
 use a3s_boot::{
-    injectable, subscribe_message, websocket_gateway, Module, ModuleRef,
-    ProviderDefinition, Result, WebSocketGatewayDefinition, WebSocketMessage,
+    injectable, on_gateway_connection, on_gateway_disconnect, on_gateway_init,
+    subscribe_message, websocket_gateway, Module, ModuleRef, ProviderDefinition,
+    Result, WebSocketGatewayConnection, WebSocketGatewayDefinition,
+    WebSocketGatewayInitContext, WebSocketMessage,
 };
 use serde::Serialize;
 
@@ -1070,6 +1074,16 @@ struct CatsGateway {
 
 #[websocket_gateway("/cats/ws")]
 impl CatsGateway {
+    #[on_gateway_init]
+    async fn after_init(&self, _context: WebSocketGatewayInitContext) -> Result<()> {
+        Ok(())
+    }
+
+    #[on_gateway_connection]
+    async fn handle_connection(&self, _connection: WebSocketGatewayConnection) -> Result<()> {
+        Ok(())
+    }
+
     #[subscribe_message("cat.find")]
     async fn find(&self, message: WebSocketMessage) -> Result<WebSocketMessage> {
         let id = message
@@ -1078,6 +1092,11 @@ impl CatsGateway {
             .and_then(serde_json::Value::as_str)
             .unwrap_or("unknown");
         WebSocketMessage::json("cat.found", &self.cats.find_one(id))
+    }
+
+    #[on_gateway_disconnect]
+    async fn handle_disconnect(&self, _connection: WebSocketGatewayConnection) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -1132,6 +1151,10 @@ hooks run in deterministic order: guards, interceptor `before`, pipes, handler,
 then interceptor `after` in reverse order. They are separate from HTTP
 middleware because WebSocket message dispatch is event-based rather than
 request/response-based, but they follow the same Nest-style pipeline order.
+`BootApplication::bootstrap()` runs gateway init hooks. Use
+`connect_async(...)` or `WebSocketGatewayConnection::open()` and `close()` when
+an adapter or in-process test wants connection and disconnect hooks; the Axum
+adapter uses that lifecycle-aware path for real WebSocket upgrades.
 
 ## Microservice Transports
 

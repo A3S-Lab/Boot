@@ -1,7 +1,8 @@
 use a3s_boot::{
     BootApplication, BootError, BootRequest, BoxFuture, ExecutionContext, ExecutionProtocol, Guard,
     HttpMethod, Module, ModuleRef, ProviderDefinition, Result, WebSocketContext,
-    WebSocketGatewayDefinition, WebSocketInterceptor, WebSocketMessage,
+    WebSocketGatewayConnection, WebSocketGatewayDefinition, WebSocketGatewayInitContext,
+    WebSocketInterceptor, WebSocketMessage,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -79,6 +80,86 @@ async fn websocket_gateway_dispatches_messages_by_event() {
         .unwrap();
 
     assert_eq!(reply, WebSocketMessage::new("pong", json!({ "id": 1 })));
+}
+
+#[tokio::test]
+async fn websocket_gateway_lifecycle_hooks_run_for_init_connection_and_disconnect() {
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let init_log = Arc::clone(&log);
+    let connection_log = Arc::clone(&log);
+    let disconnect_log = Arc::clone(&log);
+    let handler_log = Arc::clone(&log);
+
+    let app = BootApplication::builder()
+        .gateway(
+            WebSocketGatewayDefinition::new("/events")
+                .unwrap()
+                .with_after_init(move |context: WebSocketGatewayInitContext| {
+                    let init_log = Arc::clone(&init_log);
+                    async move {
+                        init_log.lock().unwrap().push(format!(
+                            "init:{}:{}",
+                            context.gateway_path,
+                            context.events.join(",")
+                        ));
+                        Ok(())
+                    }
+                })
+                .with_connection_hook(move |connection: WebSocketGatewayConnection| {
+                    let connection_log = Arc::clone(&connection_log);
+                    async move {
+                        connection_log
+                            .lock()
+                            .unwrap()
+                            .push(format!("connect:{}", connection.request().path()));
+                        Ok(())
+                    }
+                })
+                .with_disconnect_hook(move |connection: WebSocketGatewayConnection| {
+                    let disconnect_log = Arc::clone(&disconnect_log);
+                    async move {
+                        disconnect_log
+                            .lock()
+                            .unwrap()
+                            .push(format!("disconnect:{}", connection.request().path()));
+                        Ok(())
+                    }
+                })
+                .subscribe("ping", move |message: WebSocketMessage| {
+                    let handler_log = Arc::clone(&handler_log);
+                    async move {
+                        handler_log.lock().unwrap().push("handler".to_string());
+                        Ok(WebSocketMessage::new("pong", message.data))
+                    }
+                })
+                .unwrap(),
+        )
+        .build()
+        .unwrap();
+
+    app.bootstrap().await.unwrap();
+    let gateway = app.gateway_for("/events").unwrap();
+    let connection = gateway
+        .connect_async(BootRequest::new(HttpMethod::Get, "/events"))
+        .await
+        .unwrap();
+    let reply = connection
+        .dispatch(WebSocketMessage::new("ping", json!({ "id": 1 })))
+        .await
+        .unwrap()
+        .unwrap();
+    connection.close().await.unwrap();
+
+    assert_eq!(reply, WebSocketMessage::new("pong", json!({ "id": 1 })));
+    assert_eq!(
+        log.lock().unwrap().as_slice(),
+        [
+            "init:/events:ping",
+            "connect:/events",
+            "handler",
+            "disconnect:/events"
+        ]
+    );
 }
 
 #[tokio::test]

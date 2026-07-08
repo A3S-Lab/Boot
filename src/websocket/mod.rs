@@ -121,6 +121,81 @@ impl Deref for WebSocketContext {
     }
 }
 
+/// Context passed to WebSocket gateway initialization hooks.
+#[derive(Debug, Clone)]
+pub struct WebSocketGatewayInitContext {
+    pub gateway_path: String,
+    pub module_name: Option<String>,
+    pub events: Vec<String>,
+}
+
+impl WebSocketGatewayInitContext {
+    fn new(gateway: &WebSocketGatewayDefinition) -> Self {
+        Self {
+            gateway_path: gateway.path.clone(),
+            module_name: gateway.module_name.clone(),
+            events: gateway.handlers.keys().cloned().collect(),
+        }
+    }
+}
+
+/// Hook invoked when a WebSocket gateway is initialized during application bootstrap.
+pub trait WebSocketGatewayInitHook: Send + Sync + 'static {
+    fn after_init(&self, context: WebSocketGatewayInitContext) -> BoxFuture<'static, Result<()>>;
+}
+
+impl<F, Fut> WebSocketGatewayInitHook for F
+where
+    F: Fn(WebSocketGatewayInitContext) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
+{
+    fn after_init(&self, context: WebSocketGatewayInitContext) -> BoxFuture<'static, Result<()>> {
+        Box::pin(self(context))
+    }
+}
+
+/// Hook invoked when a WebSocket client connects to a gateway.
+pub trait WebSocketGatewayConnectionHook: Send + Sync + 'static {
+    fn handle_connection(
+        &self,
+        connection: WebSocketGatewayConnection,
+    ) -> BoxFuture<'static, Result<()>>;
+}
+
+impl<F, Fut> WebSocketGatewayConnectionHook for F
+where
+    F: Fn(WebSocketGatewayConnection) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
+{
+    fn handle_connection(
+        &self,
+        connection: WebSocketGatewayConnection,
+    ) -> BoxFuture<'static, Result<()>> {
+        Box::pin(self(connection))
+    }
+}
+
+/// Hook invoked when a WebSocket client disconnects from a gateway.
+pub trait WebSocketGatewayDisconnectHook: Send + Sync + 'static {
+    fn handle_disconnect(
+        &self,
+        connection: WebSocketGatewayConnection,
+    ) -> BoxFuture<'static, Result<()>>;
+}
+
+impl<F, Fut> WebSocketGatewayDisconnectHook for F
+where
+    F: Fn(WebSocketGatewayConnection) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
+{
+    fn handle_disconnect(
+        &self,
+        connection: WebSocketGatewayConnection,
+    ) -> BoxFuture<'static, Result<()>> {
+        Box::pin(self(connection))
+    }
+}
+
 /// Message transformation hook for WebSocket gateways.
 pub trait WebSocketPipe: Send + Sync + 'static {
     fn transform(&self, message: WebSocketMessage) -> BoxFuture<'static, Result<WebSocketMessage>>;
@@ -231,6 +306,9 @@ where
 pub struct WebSocketGatewayDefinition {
     path: String,
     handlers: BTreeMap<String, Arc<dyn WebSocketMessageHandler>>,
+    init_hooks: Vec<Arc<dyn WebSocketGatewayInitHook>>,
+    connection_hooks: Vec<Arc<dyn WebSocketGatewayConnectionHook>>,
+    disconnect_hooks: Vec<Arc<dyn WebSocketGatewayDisconnectHook>>,
     pipes: Vec<Arc<dyn WebSocketPipe>>,
     guards: Vec<Arc<dyn WebSocketGuard>>,
     interceptors: Vec<Arc<dyn WebSocketInterceptor>>,
@@ -244,6 +322,9 @@ impl WebSocketGatewayDefinition {
         Ok(Self {
             path,
             handlers: BTreeMap::new(),
+            init_hooks: Vec::new(),
+            connection_hooks: Vec::new(),
+            disconnect_hooks: Vec::new(),
             pipes: Vec::new(),
             guards: Vec::new(),
             interceptors: Vec::new(),
@@ -265,6 +346,15 @@ impl WebSocketGatewayDefinition {
 
     pub fn events(&self) -> Vec<&str> {
         self.handlers.keys().map(String::as_str).collect()
+    }
+
+    /// Run gateway initialization hooks.
+    pub async fn after_init(&self) -> Result<()> {
+        let context = WebSocketGatewayInitContext::new(self);
+        for hook in &self.init_hooks {
+            hook.after_init(context.clone()).await?;
+        }
+        Ok(())
     }
 
     pub fn matches_path(&self, path: &str) -> bool {
@@ -296,6 +386,30 @@ impl WebSocketGatewayDefinition {
         self.handlers
             .insert(event, Arc::new(WebSocketHandlerAdapter { handler }));
         Ok(self)
+    }
+
+    pub fn with_after_init<H>(mut self, hook: H) -> Self
+    where
+        H: WebSocketGatewayInitHook,
+    {
+        self.init_hooks.push(Arc::new(hook));
+        self
+    }
+
+    pub fn with_connection_hook<H>(mut self, hook: H) -> Self
+    where
+        H: WebSocketGatewayConnectionHook,
+    {
+        self.connection_hooks.push(Arc::new(hook));
+        self
+    }
+
+    pub fn with_disconnect_hook<H>(mut self, hook: H) -> Self
+    where
+        H: WebSocketGatewayDisconnectHook,
+    {
+        self.disconnect_hooks.push(Arc::new(hook));
+        self
     }
 
     pub fn with_pipe<P>(mut self, pipe: P) -> Self
@@ -373,6 +487,12 @@ impl WebSocketGatewayDefinition {
         })
     }
 
+    pub async fn connect_async(&self, request: BootRequest) -> Result<WebSocketGatewayConnection> {
+        let connection = self.connect(request)?;
+        connection.open().await?;
+        Ok(connection)
+    }
+
     pub async fn dispatch(
         &self,
         request: BootRequest,
@@ -441,6 +561,20 @@ pub struct WebSocketGatewayConnection {
 impl WebSocketGatewayConnection {
     pub fn request(&self) -> &BootRequest {
         &self.request
+    }
+
+    pub async fn open(&self) -> Result<()> {
+        for hook in &self.gateway.connection_hooks {
+            hook.handle_connection(self.clone()).await?;
+        }
+        Ok(())
+    }
+
+    pub async fn close(&self) -> Result<()> {
+        for hook in self.gateway.disconnect_hooks.iter().rev() {
+            hook.handle_disconnect(self.clone()).await?;
+        }
+        Ok(())
     }
 
     pub async fn dispatch(

@@ -8,9 +8,10 @@ use a3s_boot::{
     controller, injectable, ApiVersioning, BootApplication, BootError, BootErrorKind, BootRequest,
     BootResponse, BoxFuture, ControllerDefinition, ExceptionFilter, ExecutionContext, Guard,
     Interceptor, Module, ModuleRef, OpenApiInfo, ParseArrayPipe, ParseBoolPipe, ParseEnumPipe,
-    ParseFloatPipe, ParseIntPipe, ParseUuidPipe, Pipe, ProviderRef, ProviderToken, Result,
-    SseEvent, SseStream, StringTemplateViewEngine, TransportMessage, TransportReply, UuidVersion,
-    Validate, ViewModule, WebSocketMessage,
+    ParseFloatPipe, ParseIntPipe, ParseUuidPipe, Pipe, ProviderDefinition, ProviderRef,
+    ProviderToken, Result, SseEvent, SseStream, StringTemplateViewEngine, TransportMessage,
+    TransportReply, UuidVersion, Validate, ViewModule, WebSocketGatewayConnection,
+    WebSocketGatewayInitContext, WebSocketMessage,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -84,12 +85,28 @@ struct MacroCatsController {
 #[derive(Debug)]
 struct MacroCatsGateway {
     cats: Arc<MacroCatsService>,
+    lifecycle_log: Arc<MacroGatewayLifecycleLog>,
 }
 
 #[injectable]
 #[derive(Debug)]
 struct MacroCatsMessages {
     cats: Arc<MacroCatsService>,
+}
+
+#[derive(Debug, Default)]
+struct MacroGatewayLifecycleLog {
+    entries: std::sync::Mutex<Vec<String>>,
+}
+
+impl MacroGatewayLifecycleLog {
+    fn push(&self, entry: impl Into<String>) {
+        self.entries.lock().unwrap().push(entry.into());
+    }
+
+    fn entries(&self) -> Vec<String> {
+        self.entries.lock().unwrap().clone()
+    }
 }
 
 fn current_tenant(request: &BootRequest) -> Result<String> {
@@ -164,6 +181,23 @@ impl FromStr for MacroCatKind {
 
 #[a3s_boot::websocket_gateway("/macro-cats/ws")]
 impl MacroCatsGateway {
+    #[a3s_boot::on_gateway_init]
+    async fn after_init(&self, context: WebSocketGatewayInitContext) -> Result<()> {
+        self.lifecycle_log.push(format!(
+            "init:{}:{}",
+            context.gateway_path,
+            context.events.join(",")
+        ));
+        Ok(())
+    }
+
+    #[a3s_boot::on_gateway_connection]
+    async fn handle_connection(&self, connection: WebSocketGatewayConnection) -> Result<()> {
+        self.lifecycle_log
+            .push(format!("connect:{}", connection.request().path()));
+        Ok(())
+    }
+
     #[a3s_boot::subscribe_message("cat.find")]
     async fn find(&self, message: WebSocketMessage) -> Result<WebSocketMessage> {
         let id = message
@@ -173,6 +207,13 @@ impl MacroCatsGateway {
             .unwrap_or("unknown");
         let cat = self.cats.find_one(id);
         WebSocketMessage::json("cat.found", &cat)
+    }
+
+    #[a3s_boot::on_gateway_disconnect]
+    async fn handle_disconnect(&self, connection: WebSocketGatewayConnection) -> Result<()> {
+        self.lifecycle_log
+            .push(format!("disconnect:{}", connection.request().path()));
+        Ok(())
     }
 }
 
@@ -472,6 +513,7 @@ struct MacroCatDetailsDto {
     providers = [
         MacroCatsService,
         MacroCatsService.into_named_provider("readonly-cats"),
+        ProviderDefinition::singleton(MacroGatewayLifecycleLog::default()),
         MacroAutoCatsReader,
         MacroCatsController,
         MacroCatsGateway,
@@ -1371,17 +1413,31 @@ async fn macros_register_injectable_services_and_controller_routes() {
         .unwrap()
         .contains_key("/macro-cats/events"));
 
-    let ws_reply = app.gateways()[0]
-        .dispatch(
-            BootRequest::new(a3s_boot::HttpMethod::Get, "/macro-cats/ws"),
-            WebSocketMessage::new("cat.find", json!({ "id": "42" })),
-        )
+    app.bootstrap().await.unwrap();
+    let ws_connection = app.gateways()[0]
+        .connect_async(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-cats/ws",
+        ))
+        .await
+        .unwrap();
+    let ws_reply = ws_connection
+        .dispatch(WebSocketMessage::new("cat.find", json!({ "id": "42" })))
         .await
         .unwrap()
         .unwrap();
+    ws_connection.close().await.unwrap();
     assert_eq!(ws_reply.event(), "cat.found");
     assert_eq!(ws_reply.data()["id"], json!("42"));
     assert_eq!(ws_reply.data()["name"], json!("Milo"));
+    assert_eq!(
+        app.get::<MacroGatewayLifecycleLog>().unwrap().entries(),
+        [
+            "init:/macro-cats/ws:cat.find",
+            "connect:/macro-cats/ws",
+            "disconnect:/macro-cats/ws"
+        ]
+    );
 
     let message_reply = app
         .dispatch_message(

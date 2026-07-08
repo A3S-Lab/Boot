@@ -295,7 +295,7 @@ async fn handle_websocket(
             return;
         }
     };
-    let connection = match gateway.connect(request) {
+    let connection = match gateway.connect_async(request).await {
         Ok(connection) => connection,
         Err(error) => {
             let _ = send_websocket_error(&mut socket, error).await;
@@ -309,6 +309,7 @@ async fn handle_websocket(
             Err(error) => {
                 let _ =
                     send_websocket_error(&mut socket, BootError::Adapter(error.to_string())).await;
+                let _ = connection.close().await;
                 return;
             }
         };
@@ -320,6 +321,7 @@ async fn handle_websocket(
             Ok(message) => message,
             Err(error) => {
                 if send_websocket_error(&mut socket, error).await.is_err() {
+                    let _ = connection.close().await;
                     return;
                 }
                 continue;
@@ -329,17 +331,21 @@ async fn handle_websocket(
         match connection.dispatch(message).await {
             Ok(Some(reply)) => {
                 if send_websocket_message(&mut socket, reply).await.is_err() {
+                    let _ = connection.close().await;
                     return;
                 }
             }
             Ok(None) => {}
             Err(error) => {
                 if send_websocket_error(&mut socket, error).await.is_err() {
+                    let _ = connection.close().await;
                     return;
                 }
             }
         }
     }
+
+    let _ = connection.close().await;
 }
 
 fn decode_websocket_message(message: AxumWebSocketMessage) -> Option<Result<WebSocketMessage>> {
