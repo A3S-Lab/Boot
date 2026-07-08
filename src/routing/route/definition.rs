@@ -14,6 +14,8 @@ use crate::routing::host::{
     host_param_names, host_shape_key, host_specificity, match_host_params, match_host_shape,
     validate_host_pattern,
 };
+#[cfg(feature = "axum")]
+use crate::routing::path::has_catch_all;
 use crate::routing::path::{
     match_path_params, match_path_shape, route_param_names, route_shape_key, validate_route_path,
 };
@@ -114,6 +116,11 @@ impl RouteDefinition {
 
     pub fn matches_path(&self, path: &str) -> bool {
         match_path_shape(&self.path, path)
+    }
+
+    #[cfg(feature = "axum")]
+    pub(crate) fn has_catch_all_path(&self) -> bool {
+        has_catch_all(&self.path)
     }
 
     pub fn matches_host(&self, host: Option<&str>) -> bool {

@@ -82,6 +82,24 @@ async fn websocket_gateway_dispatches_messages_by_event() {
 }
 
 #[tokio::test]
+async fn websocket_gateway_captures_catch_all_path_params() {
+    let gateway = WebSocketGatewayDefinition::new("/events/{*topic}")
+        .unwrap()
+        .subscribe("ping", |message: WebSocketMessage| async move {
+            Ok(WebSocketMessage::new("pong", message.data))
+        })
+        .unwrap();
+    let connection = gateway
+        .connect(BootRequest::new(
+            HttpMethod::Get,
+            "/events/cats/created%2Ev1",
+        ))
+        .unwrap();
+
+    assert_eq!(connection.request().param("topic"), Some("cats/created.v1"));
+}
+
+#[tokio::test]
 async fn websocket_gateways_can_use_module_providers() {
     let app = BootApplication::builder().import(WsModule).build().unwrap();
     let gateway = app.gateway_for("/ws").unwrap();

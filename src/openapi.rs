@@ -56,7 +56,7 @@ impl OpenApiDocument {
             }
             components.merge_schemas(route.openapi().schema_components.clone());
 
-            let path = paths.entry(route.path().to_string()).or_default();
+            let path = paths.entry(openapi_route_path(route.path())).or_default();
             for method in openapi_methods(route.method()) {
                 if route.method().is_wildcard() {
                     path.operations
@@ -80,6 +80,26 @@ impl OpenApiDocument {
                 .collect(),
         }
     }
+}
+
+fn openapi_route_path(path: &str) -> String {
+    let path = path.strip_prefix('/').unwrap_or(path);
+    if path.is_empty() {
+        return "/".to_string();
+    }
+
+    let segments = path
+        .split('/')
+        .map(|segment| {
+            segment
+                .strip_prefix("{*")
+                .and_then(|name| name.strip_suffix('}'))
+                .map(|name| format!("{{{name}}}"))
+                .unwrap_or_else(|| segment.to_string())
+        })
+        .collect::<Vec<_>>();
+
+    format!("/{}", segments.join("/"))
 }
 
 /// OpenAPI components generated or registered by routes.

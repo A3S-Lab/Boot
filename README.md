@@ -2714,16 +2714,17 @@ a custom `SessionStore`.
 ## Params And Query
 
 Boot keeps route params adapter-neutral. Use whole `{name}` segments in routes
-and read decoded values from `BootRequest` one at a time or as a typed DTO;
-query strings can be read as raw single values, repeated values, or decoded into
-a typed DTO. Parameter names must be non-empty, well-formed, and unique after
-controller and global prefixes are applied. Route definitions and prefixes are
-path-only and reject query or fragment markers; read query values from the
-request instead. Invalid percent encoding and invalid UTF-8 in decoded params or
-query values map to `BootError::BadRequest`. Prefer `query_value(...)` and
-`query_values(...)` when the handler should reject malformed query strings; use
-`query_pairs(...)` when the handler or adapter needs every decoded query pair,
-including repeated keys.
+and read decoded values from `BootRequest` one at a time or as a typed DTO; use
+a final `{*path}` segment for catch-all routes that capture zero or more
+trailing segments. Query strings can be read as raw single values, repeated
+values, or decoded into a typed DTO. Parameter names must be non-empty,
+well-formed, and unique after controller and global prefixes are applied. Route
+definitions and prefixes are path-only and reject query or fragment markers;
+read query values from the request instead. Invalid percent encoding and
+invalid UTF-8 in decoded params or query values map to `BootError::BadRequest`.
+Prefer `query_value(...)` and `query_values(...)` when the handler should reject
+malformed query strings; use `query_pairs(...)` when the handler or adapter
+needs every decoded query pair, including repeated keys.
 Route definitions can also be inspected without executing handlers via
 `matches_path(...)`, `path_params(...)`, `path_shape(...)`, and
 `path_param_names(...)`.

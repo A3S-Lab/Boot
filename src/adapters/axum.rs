@@ -50,10 +50,9 @@ impl HttpAdapter for AxumAdapter {
 
     fn build(&self, app: BootApplication) -> Result<Self::Output> {
         let fallback_routing = app.api_versioning().is_some()
-            || app
-                .routes()
-                .iter()
-                .any(|route| route.host().is_some() || route.method().is_wildcard());
+            || app.routes().iter().any(|route| {
+                route.host().is_some() || route.method().is_wildcard() || route.has_catch_all_path()
+            });
         let mut router = if fallback_routing {
             let body_limit = self.body_limit;
             let app = app.clone();
@@ -157,7 +156,9 @@ fn axum_route_path(path: &str) -> String {
         .split('/')
         .enumerate()
         .map(|(index, segment)| {
-            if segment.starts_with('{') && segment.ends_with('}') {
+            if segment.starts_with("{*") && segment.ends_with('}') {
+                format!("{{*p{index}}}")
+            } else if segment.starts_with('{') && segment.ends_with('}') {
                 format!("{{p{index}}}")
             } else {
                 segment.to_string()

@@ -8,8 +8,9 @@ pub(crate) fn validate_route_path(path: &str) -> Result<()> {
     }
 
     let mut params = BTreeSet::new();
-    for segment in split_path(path) {
-        validate_route_segment(path, segment, &mut params)?;
+    let segments = split_path(path);
+    for (index, segment) in segments.iter().enumerate() {
+        validate_route_segment(path, segment, index == segments.len() - 1, &mut params)?;
     }
 
     Ok(())
@@ -53,40 +54,65 @@ pub(crate) fn match_path_params(
     let path_segments = split_path(path);
     let mut params = BTreeMap::new();
 
-    if pattern_segments.len() != path_segments.len() {
-        return Ok(None);
-    }
+    let mut path_index = 0;
+    for pattern in &pattern_segments {
+        if let Some(name) = route_wildcard_name(pattern) {
+            let captured = if path_index >= path_segments.len() {
+                String::new()
+            } else {
+                path_segments[path_index..].join("/")
+            };
+            params.insert(name.to_string(), decode_path_param(&captured)?);
+            return Ok(Some(params));
+        }
 
-    for (pattern, value) in pattern_segments.iter().zip(path_segments.iter()) {
+        let Some(value) = path_segments.get(path_index) else {
+            return Ok(None);
+        };
+
         if let Some(name) = route_param_name(pattern) {
             params.insert(name.to_string(), decode_path_param(value)?);
         } else if pattern != value {
             return Ok(None);
         }
+
+        path_index += 1;
     }
 
-    Ok(Some(params))
+    Ok((path_index == path_segments.len()).then_some(params))
 }
 
 pub(crate) fn match_path_shape(pattern: &str, path: &str) -> bool {
     let pattern_segments = split_path(pattern);
     let path_segments = split_path(path);
+    let mut path_index = 0;
 
-    if pattern_segments.len() != path_segments.len() {
-        return false;
+    for pattern in &pattern_segments {
+        if route_wildcard_name(pattern).is_some() {
+            return true;
+        }
+
+        let Some(value) = path_segments.get(path_index) else {
+            return false;
+        };
+
+        if route_param_name(pattern).is_none() && pattern != value {
+            return false;
+        }
+
+        path_index += 1;
     }
 
-    pattern_segments
-        .iter()
-        .zip(path_segments.iter())
-        .all(|(pattern, value)| route_param_name(pattern).is_some() || pattern == value)
+    path_index == path_segments.len()
 }
 
 pub(crate) fn route_shape_key(path: &str) -> String {
     let segments = split_path(path)
         .into_iter()
         .map(|segment| {
-            if route_param_name(segment).is_some() {
+            if route_wildcard_name(segment).is_some() {
+                "{*}"
+            } else if route_param_name(segment).is_some() {
                 "{}"
             } else {
                 segment
@@ -101,17 +127,32 @@ pub(crate) fn route_shape_key(path: &str) -> String {
     }
 }
 
+#[cfg(feature = "axum")]
+pub(crate) fn has_catch_all(path: &str) -> bool {
+    split_path(path)
+        .into_iter()
+        .any(|segment| route_wildcard_name(segment).is_some())
+}
+
 pub(super) fn route_param_names(path: &str) -> Vec<&str> {
     split_path(path)
         .into_iter()
-        .filter_map(route_param_name)
+        .filter_map(route_path_param_name)
         .collect()
 }
 
 pub(super) fn route_specificity(path: &str) -> Vec<u8> {
     split_path(path)
         .into_iter()
-        .map(|segment| u8::from(route_param_name(segment).is_none()))
+        .map(|segment| {
+            if route_wildcard_name(segment).is_some() {
+                0
+            } else if route_param_name(segment).is_some() {
+                1
+            } else {
+                2
+            }
+        })
         .collect()
 }
 
@@ -128,20 +169,37 @@ fn route_param_name(segment: &str) -> Option<&str> {
     segment
         .strip_prefix('{')
         .and_then(|value| value.strip_suffix('}'))
-        .filter(|name| !name.is_empty() && !name.contains(['{', '}']))
+        .filter(|name| !name.is_empty() && !name.starts_with('*') && !name.contains(['{', '}']))
+}
+
+fn route_wildcard_name(segment: &str) -> Option<&str> {
+    segment
+        .strip_prefix("{*")
+        .and_then(|value| value.strip_suffix('}'))
+        .filter(|name| !name.is_empty() && !name.contains(['{', '}', '*']))
+}
+
+fn route_path_param_name(segment: &str) -> Option<&str> {
+    route_param_name(segment).or_else(|| route_wildcard_name(segment))
 }
 
 fn validate_route_segment<'a>(
     path: &str,
     segment: &'a str,
+    is_last: bool,
     params: &mut BTreeSet<&'a str>,
 ) -> Result<()> {
     if !segment.contains(['{', '}']) {
         return Ok(());
     }
 
-    let Some(name) = route_param_name(segment) else {
-        return Err(BootError::InvalidRoutePath(path.to_string()));
+    let name = if let Some(name) = route_wildcard_name(segment) {
+        if !is_last {
+            return Err(BootError::InvalidRoutePath(path.to_string()));
+        }
+        name
+    } else {
+        route_param_name(segment).ok_or_else(|| BootError::InvalidRoutePath(path.to_string()))?
     };
 
     if !params.insert(name) {

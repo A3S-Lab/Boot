@@ -152,6 +152,37 @@ fn openapi_expands_all_routes_and_keeps_exact_method_metadata() {
     assert_eq!(operations["post"]["summary"], "Catch all methods");
 }
 
+#[test]
+fn openapi_documents_catch_all_routes_with_valid_path_parameters() {
+    let app = BootApplication::builder()
+        .route(
+            RouteDefinition::get_json("/files/{*path}", |request: BootRequest| async move {
+                Ok(OpenApiCatDto {
+                    id: request.param("path").unwrap_or("unknown").to_string(),
+                    name: "File".to_string(),
+                })
+            })
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+
+    let document = app.openapi(OpenApiInfo::new("Files API", "1.0.0"));
+    let value = serde_json::to_value(document).unwrap();
+    let paths = value["paths"].as_object().unwrap();
+    let operation = &value["paths"]["/files/{path}"]["get"];
+
+    assert!(paths.contains_key("/files/{path}"));
+    assert!(!paths.contains_key("/files/{*path}"));
+    assert!(has_parameter(
+        operation,
+        "path",
+        "path",
+        true,
+        json!({ "type": "string" })
+    ));
+}
+
 #[cfg(feature = "openapi-schemas")]
 #[test]
 fn openapi_schema_components_can_be_generated_from_schemars() {

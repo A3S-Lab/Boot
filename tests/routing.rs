@@ -60,6 +60,9 @@ fn rejects_malformed_route_param_segments() {
         "/items/id}",
         "/items/{}",
         "/items/{id}-{slug}",
+        "/files/{*}",
+        "/files/{*path}/tail",
+        "/files/{*path}-{id}",
     ] {
         let result = RouteDefinition::get(path, |_| async { Ok(BootResponse::text("ok")) });
 
@@ -77,6 +80,12 @@ fn rejects_duplicate_route_param_names() {
     });
 
     assert!(matches!(result, Err(BootError::InvalidRoutePath(_))));
+
+    let result = RouteDefinition::get("/files/{path}/{*path}", |_| async {
+        Ok(BootResponse::text("ok"))
+    });
+
+    assert!(matches!(result, Err(BootError::InvalidRoutePath(_))));
 }
 
 #[test]
@@ -88,6 +97,30 @@ fn route_definitions_expose_path_shape_and_param_names() {
 
     assert_eq!(route.path_shape(), "/orgs/{}/items/{}");
     assert_eq!(route.path_param_names(), vec!["org_id", "item_id"]);
+}
+
+#[test]
+fn route_definitions_expose_catch_all_path_shape_and_params() {
+    let route =
+        RouteDefinition::get("/files/{*path}", |_| async { Ok(BootResponse::text("ok")) }).unwrap();
+
+    let nested = route
+        .path_params("/files/readme%2Emd/versions/v1")
+        .unwrap()
+        .unwrap();
+    let empty = route.path_params("/files").unwrap().unwrap();
+    let slash = route.path_params("/files/a%2Fb/c").unwrap().unwrap();
+
+    assert_eq!(route.path_shape(), "/files/{*}");
+    assert_eq!(route.path_param_names(), vec!["path"]);
+    assert!(route.matches_path("/files"));
+    assert!(route.matches_path("/files/readme%2Emd/versions/v1"));
+    assert_eq!(
+        nested.get("path").map(String::as_str),
+        Some("readme.md/versions/v1")
+    );
+    assert_eq!(empty.get("path").map(String::as_str), Some(""));
+    assert_eq!(slash.get("path").map(String::as_str), Some("a/b/c"));
 }
 
 #[test]
@@ -263,6 +296,26 @@ fn rejects_routes_with_the_same_method_and_ambiguous_path_shape() {
 }
 
 #[test]
+fn rejects_routes_with_the_same_method_and_catch_all_path_shape() {
+    let result = BootApplication::builder()
+        .route(
+            RouteDefinition::get("/files/{*path}", |_| async {
+                Ok(BootResponse::text("path"))
+            })
+            .unwrap(),
+        )
+        .route(
+            RouteDefinition::get("/files/{*rest}", |_| async {
+                Ok(BootResponse::text("rest"))
+            })
+            .unwrap(),
+        )
+        .build();
+
+    assert!(matches!(result, Err(BootError::DuplicateRoute(_))));
+}
+
+#[test]
 fn rejects_routes_with_the_same_method_path_and_host_shape() {
     let result = BootApplication::builder()
         .route(
@@ -396,6 +449,52 @@ async fn application_call_prefers_static_routes_over_param_routes() {
         .unwrap();
 
     assert_eq!(response.body, b"static");
+}
+
+#[tokio::test]
+async fn application_call_uses_catch_all_after_static_and_param_routes() {
+    let app = BootApplication::builder()
+        .route(
+            RouteDefinition::get("/files/{*path}", |request: BootRequest| async move {
+                Ok(BootResponse::text(format!(
+                    "catch:{}",
+                    request.param("path").unwrap_or("missing")
+                )))
+            })
+            .unwrap(),
+        )
+        .route(
+            RouteDefinition::get("/files/{id}", |request: BootRequest| async move {
+                Ok(BootResponse::text(format!(
+                    "param:{}",
+                    request.param("id").unwrap_or("missing")
+                )))
+            })
+            .unwrap(),
+        )
+        .route(
+            RouteDefinition::get("/files/new", |_| async { Ok(BootResponse::text("static")) })
+                .unwrap(),
+        )
+        .build()
+        .unwrap();
+
+    let static_response = app
+        .call(BootRequest::new(HttpMethod::Get, "/files/new"))
+        .await
+        .unwrap();
+    let param_response = app
+        .call(BootRequest::new(HttpMethod::Get, "/files/readme"))
+        .await
+        .unwrap();
+    let catch_response = app
+        .call(BootRequest::new(HttpMethod::Get, "/files/docs/readme%2Emd"))
+        .await
+        .unwrap();
+
+    assert_eq!(static_response.body_text().unwrap(), "static");
+    assert_eq!(param_response.body_text().unwrap(), "param:readme");
+    assert_eq!(catch_response.body_text().unwrap(), "catch:docs/readme.md");
 }
 
 #[tokio::test]
@@ -658,6 +757,27 @@ fn route_match_returns_route_and_decoded_path_params() {
     assert_eq!(dynamic_match.params().len(), 2);
     assert_eq!(static_match.route().path(), "/files/new/versions/latest");
     assert!(static_match.params().is_empty());
+}
+
+#[test]
+fn route_match_returns_catch_all_path_params() {
+    let app = BootApplication::builder()
+        .route(
+            RouteDefinition::get("/files/{*path}", |_| async {
+                Ok(BootResponse::text("catch"))
+            })
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+
+    let matched = app
+        .route_match(HttpMethod::Get, "/files/docs/readme%2Emd")
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(matched.route().path(), "/files/{*path}");
+    assert_eq!(matched.param("path"), Some("docs/readme.md"));
 }
 
 #[test]

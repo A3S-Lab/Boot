@@ -327,6 +327,89 @@ async fn axum_adapter_prefers_static_routes_over_param_routes() {
 }
 
 #[tokio::test]
+async fn axum_adapter_dispatches_catch_all_routes_after_static_and_param_routes() {
+    use axum::body::{to_bytes, Body};
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    let app = BootApplication::builder()
+        .route(
+            RouteDefinition::get("/files/{*path}", |request: BootRequest| async move {
+                Ok(BootResponse::text(format!(
+                    "catch:{}",
+                    request.param("path").unwrap_or("missing")
+                )))
+            })
+            .unwrap(),
+        )
+        .route(
+            RouteDefinition::get("/files/{id}", |request: BootRequest| async move {
+                Ok(BootResponse::text(format!(
+                    "param:{}",
+                    request.param("id").unwrap_or("missing")
+                )))
+            })
+            .unwrap(),
+        )
+        .route(
+            RouteDefinition::get("/files/new", |_| async { Ok(BootResponse::text("static")) })
+                .unwrap(),
+        )
+        .build()
+        .unwrap();
+    let router = app.into_adapter(&AxumAdapter::new()).unwrap();
+
+    let static_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/files/new")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let param_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/files/readme")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let catch_response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/files/docs/readme%2Emd")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(static_response.status(), StatusCode::OK);
+    assert_eq!(param_response.status(), StatusCode::OK);
+    assert_eq!(catch_response.status(), StatusCode::OK);
+    assert_eq!(
+        to_bytes(static_response.into_body(), 1024).await.unwrap(),
+        "static"
+    );
+    assert_eq!(
+        to_bytes(param_response.into_body(), 1024).await.unwrap(),
+        "param:readme"
+    );
+    assert_eq!(
+        to_bytes(catch_response.into_body(), 1024).await.unwrap(),
+        "catch:docs/readme.md"
+    );
+}
+
+#[tokio::test]
 async fn axum_adapter_dispatches_uri_versioned_routes() {
     use axum::body::{to_bytes, Body};
     use axum::http::{Request, StatusCode};
@@ -1229,6 +1312,35 @@ async fn axum_adapter_registers_websocket_gateway_routes() {
             Request::builder()
                 .method("GET")
                 .uri("/ws")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn axum_adapter_registers_catch_all_websocket_gateway_routes() {
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    let gateway = WebSocketGatewayDefinition::new("/ws/{*topic}")
+        .unwrap()
+        .subscribe("ping", |message: WebSocketMessage| async move {
+            Ok(WebSocketMessage::new("pong", message.data))
+        })
+        .unwrap();
+    let app = BootApplication::builder().gateway(gateway).build().unwrap();
+    let router = app.into_adapter(&AxumAdapter::new()).unwrap();
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/ws/rooms/general")
                 .body(Body::empty())
                 .unwrap(),
         )
