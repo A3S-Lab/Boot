@@ -73,8 +73,8 @@ Implemented today:
   `catch_errors(...)`, `with_catch_filter(...)`, and
   `use_global_catch_filter(...)`.
 - Nest-style built-in single-value pipes with `ParseIntPipe`, `ParseBoolPipe`,
-  `ParseFloatPipe`, `DefaultValuePipe`, and extractor-level `default = ...`
-  fallbacks.
+  `ParseFloatPipe`, `ParseUuidPipe`, `DefaultValuePipe`, and extractor-level
+  `default = ...` fallbacks.
 - JSON body and JSON response helpers.
 - SSE responses with `SseEvent`, `SseStream`, `BootResponse::sse(...)`,
   `RouteDefinition::sse(...)`, `ControllerDefinition::sse(...)`, and Axum

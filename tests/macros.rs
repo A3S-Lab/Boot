@@ -6,9 +6,9 @@ use std::sync::Arc;
 use a3s_boot::{
     controller, injectable, ApiVersioning, BootApplication, BootError, BootErrorKind, BootRequest,
     BootResponse, BoxFuture, ControllerDefinition, ExceptionFilter, ExecutionContext, Guard,
-    Interceptor, Module, ModuleRef, OpenApiInfo, ParseBoolPipe, ParseFloatPipe, ParseIntPipe, Pipe,
-    ProviderToken, Result, SseEvent, SseStream, StringTemplateViewEngine, TransportMessage,
-    TransportReply, Validate, ViewModule, WebSocketMessage,
+    Interceptor, Module, ModuleRef, OpenApiInfo, ParseBoolPipe, ParseFloatPipe, ParseIntPipe,
+    ParseUuidPipe, Pipe, ProviderToken, Result, SseEvent, SseStream, StringTemplateViewEngine,
+    TransportMessage, TransportReply, UuidVersion, Validate, ViewModule, WebSocketMessage,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -253,6 +253,15 @@ impl MacroCatsController {
                 retry
             ),
         })
+    }
+
+    #[get("/uuid/{id}")]
+    async fn uuid_pipe(
+        &self,
+        #[param("id", pipe = ParseUuidPipe)] id: String,
+        #[query("request", pipe = ParseUuidPipe::version(UuidVersion::V4))] request: String,
+    ) -> Result<MacroCatDto> {
+        Ok(MacroCatDto { id, name: request })
     }
 
     #[get("/params/{id}/{kind}")]
@@ -740,7 +749,7 @@ async fn macros_register_injectable_services_and_controller_routes() {
         .build()
         .unwrap();
 
-    assert_eq!(app.routes().len(), 17);
+    assert_eq!(app.routes().len(), 18);
     assert_eq!(app.gateways().len(), 1);
     assert_eq!(app.message_patterns().len(), 3);
     let exports = MacroCatsModule.exports().unwrap();
@@ -920,6 +929,43 @@ async fn macros_register_injectable_services_and_controller_routes() {
         .unwrap_err();
     assert!(
         matches!(invalid_builtin_pipe, BootError::BadRequest(message) if message.contains("numeric string is expected"))
+    );
+
+    let uuid_pipe = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-cats/uuid/550e8400-e29b-41d4-a716-446655440000?request=550e8400-e29b-41d4-a716-446655440000",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        uuid_pipe.body_json::<MacroCatDto>().unwrap(),
+        MacroCatDto {
+            id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+            name: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+        }
+    );
+
+    let invalid_uuid_pipe = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-cats/uuid/not-a-uuid?request=550e8400-e29b-41d4-a716-446655440000",
+        ))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(invalid_uuid_pipe, BootError::BadRequest(message) if message.contains("UUID string is expected"))
+    );
+
+    let invalid_uuid_version_pipe = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-cats/uuid/550e8400-e29b-41d4-a716-446655440000?request=6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+        ))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(invalid_uuid_version_pipe, BootError::BadRequest(message) if message.contains("UUID v4 string is expected"))
     );
 
     let params = app

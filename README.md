@@ -301,6 +301,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@Param("id")` | `#[param("id")]` on a method argument |
 | `@Param("id", ParsePipe)` | `#[param("id", pipe = parse_cat_id)]` on a method argument |
 | `@Param("id", ParseIntPipe)` | `#[param("id", pipe = ParseIntPipe)]` on an integer argument |
+| `@Param("id", ParseUUIDPipe)` | `#[param("id", pipe = ParseUuidPipe)]` on a UUID string argument |
 | `@HostParam("account")` | `#[host_param("account")]` on a method argument |
 | `@Query()` / `@Query("page")` | `#[query]` for a DTO or `#[query("page")]` for one value |
 | `@Query("page", ParsePipe)` | `#[query("page", pipe = parse_page)]` on a method argument |
@@ -511,9 +512,10 @@ Use extractor attributes on method arguments for Nest-style request binding:
 work without a separate parse pipe. For custom Nest-style parameter pipes, add
 `pipe = <expr>` to `#[param]`, `#[query("name")]`, `#[header]`,
 `#[host_param]`, or `#[ip]`; the pipe receives the raw `String` and returns
-`Result<T>`. Boot also includes `ParseIntPipe`, `ParseBoolPipe`, and
-`ParseFloatPipe` for common single-value parsing, plus `default = <expr>` for
-DefaultValuePipe-style fallbacks on missing query, header, host, or path values:
+`Result<T>`. Boot also includes `ParseIntPipe`, `ParseBoolPipe`,
+`ParseFloatPipe`, and `ParseUuidPipe` for common single-value parsing, plus
+`default = <expr>` for DefaultValuePipe-style fallbacks on missing query,
+header, host, or path values:
 
 ```rust
 #[derive(Debug)]
@@ -530,11 +532,12 @@ fn parse_cat_id(value: String) -> Result<CatId> {
 #[get("/{id}")]
 async fn find(
     &self,
-    #[param("id", pipe = parse_cat_id)] id: CatId,
+    #[param("id", pipe = ParseUuidPipe::version(UuidVersion::V4))] id: String,
+    #[query("legacy_id", pipe = parse_cat_id)] legacy_id: Option<CatId>,
     #[query("page", default = 1, pipe = ParseIntPipe)] page: u16,
     #[query("active", pipe = ParseBoolPipe)] active: Option<bool>,
 ) -> Result<CatDto> {
-    self.cats.find(id, page, active).await
+    self.cats.find(id, legacy_id, page, active).await
 }
 ```
 

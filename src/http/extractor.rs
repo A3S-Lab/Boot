@@ -96,6 +96,89 @@ where
     }
 }
 
+/// UUID versions accepted by [`ParseUuidVersionPipe`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UuidVersion {
+    All,
+    V1,
+    V3,
+    V4,
+    V5,
+    V6,
+    V7,
+    V8,
+}
+
+impl UuidVersion {
+    fn expected_nibble(self) -> Option<char> {
+        match self {
+            Self::All => None,
+            Self::V1 => Some('1'),
+            Self::V3 => Some('3'),
+            Self::V4 => Some('4'),
+            Self::V5 => Some('5'),
+            Self::V6 => Some('6'),
+            Self::V7 => Some('7'),
+            Self::V8 => Some('8'),
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::All => "UUID",
+            Self::V1 => "UUID v1",
+            Self::V3 => "UUID v3",
+            Self::V4 => "UUID v4",
+            Self::V5 => "UUID v5",
+            Self::V6 => "UUID v6",
+            Self::V7 => "UUID v7",
+            Self::V8 => "UUID v8",
+        }
+    }
+}
+
+/// Built-in Nest-style pipe that validates UUID request values.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ParseUuidPipe;
+
+impl ParseUuidPipe {
+    pub fn version(version: UuidVersion) -> ParseUuidVersionPipe {
+        ParseUuidVersionPipe::new(version)
+    }
+
+    pub fn v4() -> ParseUuidVersionPipe {
+        Self::version(UuidVersion::V4)
+    }
+}
+
+impl RequestValuePipe<String, String> for ParseUuidPipe {
+    fn transform(&self, value: String) -> Result<String> {
+        parse_uuid_value(value, UuidVersion::All)
+    }
+}
+
+/// Built-in Nest-style pipe that validates UUID request values with a version constraint.
+#[derive(Debug, Clone, Copy)]
+pub struct ParseUuidVersionPipe {
+    version: UuidVersion,
+}
+
+impl ParseUuidVersionPipe {
+    pub fn new(version: UuidVersion) -> Self {
+        Self { version }
+    }
+
+    pub fn version(&self) -> UuidVersion {
+        self.version
+    }
+}
+
+impl RequestValuePipe<String, String> for ParseUuidVersionPipe {
+    fn transform(&self, value: String) -> Result<String> {
+        parse_uuid_value(value, self.version)
+    }
+}
+
 /// Built-in Nest-style pipe that replaces missing optional values with a default.
 #[derive(Debug, Clone)]
 pub struct DefaultValuePipe<T> {
@@ -169,6 +252,54 @@ macro_rules! impl_parse_float_target {
 
 impl_parse_int_target!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize,);
 impl_parse_float_target!(f32, f64);
+
+fn parse_uuid_value(value: String, version: UuidVersion) -> Result<String> {
+    let value = value.trim();
+    if is_uuid(value, version) {
+        return Ok(value.to_string());
+    }
+
+    Err(BootError::BadRequest(format!(
+        "validation failed: {} string is expected",
+        version.label()
+    )))
+}
+
+fn is_uuid(value: &str, version: UuidVersion) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 36 {
+        return false;
+    }
+
+    for index in [8, 13, 18, 23] {
+        if bytes[index] != b'-' {
+            return false;
+        }
+    }
+
+    for (index, byte) in bytes.iter().enumerate() {
+        if matches!(index, 8 | 13 | 18 | 23) {
+            continue;
+        }
+        if !byte.is_ascii_hexdigit() {
+            return false;
+        }
+    }
+
+    let Some(expected) = version.expected_nibble() else {
+        return true;
+    };
+
+    let actual = (bytes[14] as char).to_ascii_lowercase();
+    if actual != expected {
+        return false;
+    }
+
+    matches!(
+        (bytes[19] as char).to_ascii_lowercase(),
+        '8' | '9' | 'a' | 'b'
+    )
+}
 
 fn display_error(error: impl fmt::Display) -> String {
     error.to_string()
