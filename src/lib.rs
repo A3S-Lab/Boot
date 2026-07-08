@@ -43,6 +43,8 @@ mod security;
 mod serialization;
 #[cfg(feature = "session")]
 mod session;
+#[cfg(feature = "static")]
+mod static_files;
 mod testing;
 mod transport;
 mod validation;
@@ -141,6 +143,8 @@ pub use session::{
     InMemorySessionStore, SessionCookieInterceptor, SessionCookieSameSite, SessionManager,
     SessionMiddleware, SessionModule, SessionOptions, SessionStore,
 };
+#[cfg(feature = "static")]
+pub use static_files::{StaticFileOptions, StaticFileService, StaticModule};
 pub use testing::{TestingModule, TestingModuleBuilder};
 #[cfg(feature = "grpc-transport")]
 pub use transport::{GrpcTransport, GrpcTransportClient, GrpcTransportOptions};

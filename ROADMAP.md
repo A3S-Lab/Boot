@@ -143,6 +143,10 @@ Implemented today:
 - Optional multipart file upload helpers with `BootRequest::multipart_form`,
   `MultipartOptions`, text field and uploaded-file accessors, and body/count/
   per-field/per-file limits.
+- Optional provider-backed static file serving with `StaticModule`,
+  `StaticFileService`, GET/HEAD catch-all routes, index-file support, SPA
+  fallback, cache-control headers, content-type detection, and traversal
+  protection.
 
 ## Priority Order
 
@@ -541,6 +545,7 @@ Nest equivalent areas:
 - serialization (implemented)
 - compression (implemented)
 - file upload (implemented)
+- static assets and SPA shells (implemented)
 - security helpers such as CORS, CSRF, helmet-like headers, and rate limiting
   (implemented)
 - sessions (implemented)
@@ -591,6 +596,9 @@ Acceptance:
 - File upload can parse adapter-neutral multipart forms, expose repeated text
   fields and uploaded files, reject non-multipart or malformed requests, and
   enforce body, field, file, and count limits. (Covered)
+- Static assets can be served from an imported module with GET and HEAD routes,
+  optional SPA fallback, cache-control headers, basic content-type detection,
+  hidden dotfile defaults, and root traversal protection. (Covered)
 - Security helpers can handle CORS preflight and actual response headers, add
   helmet-like response headers, reject invalid CSRF tokens on unsafe methods,
   and enforce in-memory fixed-window rate limits. (Covered)

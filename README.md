@@ -177,6 +177,15 @@ Enable optional multipart file upload helpers when handlers need to parse
 a3s-boot = { version = "0.1", features = ["file-upload"] }
 ```
 
+Enable the optional static file module when the application should serve built
+frontend assets or an SPA shell:
+
+```toml
+[dependencies]
+a3s-boot = { version = "0.1", features = ["static"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
 ```rust
 use a3s_boot::{
     AxumAdapter, BootFactory, BootResponse, ControllerDefinition, Module, ModuleRef,
@@ -3246,6 +3255,34 @@ field count, and file count. Non-multipart requests return
 fields return `BootError::BadRequest`; limit failures return
 `BootError::PayloadTooLarge`.
 
+## Static Assets
+
+Enable the `static` feature to import `StaticModule`, Boot's module-level
+equivalent of Nest's `ServeStaticModule`. It registers provider-backed GET and
+HEAD catch-all routes under a configured serve root and reads files through
+`tokio::fs`.
+
+```rust
+use a3s_boot::{BootApplication, Result, StaticModule};
+
+fn app() -> Result<BootApplication> {
+    BootApplication::builder()
+        .import(
+            StaticModule::new("static", "dist")
+                .with_serve_root("/")
+                .with_fallback_file("index.html")
+                .with_cache_control("public, max-age=300"),
+        )
+        .build()
+}
+```
+
+`StaticModule::new("static", "public").with_serve_root("/assets")` serves
+`public/app.css` at `/assets/app.css`. Directory requests serve `index.html`
+when it exists. `with_fallback_file("index.html")` enables SPA fallback for
+missing client-side routes. Dotfiles are not served by default, and paths that
+try to escape the configured root return `BootError::Forbidden`.
+
 ## Security Helpers
 
 Enable the `security` feature to use Nest-style security hooks through the
@@ -3651,6 +3688,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | Logger | Optional provider-backed structured logging through `LoggingModule` |
 | Compression | Optional gzip response compression through `CompressionInterceptor` |
 | File upload | Optional multipart form parsing through `BootRequest` helpers |
+| Static assets | Optional provider-backed static file module for assets and SPA fallback |
 | Security | Optional CORS, security headers, CSRF, and rate limiting helpers |
 | Session | Optional provider-backed session store, middleware, and cookie persistence |
 | Response cookies | Typed `Set-Cookie` and delete-cookie helpers on `BootResponse` |
@@ -3690,6 +3728,7 @@ src/
 ├── security.rs   # Optional CORS, security headers, CSRF, and rate limiting helpers
 ├── serialization.rs # Adapter-neutral JSON response shaping interceptor
 ├── session.rs    # Optional provider-backed session store and cookie pipeline
+├── static_files.rs # Optional provider-backed static file module
 ├── testing.rs    # Nest-style test module builder and compiled testing module
 ├── transport/    # Adapter-neutral microservice message patterns and transports
 ├── validation.rs # DTO validation trait and route validation hooks
