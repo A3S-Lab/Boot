@@ -65,6 +65,9 @@ This repository contains the first framework slice:
   API versioning macros such as `#[version("1")]`, `#[versions("1", "2")]`,
   and `#[version_neutral]`, serialization macros such as
   `#[serialize(exclude = ["password"], skip_null)]`, plus
+  schedule macros such as `#[schedule]`, `#[cron("0 0 0 * * * *")]`,
+  `#[interval("cats.refresh", 60000)]`, and
+  `#[timeout("cats.warmup", 5000)]`, plus
   WebSocket macros such as
   `#[websocket_gateway]` and
   `#[subscribe_message]`, plus microservice macros such as
@@ -106,7 +109,7 @@ This repository contains the first framework slice:
   named exports, global exports, and provider-based injection
 - `ScheduleModule` behind the `schedule` feature for provider-backed
   `Scheduler` injection, in-process timeout/interval/cron jobs, named exports,
-  global exports, and lifecycle-managed shutdown
+  global exports, lifecycle-managed shutdown, and Nest-style schedule macros
 - `QueueModule` behind the `queue` feature for provider-backed `Queue`
   injection, in-process background processors, JSON job payloads, named
   exports, global exports, and lifecycle-managed workers
@@ -337,6 +340,9 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@Version(["1", "2"])` | `#[versions("1", "2")]` below `#[controller]` or on a route method |
 | `VERSION_NEUTRAL` | `#[version_neutral]` below `#[controller]` or on a route method |
 | `@SerializeOptions(...)` | `#[serialize(include = ["id"], exclude = ["password"], skip_null)]` below `#[controller]` or on a route method |
+| `@Cron("0 0 0 * * * *")` | `#[cron("cats.prune", "0 0 0 * * * *")]` inside `#[schedule]` |
+| `@Interval("cats.refresh", 60000)` | `#[interval("cats.refresh", 60000)]` inside `#[schedule]` |
+| `@Timeout("cats.warmup", 5000)` | `#[timeout("cats.warmup", 5000)]` inside `#[schedule]` |
 | `@HttpCode(202)` | `#[http_code(202)]` on a JSON route method |
 | `@Header("cache-control", "max-age=60")` | `#[header("cache-control", "max-age=60")]` on a route method |
 | `@Redirect("/new", 301)` | `#[redirect("/new", status = 301)]` on a route method |
@@ -1812,6 +1818,81 @@ application bootstrap and aborted during application shutdown.
 
 ```rust
 use std::sync::Arc;
+
+use a3s_boot::{
+    BootApplication, Module, ProviderDefinition, Result, ScheduleContext, ScheduleModule,
+};
+
+#[derive(Debug)]
+struct CatsTasks;
+
+#[a3s_boot::schedule]
+impl CatsTasks {
+    #[a3s_boot::interval("cats.refresh", 60000)]
+    async fn refresh_cache(&self, context: ScheduleContext) -> Result<()> {
+        let _run_count = context.run_count;
+        Ok(())
+    }
+
+    #[a3s_boot::cron("cats.prune", "0 0 0 * * * *")]
+    async fn prune_old_records(&self) -> Result<()> {
+        Ok(())
+    }
+
+    #[a3s_boot::timeout("cats.warmup", 5000)]
+    async fn warmup(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct CatsModule {
+    tasks: Arc<CatsTasks>,
+    schedule: ScheduleModule,
+}
+
+impl CatsModule {
+    fn new() -> Self {
+        let tasks = Arc::new(CatsTasks);
+        let schedule = ScheduleModule::in_process("schedule")
+            .jobs(Arc::clone(&tasks).scheduled_jobs());
+
+        Self { tasks, schedule }
+    }
+}
+
+impl Module for CatsModule {
+    fn name(&self) -> &'static str {
+        "cats"
+    }
+
+    fn imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(self.schedule.clone())]
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::from_arc(Arc::clone(&self.tasks))])
+    }
+}
+
+let app = BootApplication::builder()
+    .import(CatsModule::new())
+    .build()?;
+app.bootstrap().await?;
+app.shutdown().await?;
+```
+
+`#[interval(60000)]` and `#[timeout(5000)]` infer the job name from the method
+name. Add an explicit first string argument when the job needs a stable public
+name for logs, metrics, or removal. The duration argument is milliseconds, which
+matches Nest's schedule decorators. A scheduled method may accept no arguments
+or one `ScheduleContext` argument.
+
+The lower-level API remains available for jobs that should be registered
+directly on the module or dynamically during application bootstrap:
+
+```rust
+use std::sync::Arc;
 use std::time::Duration;
 
 use a3s_boot::{
@@ -1868,8 +1949,8 @@ impl Module for CatsModule {
                 }
             })?;
 
-            // Nest @Cron("0 0 * * * *")
-            scheduler.cron("cats.prune", "0 0 * * * *", {
+            // Nest @Cron("0 0 0 * * * *")
+            scheduler.cron("cats.prune", "0 0 0 * * * *", {
                 let cats = Arc::clone(&cats);
                 move |_| {
                     let cats = Arc::clone(&cats);
@@ -1898,11 +1979,11 @@ app.shutdown().await?;
 ```
 
 Use `ScheduleModule::in_process("schedule").interval(...)`,
-`.timeout(...)`, or `.cron(...)` for jobs that can be declared directly on the
-schedule module. Use injected `Scheduler` registration when a job needs other
-providers from the importing module. Add `.named("token")` when a module needs
-multiple scheduler providers, or `.global()` to make one scheduler visible to
-every module scope after registration.
+`.timeout(...)`, `.cron(...)`, or `.jobs(...)` for jobs that can be declared
+directly on the schedule module. Use injected `Scheduler` registration when a
+job needs to be added after bootstrap has started. Add `.named("token")` when a
+module needs multiple scheduler providers, or `.global()` to make one scheduler
+visible to every module scope after registration.
 
 ## Queues
 

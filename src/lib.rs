@@ -58,6 +58,8 @@ pub use a3s_boot_macros::{
     skip_validation, sse, subscribe_message, tag, use_filter, use_guard, use_interceptor, use_pipe,
     validate, version, version_neutral, versions, websocket_gateway,
 };
+#[cfg(all(feature = "macros", feature = "schedule"))]
+pub use a3s_boot_macros::{cron, interval, schedule, timeout};
 #[cfg(feature = "axum")]
 pub use adapters::AxumAdapter;
 pub use app::{BootApplication, BootApplicationBuilder, RouteMatch};

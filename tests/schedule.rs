@@ -70,6 +70,83 @@ async fn schedule_module_runs_timeout_jobs_once() {
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
+#[cfg(feature = "macros")]
+#[derive(Debug)]
+struct MacroScheduleTasks {
+    interval_calls: Arc<AtomicUsize>,
+    timeout_calls: Arc<AtomicUsize>,
+}
+
+#[cfg(feature = "macros")]
+#[a3s_boot::schedule]
+impl MacroScheduleTasks {
+    #[a3s_boot::interval("macro.refresh", 10)]
+    async fn refresh(&self, context: ScheduleContext) -> Result<()> {
+        assert_eq!(context.job_name, "macro.refresh");
+        assert_eq!(
+            context.trigger,
+            ScheduleTrigger::Interval(Duration::from_millis(10))
+        );
+        self.interval_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    #[a3s_boot::timeout(10)]
+    async fn warmup(&self) -> Result<()> {
+        self.timeout_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    #[a3s_boot::cron("macro.prune", "0 0 0 * * * *")]
+    async fn prune(&self) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(feature = "macros")]
+#[tokio::test]
+async fn schedule_macros_register_timeout_interval_and_cron_jobs() {
+    let interval_calls = Arc::new(AtomicUsize::new(0));
+    let timeout_calls = Arc::new(AtomicUsize::new(0));
+    let tasks = Arc::new(MacroScheduleTasks {
+        interval_calls: Arc::clone(&interval_calls),
+        timeout_calls: Arc::clone(&timeout_calls),
+    });
+    let scheduler = Scheduler::in_process();
+    let app = BootApplication::builder()
+        .import(
+            ScheduleModule::from_scheduler("schedule", scheduler.clone())
+                .jobs(Arc::clone(&tasks).scheduled_jobs()),
+        )
+        .build()
+        .unwrap();
+
+    let jobs = scheduler.jobs().unwrap();
+    assert_eq!(jobs.len(), 3);
+    assert_eq!(jobs[0].name, "macro.prune");
+    assert_eq!(
+        jobs[0].trigger,
+        ScheduleTrigger::Cron("0 0 0 * * * *".to_string())
+    );
+    assert_eq!(jobs[1].name, "macro.refresh");
+    assert_eq!(
+        jobs[1].trigger,
+        ScheduleTrigger::Interval(Duration::from_millis(10))
+    );
+    assert_eq!(jobs[2].name, "warmup");
+    assert_eq!(
+        jobs[2].trigger,
+        ScheduleTrigger::Timeout(Duration::from_millis(10))
+    );
+
+    app.bootstrap().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(45)).await;
+    app.shutdown().await.unwrap();
+
+    assert!(interval_calls.load(Ordering::SeqCst) >= 2);
+    assert_eq!(timeout_calls.load(Ordering::SeqCst), 1);
+}
+
 #[derive(Debug)]
 struct RefreshService {
     calls: Arc<AtomicUsize>,

@@ -587,6 +587,14 @@ impl ScheduleModule {
         self
     }
 
+    pub fn jobs<I>(mut self, jobs: I) -> Self
+    where
+        I: IntoIterator<Item = ScheduledJob>,
+    {
+        self.jobs.extend(jobs);
+        self
+    }
+
     pub fn timeout<T>(self, name: impl Into<String>, delay: Duration, task: T) -> Self
     where
         T: ScheduledTask,

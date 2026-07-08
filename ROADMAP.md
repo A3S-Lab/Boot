@@ -92,8 +92,9 @@ Implemented today:
 - Typed cache modules with `CacheModule`, `Cache`, in-memory storage,
   default TTLs, named/global provider exports, and cache-store abstraction.
 - Provider-backed task scheduling with `ScheduleModule`, `Scheduler`,
-  in-process timeout/interval/cron jobs, named/global provider exports, and
-  lifecycle-managed shutdown.
+  in-process timeout/interval/cron jobs, named/global provider exports,
+  Nest-style `#[schedule]` / `#[cron]` / `#[interval]` / `#[timeout]` macros,
+  and lifecycle-managed shutdown.
 - Provider-backed queues with `QueueModule`, `Queue`, in-process background
   processors, typed serde JSON payloads, named/global provider exports, and
   lifecycle-managed workers.
@@ -511,8 +512,8 @@ Acceptance:
 - Cache can register typed providers, cache serde values with TTL, and
   participate in module imports/exports. (Covered)
 - Schedule can register typed providers, run timeout/interval/cron jobs through
-  lifecycle-managed in-process tasks, and participate in module imports/exports.
-  (Covered)
+  lifecycle-managed in-process tasks, expose Nest-style schedule macros, and
+  participate in module imports/exports. (Covered)
 - Queue can register typed providers, enqueue serde JSON jobs, run named
   processors through lifecycle-managed in-process workers, and participate in
   module imports/exports. (Covered)
