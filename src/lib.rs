@@ -64,7 +64,10 @@ pub use a3s_boot_macros::{cron, interval, schedule, timeout};
 pub use a3s_boot_macros::{event_listener, on_event};
 #[cfg(feature = "axum")]
 pub use adapters::AxumAdapter;
-pub use app::{BootApplication, BootApplicationBuilder, RouteMatch};
+pub use app::{
+    BootApplication, BootApplicationBuilder, BootApplicationContext, BootApplicationHandle,
+    BootFactory, BootMicroservice, RouteMatch,
+};
 #[cfg(feature = "cache")]
 pub use cache::{Cache, CacheModule, CacheOptions, CacheStore, InMemoryCacheStore};
 #[cfg(feature = "compression")]

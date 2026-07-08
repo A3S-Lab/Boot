@@ -109,7 +109,7 @@ a3s-boot = { version = "0.1", features = ["file-upload"] }
 
 ```rust
 use a3s_boot::{
-    AxumAdapter, BootApplication, BootResponse, ControllerDefinition, Module, ModuleRef,
+    AxumAdapter, BootFactory, BootResponse, ControllerDefinition, Module, ModuleRef,
     ProviderDefinition, Result,
 };
 
@@ -146,8 +146,8 @@ impl Module for AppModule {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let app = BootApplication::builder().import(AppModule).build()?;
-    app.serve_with(&AxumAdapter::new(), ([127, 0, 0, 1], 3000).into()).await
+    let mut app = BootFactory::create(AppModule)?;
+    app.listen_with(&AxumAdapter::new(), ([127, 0, 0, 1], 3000).into()).await
 }
 ```
 
@@ -209,6 +209,11 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@Inject("TOKEN")` | `#[inject("token")]` on an `Arc<T>` or `Option<Arc<T>>` field |
 | `@Optional()` | `Option<Arc<T>>` on an injectable field |
 | `@Module({ providers, controllers, imports })` | `impl Module` with `providers()`, `controllers()`, and `imports()` |
+| `NestFactory.create(AppModule)` | `BootFactory::create(AppModule)?` |
+| `app.listen(3000)` | `app.listen_with(&AxumAdapter::new(), addr).await` |
+| `app.close()` | `app.close().await` |
+| `NestFactory.createApplicationContext(...)` | `BootFactory::create_application_context(...)` |
+| `NestFactory.createMicroservice(...)` | `BootFactory::create_microservice(...)` |
 
 These are Rust procedural macros, not TypeScript runtime decorators. They
 generate ordinary `ProviderDefinition`, `ControllerDefinition`, and
@@ -220,7 +225,7 @@ into:
 use std::sync::Arc;
 
 use a3s_boot::{
-    controller, injectable, AxumAdapter, BootApplication, BootError, BootResponse,
+    controller, injectable, AxumAdapter, BootError, BootFactory, BootResponse,
     ControllerDefinition, Module, ModuleRef, ProviderDefinition, Result, SseEvent, SseStream,
     Validate,
 };
@@ -343,8 +348,8 @@ impl Module for CatsModule {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let app = BootApplication::builder().import(CatsModule).build()?;
-    app.serve_with(&AxumAdapter::new(), ([127, 0, 0, 1], 3000).into()).await
+    let mut app = BootFactory::create(CatsModule)?;
+    app.listen_with(&AxumAdapter::new(), ([127, 0, 0, 1], 3000).into()).await
 }
 ```
 
@@ -367,6 +372,33 @@ but typical code should use `#[get]` and `#[post]` directly.
 `#[sse("/events")]` registers a GET endpoint that returns a
 `text/event-stream` response and accepts any stream whose items are
 `Result<SseEvent>`.
+
+## Application Factory
+
+`BootFactory` is the NestFactory-style entrypoint for managed startup and
+shutdown. `create(...)` returns an application handle with `init()`,
+`listen_with(...)`, `close()`, and provider lookup helpers. Use
+`create_application_context(...)` for provider-only workers, and
+`create_microservice(...)` for standalone message transports:
+
+```rust
+use a3s_boot::{AxumAdapter, BootFactory, InProcessTransport, Result};
+
+async fn run() -> Result<()> {
+    let mut app = BootFactory::create(AppModule)?;
+    app.connect_microservice(InProcessTransport::new());
+    app.start_all_microservices().await?;
+    app.listen_with(&AxumAdapter::new(), ([127, 0, 0, 1], 3000).into()).await?;
+
+    let mut worker = BootFactory::create_application_context(WorkerModule)?;
+    worker.init().await?;
+    worker.close().await?;
+
+    let mut service =
+        BootFactory::create_microservice(CatsModule, InProcessTransport::new())?;
+    service.listen().await
+}
+```
 
 Custom parameter decorators use `#[extract(...)]`, where the expression
 implements `RequestExtractor<T>` or is a function that takes `&BootRequest` and

@@ -1,6 +1,7 @@
 use a3s_boot::{
-    BootApplication, BootError, BoxFuture, HttpAdapter, Module, ModuleRef, ProviderDefinition,
-    ProviderOnApplicationBootstrap, ProviderOnApplicationShutdown, ProviderOnModuleInit, Result,
+    BootApplication, BootError, BootFactory, BoxFuture, HttpAdapter, MessageTransport, Module,
+    ModuleRef, ProviderDefinition, ProviderOnApplicationBootstrap, ProviderOnApplicationShutdown,
+    ProviderOnModuleInit, Result,
 };
 use std::sync::Arc;
 
@@ -375,6 +376,42 @@ impl HttpAdapter for LifecycleAdapter {
     }
 }
 
+struct LifecycleTransport {
+    log: Arc<std::sync::Mutex<Vec<String>>>,
+    fail: bool,
+}
+
+impl LifecycleTransport {
+    fn new(log: Arc<std::sync::Mutex<Vec<String>>>) -> Self {
+        Self { log, fail: false }
+    }
+
+    fn failing(log: Arc<std::sync::Mutex<Vec<String>>>) -> Self {
+        Self { log, fail: true }
+    }
+}
+
+impl MessageTransport for LifecycleTransport {
+    type Output = ();
+
+    fn build(&self, _app: BootApplication) -> Result<Self::Output> {
+        Ok(())
+    }
+
+    fn serve(&self, _app: BootApplication) -> BoxFuture<'static, Result<()>> {
+        let fail = self.fail;
+        let log = Arc::clone(&self.log);
+
+        Box::pin(async move {
+            log.lock().unwrap().push("microservice".to_string());
+            if fail {
+                return Err(BootError::Adapter("microservice failed".to_string()));
+            }
+            Ok(())
+        })
+    }
+}
+
 #[tokio::test]
 async fn serve_with_runs_bootstrap_and_shutdown_around_adapter() {
     let log = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -393,6 +430,115 @@ async fn serve_with_runs_bootstrap_and_shutdown_around_adapter() {
     assert_eq!(
         log.lock().unwrap().as_slice(),
         ["init:app", "bootstrap:app", "serve", "shutdown:app"]
+    );
+}
+
+#[tokio::test]
+async fn boot_factory_listen_runs_bootstrap_and_close() {
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut app = BootFactory::create(LifecycleModule::new("app", Arc::clone(&log))).unwrap();
+
+    app.listen_with(
+        &LifecycleAdapter::new(Arc::clone(&log)),
+        ([127, 0, 0, 1], 0).into(),
+    )
+    .await
+    .unwrap();
+
+    assert!(!app.is_initialized());
+    assert_eq!(
+        log.lock().unwrap().as_slice(),
+        ["init:app", "bootstrap:app", "serve", "shutdown:app"]
+    );
+}
+
+#[tokio::test]
+async fn boot_factory_application_context_init_and_close_are_idempotent() {
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut context =
+        BootFactory::create_application_context(LifecycleModule::new("app", Arc::clone(&log)))
+            .unwrap();
+
+    context.init().await.unwrap();
+    context.init().await.unwrap();
+    assert!(context.is_initialized());
+    context.close().await.unwrap();
+    context.close().await.unwrap();
+
+    assert!(!context.is_initialized());
+    assert_eq!(
+        log.lock().unwrap().as_slice(),
+        ["init:app", "bootstrap:app", "shutdown:app"]
+    );
+}
+
+#[tokio::test]
+async fn boot_factory_connects_and_starts_microservices() {
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut app = BootFactory::create(LifecycleModule::new("app", Arc::clone(&log))).unwrap();
+
+    let index = app.connect_microservice(LifecycleTransport::new(Arc::clone(&log)));
+    assert_eq!(index, 0);
+    assert_eq!(app.connected_microservice_count(), 1);
+
+    app.start_all_microservices().await.unwrap();
+    app.listen_with(
+        &LifecycleAdapter::new(Arc::clone(&log)),
+        ([127, 0, 0, 1], 0).into(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        log.lock().unwrap().as_slice(),
+        [
+            "init:app",
+            "bootstrap:app",
+            "microservice",
+            "serve",
+            "shutdown:app"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn boot_factory_create_microservice_listens_with_lifecycle_hooks() {
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut microservice = BootFactory::create_microservice(
+        LifecycleModule::new("app", Arc::clone(&log)),
+        LifecycleTransport::new(Arc::clone(&log)),
+    )
+    .unwrap();
+
+    microservice.build_client().unwrap();
+    microservice.listen().await.unwrap();
+
+    assert!(!microservice.is_initialized());
+    assert_eq!(
+        log.lock().unwrap().as_slice(),
+        ["init:app", "bootstrap:app", "microservice", "shutdown:app"]
+    );
+}
+
+#[tokio::test]
+async fn boot_factory_microservice_preserves_serve_errors_and_closes() {
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut microservice = BootFactory::create_microservice(
+        LifecycleModule::new("app", Arc::clone(&log)),
+        LifecycleTransport::failing(Arc::clone(&log)),
+    )
+    .unwrap();
+
+    let result = microservice.listen().await;
+
+    assert!(matches!(
+        result,
+        Err(BootError::Adapter(message)) if message == "microservice failed"
+    ));
+    assert!(!microservice.is_initialized());
+    assert_eq!(
+        log.lock().unwrap().as_slice(),
+        ["init:app", "bootstrap:app", "microservice", "shutdown:app"]
     );
 }
 

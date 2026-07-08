@@ -28,6 +28,9 @@ Official Nest.js areas used as reference:
 Implemented today:
 
 - `Module` with imports, providers, controllers, direct routes, and lifecycle hooks.
+- `BootFactory` with NestFactory-style `create`, `create_application_context`,
+  `create_microservice`, managed `init`/`close`, `listen_with`, and hybrid
+  microservice startup helpers.
 - `ProviderDefinition` and `ModuleRef` for typed provider registration,
   singleton/request/transient lifecycle scopes, singleton provider lifecycle
   hooks, lookup, `FromModuleRef` auto-wired provider factories, and named or
