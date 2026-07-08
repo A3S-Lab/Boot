@@ -60,6 +60,8 @@ pub use a3s_boot_macros::{
 };
 #[cfg(all(feature = "macros", feature = "schedule"))]
 pub use a3s_boot_macros::{cron, interval, schedule, timeout};
+#[cfg(all(feature = "macros", feature = "events"))]
+pub use a3s_boot_macros::{event_listener, on_event};
 #[cfg(feature = "axum")]
 pub use adapters::AxumAdapter;
 pub use app::{BootApplication, BootApplicationBuilder, RouteMatch};
@@ -77,7 +79,9 @@ pub use discovery::{
 };
 pub use error::BootError;
 #[cfg(feature = "events")]
-pub use events::{EventContext, EventEmitter, EventEnvelope, EventListener, EventModule};
+pub use events::{
+    EventContext, EventEmitter, EventEnvelope, EventListener, EventListenerDefinition, EventModule,
+};
 #[cfg(feature = "file-upload")]
 pub use file_upload::{MultipartField, MultipartForm, MultipartOptions, UploadedFile};
 #[cfg(feature = "health")]

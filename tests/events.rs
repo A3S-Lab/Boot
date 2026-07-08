@@ -1,12 +1,74 @@
 #![cfg(feature = "events")]
 
-use a3s_boot::{BootApplication, EventContext, EventEmitter, EventEnvelope, EventModule};
+use a3s_boot::{BootApplication, EventContext, EventEmitter, EventEnvelope, EventModule, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Deserialize, Serialize)]
 struct CatEvent {
     name: String,
+}
+
+#[cfg(feature = "macros")]
+#[derive(Debug)]
+struct MacroEventHandlers {
+    observed: Arc<Mutex<Vec<String>>>,
+}
+
+#[cfg(feature = "macros")]
+#[a3s_boot::event_listener]
+impl MacroEventHandlers {
+    #[a3s_boot::on_event("cat.created")]
+    async fn cat_created(&self, payload: CatEvent, context: EventContext) -> Result<()> {
+        let emitter = context.get::<EventEmitter>()?;
+        self.observed.lock().unwrap().push(format!(
+            "created:{}:{}",
+            payload.name,
+            emitter.listener_count()?
+        ));
+        Ok(())
+    }
+
+    #[a3s_boot::on_event("cat.*")]
+    async fn cat_event(&self, event: EventEnvelope) -> Result<()> {
+        self.observed
+            .lock()
+            .unwrap()
+            .push(format!("wildcard:{}", event.name()));
+        Ok(())
+    }
+}
+
+#[cfg(feature = "macros")]
+#[tokio::test]
+async fn event_listener_macros_register_typed_payload_and_envelope_handlers() {
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let handlers = Arc::new(MacroEventHandlers {
+        observed: Arc::clone(&observed),
+    });
+    let app = BootApplication::builder()
+        .import(
+            EventModule::in_process("events").listeners(Arc::clone(&handlers).event_listeners()),
+        )
+        .build()
+        .unwrap();
+    let emitter = app.get::<EventEmitter>().unwrap();
+
+    let count = emitter
+        .emit(
+            "cat.created",
+            &CatEvent {
+                name: "Milo".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(count, 2);
+    assert_eq!(
+        observed.lock().unwrap().as_slice(),
+        ["created:Milo:2", "wildcard:cat.created"]
+    );
 }
 
 #[tokio::test]

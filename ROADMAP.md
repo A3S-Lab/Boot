@@ -518,8 +518,9 @@ Acceptance:
   processors through lifecycle-managed in-process workers, and participate in
   module imports/exports. (Covered)
 - Application events can register an in-process `EventEmitter` provider,
-  dispatch typed JSON payloads to exact or wildcard listeners, and participate
-  in module imports/exports. (Covered)
+  dispatch typed JSON payloads to exact or wildcard listeners, expose
+  Nest-style listener macros, and participate in module imports/exports.
+  (Covered)
 - Health checks can register provider-backed async indicators, expose a typed
   `HealthCheckService`, return JSON readiness reports, and map unhealthy
   reports to HTTP 503. (Covered)

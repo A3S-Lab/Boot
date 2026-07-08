@@ -71,7 +71,9 @@ This repository contains the first framework slice:
   WebSocket macros such as
   `#[websocket_gateway]` and
   `#[subscribe_message]`, plus microservice macros such as
-  `#[message_controller]`, `#[message_pattern]`, and `#[event_pattern]`
+  `#[message_controller]`, `#[message_pattern]`, and `#[event_pattern]`,
+  plus application event macros such as `#[event_listener]` and
+  `#[on_event("cat.created")]`
 - `Middleware`, `Pipe`, `Guard`, `Interceptor`, and `ExceptionFilter` pipeline traits
 - application-level `use_global_middleware`, `use_global_pipe`,
   `use_global_guard`, `use_global_interceptor`, `use_global_filter`, and
@@ -98,7 +100,8 @@ This repository contains the first framework slice:
   event-only message dispatch
 - `EventModule` behind the `events` feature for provider-backed in-process
   async event dispatch through `EventEmitter`, exact event names, and simple
-  wildcard listener patterns such as `cat.*` and `*`
+  wildcard listener patterns such as `cat.*` and `*`, plus Nest-style
+  listener macros
 - `HealthModule` behind the `health` feature for provider-backed health
   indicators, aggregate JSON reports, and optional `/health` routes that return
   HTTP 503 when any indicator is down
@@ -330,6 +333,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@MessagePattern("cat.find")` | `#[message_pattern("cat.find")]` on an async message method |
 | `@EventPattern("cat.created")` | `#[event_pattern("cat.created")]` on an async event method |
 | `@Payload()` | A typed message method argument deserialized from `TransportMessage::data` |
+| `@OnEvent("cat.created")` | `#[on_event("cat.created")]` inside `#[event_listener]` |
 | `@UseGuards(AuthGuard)` | `#[use_guard(AuthGuard)]` on a controller impl or route method |
 | `@UseInterceptors(TraceInterceptor)` | `#[use_interceptor(TraceInterceptor)]` on a controller impl or route method |
 | `@UseFilters(HttpErrorFilter)` | `#[use_filter(HttpErrorFilter)]` on a controller impl or route method |
@@ -1099,7 +1103,11 @@ listeners such as `cat.created`, prefix listeners such as `cat.*`, or a global
 through `serde_json`, so handlers can decode typed DTOs with `data_as::<T>()`.
 
 ```rust
-use a3s_boot::{BootApplication, EventEmitter, EventEnvelope, EventModule, Result};
+use std::sync::Arc;
+
+use a3s_boot::{
+    BootApplication, EventContext, EventEmitter, EventModule, ProviderDefinition, Result,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1107,16 +1115,58 @@ struct CatEvent {
     name: String,
 }
 
+#[derive(Debug)]
+struct CatsEvents;
+
+#[a3s_boot::event_listener]
+impl CatsEvents {
+    #[a3s_boot::on_event("cat.created")]
+    async fn cat_created(&self, payload: CatEvent, context: EventContext) -> Result<()> {
+        let _emitter = context.get::<EventEmitter>()?;
+        println!("created cat {}", payload.name);
+        Ok(())
+    }
+
+    #[a3s_boot::on_event("cat.*")]
+    async fn any_cat_event(&self, event: a3s_boot::EventEnvelope) -> Result<()> {
+        println!("cat event {}", event.name());
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct CatsModule {
+    events: EventModule,
+    listeners: Arc<CatsEvents>,
+}
+
+impl CatsModule {
+    fn new() -> Self {
+        let listeners = Arc::new(CatsEvents);
+        let events = EventModule::in_process("events")
+            .listeners(Arc::clone(&listeners).event_listeners());
+
+        Self { events, listeners }
+    }
+}
+
+impl a3s_boot::Module for CatsModule {
+    fn name(&self) -> &'static str {
+        "cats"
+    }
+
+    fn imports(&self) -> Vec<Arc<dyn a3s_boot::Module>> {
+        vec![Arc::new(self.events.clone())]
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::from_arc(Arc::clone(&self.listeners))])
+    }
+}
+
 async fn app() -> Result<()> {
     let app = BootApplication::builder()
-        .import(EventModule::in_process("events").listener(
-            "cat.created",
-            |event: EventEnvelope, _| async move {
-                let payload = event.data_as::<CatEvent>()?;
-                println!("created cat {}", payload.name);
-                Ok(())
-            },
-        ))
+        .import(CatsModule::new())
         .build()?;
 
     let emitter = app.get::<EventEmitter>()?;
@@ -1131,6 +1181,11 @@ async fn app() -> Result<()> {
     Ok(())
 }
 ```
+
+`#[on_event]` handlers may accept no arguments, one typed payload decoded from
+the event JSON, an `EventEnvelope`, an `EventContext`, or one event argument
+plus `EventContext`. Use `EventModule::listener(...)` for inline listeners that
+do not need an impl-level macro.
 
 `EventModule::global()` exports the emitter across module boundaries, and
 `EventModule::named(...)` can register a named emitter provider when a service

@@ -101,6 +101,41 @@ where
     }
 }
 
+/// A listener definition that can be registered with an [`EventModule`].
+#[derive(Clone)]
+pub struct EventListenerDefinition {
+    pattern: String,
+    listener: Arc<dyn EventListener>,
+}
+
+impl fmt::Debug for EventListenerDefinition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EventListenerDefinition")
+            .field("pattern", &self.pattern)
+            .finish_non_exhaustive()
+    }
+}
+
+impl EventListenerDefinition {
+    pub fn new<L>(pattern: impl Into<String>, listener: L) -> Self
+    where
+        L: EventListener,
+    {
+        Self::from_arc(pattern, Arc::new(listener))
+    }
+
+    pub fn from_arc(pattern: impl Into<String>, listener: Arc<dyn EventListener>) -> Self {
+        Self {
+            pattern: pattern.into(),
+            listener,
+        }
+    }
+
+    pub fn pattern(&self) -> &str {
+        &self.pattern
+    }
+}
+
 /// In-process async event emitter exposed as a provider by [`EventModule`].
 #[derive(Clone, Default)]
 pub struct EventEmitter {
@@ -234,7 +269,7 @@ pub struct EventModule {
     name: &'static str,
     token: ProviderToken,
     emitter: Arc<EventEmitter>,
-    listeners: Vec<(String, Arc<dyn EventListener>)>,
+    listeners: Vec<EventListenerDefinition>,
     global: bool,
 }
 
@@ -268,7 +303,8 @@ impl EventModule {
     where
         L: EventListener,
     {
-        self.listeners.push((pattern.into(), Arc::new(listener)));
+        self.listeners
+            .push(EventListenerDefinition::new(pattern, listener));
         self
     }
 
@@ -277,7 +313,16 @@ impl EventModule {
         pattern: impl Into<String>,
         listener: Arc<dyn EventListener>,
     ) -> Self {
-        self.listeners.push((pattern.into(), listener));
+        self.listeners
+            .push(EventListenerDefinition::from_arc(pattern, listener));
+        self
+    }
+
+    pub fn listeners<I>(mut self, listeners: I) -> Self
+    where
+        I: IntoIterator<Item = EventListenerDefinition>,
+    {
+        self.listeners.extend(listeners);
         self
     }
 
@@ -314,8 +359,9 @@ impl Module for EventModule {
 
     fn on_module_init(&self, module_ref: &ModuleRef) -> Result<()> {
         self.emitter.attach_module_ref(module_ref.clone())?;
-        for (pattern, listener) in &self.listeners {
-            self.emitter.on_arc(pattern.clone(), Arc::clone(listener))?;
+        for listener in &self.listeners {
+            self.emitter
+                .on_arc(listener.pattern.clone(), Arc::clone(&listener.listener))?;
         }
         Ok(())
     }
