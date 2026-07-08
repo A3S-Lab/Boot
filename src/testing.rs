@@ -208,4 +208,16 @@ impl TestingModuleBuilder {
         }
         Ok(TestingModule { app })
     }
+
+    pub async fn compile_async(self) -> Result<TestingModule> {
+        let mut app = self.app.import(self.module).build_async().await?;
+        if !self.pipeline_overrides.is_empty() {
+            app.routes = app
+                .routes
+                .into_iter()
+                .map(|route| route.with_pipeline_overrides(&self.pipeline_overrides))
+                .collect();
+        }
+        Ok(TestingModule { app })
+    }
 }

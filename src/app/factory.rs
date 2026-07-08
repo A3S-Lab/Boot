@@ -22,6 +22,25 @@ impl BootFactory {
         Ok(BootApplicationHandle::from_app(builder.build()?))
     }
 
+    pub async fn create_async<M>(module: M) -> Result<BootApplicationHandle>
+    where
+        M: Module,
+    {
+        Self::create_with_builder_async(BootApplication::builder().import(module)).await
+    }
+
+    pub async fn create_arc_async(module: Arc<dyn Module>) -> Result<BootApplicationHandle> {
+        Self::create_with_builder_async(BootApplication::builder().import_arc(module)).await
+    }
+
+    pub async fn create_with_builder_async(
+        builder: BootApplicationBuilder,
+    ) -> Result<BootApplicationHandle> {
+        Ok(BootApplicationHandle::from_app(
+            builder.build_async().await?,
+        ))
+    }
+
     pub fn create_application_context<M>(module: M) -> Result<BootApplicationContext>
     where
         M: Module,
@@ -43,6 +62,33 @@ impl BootFactory {
         })
     }
 
+    pub async fn create_application_context_async<M>(module: M) -> Result<BootApplicationContext>
+    where
+        M: Module,
+    {
+        Self::create_application_context_with_builder_async(
+            BootApplication::builder().import(module),
+        )
+        .await
+    }
+
+    pub async fn create_application_context_arc_async(
+        module: Arc<dyn Module>,
+    ) -> Result<BootApplicationContext> {
+        Self::create_application_context_with_builder_async(
+            BootApplication::builder().import_arc(module),
+        )
+        .await
+    }
+
+    pub async fn create_application_context_with_builder_async(
+        builder: BootApplicationBuilder,
+    ) -> Result<BootApplicationContext> {
+        Ok(BootApplicationContext {
+            handle: Self::create_with_builder_async(builder).await?,
+        })
+    }
+
     pub fn create_microservice<M, T>(module: M, transport: T) -> Result<BootMicroservice<T>>
     where
         M: Module,
@@ -59,6 +105,34 @@ impl BootFactory {
         T: MessageTransport,
     {
         Ok(BootMicroservice::new(builder.build()?, transport))
+    }
+
+    pub async fn create_microservice_async<M, T>(
+        module: M,
+        transport: T,
+    ) -> Result<BootMicroservice<T>>
+    where
+        M: Module,
+        T: MessageTransport,
+    {
+        Self::create_microservice_with_builder_async(
+            BootApplication::builder().import(module),
+            transport,
+        )
+        .await
+    }
+
+    pub async fn create_microservice_with_builder_async<T>(
+        builder: BootApplicationBuilder,
+        transport: T,
+    ) -> Result<BootMicroservice<T>>
+    where
+        T: MessageTransport,
+    {
+        Ok(BootMicroservice::new(
+            builder.build_async().await?,
+            transport,
+        ))
     }
 }
 

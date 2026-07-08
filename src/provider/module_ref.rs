@@ -158,6 +158,11 @@ impl ProviderEntry {
         Ok(value)
     }
 
+    async fn seed_singleton_async(&self, module_ref: ModuleRef) -> Result<()> {
+        let value = self.definition.build_async(module_ref).await?;
+        self.seed_singleton(value)
+    }
+
     fn seed_singleton(&self, value: Arc<AnyProvider>) -> Result<()> {
         self.write_cache(&self.singleton)?
             .insert(self.cache_key, value);
@@ -248,23 +253,28 @@ impl ModuleRef {
 
     pub fn register(&self, definition: ProviderDefinition) -> Result<()> {
         let token = definition.token().clone();
-        if self.contains_local(&token)? {
-            return Err(BootError::DuplicateProvider(token.to_string()));
-        }
-        if definition.lifecycle().has_hooks() && definition.scope() != ProviderScope::Singleton {
+        self.validate_registration(&token, &definition)?;
+        if definition.is_async_factory() {
             return Err(BootError::Internal(format!(
-                "provider lifecycle hooks require singleton scope: {token}"
+                "async provider factory requires async registration: {token}"
             )));
         }
-        if definition.lifecycle().has_hooks() && definition.is_alias() {
-            return Err(BootError::Internal(format!(
-                "provider aliases cannot define lifecycle hooks: {token}"
-            )));
-        }
+
         let entry = ProviderEntry::new(definition);
         if entry.scope() == ProviderScope::Singleton && !entry.definition.is_alias() {
             let value = entry.definition.build(self)?;
             entry.seed_singleton(value)?;
+        }
+        self.insert_entry(token, entry)
+    }
+
+    pub async fn register_async(&self, definition: ProviderDefinition) -> Result<()> {
+        let token = definition.token().clone();
+        self.validate_registration(&token, &definition)?;
+
+        let entry = ProviderEntry::new(definition);
+        if entry.scope() == ProviderScope::Singleton && !entry.definition.is_alias() {
+            entry.seed_singleton_async(self.clone()).await?;
         }
         self.insert_entry(token, entry)
     }
@@ -340,6 +350,32 @@ impl ModuleRef {
             return Err(BootError::DuplicateProvider(token.to_string()));
         }
         providers.insert(token, entry);
+        Ok(())
+    }
+
+    fn validate_registration(
+        &self,
+        token: &ProviderToken,
+        definition: &ProviderDefinition,
+    ) -> Result<()> {
+        if self.contains_local(token)? {
+            return Err(BootError::DuplicateProvider(token.to_string()));
+        }
+        if definition.is_async_factory() && definition.scope() != ProviderScope::Singleton {
+            return Err(BootError::Internal(format!(
+                "async provider factories require singleton scope: {token}"
+            )));
+        }
+        if definition.lifecycle().has_hooks() && definition.scope() != ProviderScope::Singleton {
+            return Err(BootError::Internal(format!(
+                "provider lifecycle hooks require singleton scope: {token}"
+            )));
+        }
+        if definition.lifecycle().has_hooks() && definition.is_alias() {
+            return Err(BootError::Internal(format!(
+                "provider aliases cannot define lifecycle hooks: {token}"
+            )));
+        }
         Ok(())
     }
 

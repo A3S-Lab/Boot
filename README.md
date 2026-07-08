@@ -424,7 +424,10 @@ but typical code should use `#[get]` and `#[post]` directly.
 shutdown. `create(...)` returns an application handle with `init()`,
 `listen_with(...)`, `close()`, and provider lookup helpers. Use
 `create_application_context(...)` for provider-only workers, and
-`create_microservice(...)` for standalone message transports:
+`create_microservice(...)` for standalone message transports. When a module
+registers async provider factories, use the async variants:
+`create_async(...)`, `create_application_context_async(...)`, or
+`create_microservice_async(...)`.
 
 ```rust
 use a3s_boot::{AxumAdapter, BootFactory, InProcessTransport, Result};
@@ -1291,6 +1294,66 @@ fn inspect_app(app: &BootApplication) -> Result<()> {
 }
 ```
 
+Async provider factories mirror Nest's async providers. They are awaited while
+the application graph is built, before controllers and routes resolve their
+dependencies. Use `build_async()` or a `BootFactory::*_async(...)` method; the
+sync `build()` path rejects async providers with a clear error:
+
+```rust
+use std::sync::Arc;
+
+use a3s_boot::{BootApplication, Module, ModuleRef, ProviderDefinition, Result};
+
+#[derive(Debug)]
+struct DatabaseClient {
+    url: String,
+}
+
+#[derive(Debug)]
+struct Repository {
+    client: Arc<DatabaseClient>,
+}
+
+#[derive(Debug)]
+struct AppModule;
+
+impl Module for AppModule {
+    fn name(&self) -> &'static str {
+        "app"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![
+            ProviderDefinition::async_factory::<DatabaseClient, _, _>(|_module_ref| async {
+                Ok(DatabaseClient {
+                    url: "postgres://localhost/app".to_string(),
+                })
+            }),
+            ProviderDefinition::factory::<Repository, _>(|module_ref: &ModuleRef| {
+                Ok(Repository {
+                    client: module_ref.get::<DatabaseClient>()?,
+                })
+            }),
+        ])
+    }
+}
+
+# async fn build_app() -> Result<()> {
+let app = BootApplication::builder()
+    .import(AppModule)
+    .build_async()
+    .await?;
+let repository = app.get::<Repository>()?;
+# let _ = repository;
+# Ok(())
+# }
+```
+
+Async provider factories are singleton-only because provider lookup is
+synchronous after the graph has been built. Use request-scoped or transient
+providers for cheap per-request/per-resolution values, and let those providers
+depend on async-built singletons.
+
 Request-scoped providers are available from handlers through the request's
 module context:
 
@@ -1396,7 +1459,8 @@ application startup or shutdown hooks.
 `TestingModule` mirrors Nest's test-module workflow: assemble a module graph,
 override providers before controllers are built, compile it, resolve providers
 from the compiled graph, override route pipeline components, and call the app
-in process without binding a socket.
+in process without binding a socket. Use `compile_async()` when the test module
+contains async provider factories.
 
 ```rust
 use std::sync::Arc;

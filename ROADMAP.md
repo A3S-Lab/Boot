@@ -29,14 +29,16 @@ Implemented today:
 
 - `Module` with imports, providers, controllers, direct routes, and lifecycle hooks.
 - `BootFactory` with NestFactory-style `create`, `create_application_context`,
-  `create_microservice`, managed `init`/`close`, `listen_with`, and hybrid
-  microservice startup helpers.
+  `create_microservice`, async provider-aware `create_async`,
+  `create_application_context_async`, and `create_microservice_async`, managed
+  `init`/`close`, `listen_with`, and hybrid microservice startup helpers.
 - `ProviderDefinition` and `ModuleRef` for typed provider registration,
-  singleton/request/transient lifecycle scopes, singleton provider lifecycle
-  hooks, lookup, `FromModuleRef` auto-wired provider factories, and named or
-  optional dependency resolution.
-- `TestingModule` with provider overrides and typed route pipeline overrides
-  for guards, interceptors, exception filters, and pipes.
+  singleton/request/transient lifecycle scopes, async singleton provider
+  factories, singleton provider lifecycle hooks, lookup, `FromModuleRef`
+  auto-wired provider factories, and named or optional dependency resolution.
+- `TestingModule` with provider overrides, async provider-aware
+  `compile_async`, and typed route pipeline overrides for guards,
+  interceptors, exception filters, and pipes.
 - `ControllerDefinition` and `RouteDefinition` for HTTP route groups, including
   specificity-aware path params, catch-all route params, and Nest-style ALL
   method routes with exact-method precedence.
@@ -90,7 +92,8 @@ Implemented today:
   provider modules.
 - Provider lifecycle scopes with default singleton providers, request-scoped
   providers cached per in-process request context, transient providers built per
-  resolution, request-time lookup through `BootRequest`, and singleton provider
+  resolution, async singleton provider factories awaited during async graph
+  build, request-time lookup through `BootRequest`, and singleton provider
   startup/shutdown hooks.
 - Provider aliases that mirror Nest custom provider `useExisting` semantics and
   preserve target provider scope.
@@ -582,14 +585,12 @@ framework capability. Keep GraphQL out of scope.
 
 Suggested implementation sequence:
 
-1. Add async provider factories so startup can await provider construction in a
-   Nest-style way.
-2. Add the first production message transport after the async provider contract
-   is stable.
-3. Continue defining integrations through providers, middleware, guards,
+1. Add the first production message transport now that the async provider
+   contract is stable.
+2. Continue defining integrations through providers, middleware, guards,
    interceptors, or adapters instead of adding one-off framework hooks.
-4. Add crate-local tests and README examples for each chosen framework module.
-5. Run:
+3. Add crate-local tests and README examples for each chosen framework module.
+4. Run:
 
 ```sh
 cargo fmt --all

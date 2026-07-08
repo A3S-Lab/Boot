@@ -1,7 +1,7 @@
 use a3s_boot::{
-    BootApplication, BootError, BootRequest, BootResponse, ControllerDefinition, DynamicModule,
-    ExecutionContext, FromModuleRef, HttpMethod, Module, ModuleRef, ProviderDefinition,
-    ProviderToken, Result,
+    BootApplication, BootError, BootFactory, BootRequest, BootResponse, ControllerDefinition,
+    DynamicModule, ExecutionContext, FromModuleRef, HttpMethod, Module, ModuleRef,
+    ProviderDefinition, ProviderScope, ProviderToken, Result, TestingModule,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -67,6 +67,70 @@ struct RuntimeConfig {
 #[derive(Debug)]
 struct UsesRuntimeConfig {
     config: Arc<RuntimeConfig>,
+}
+
+#[derive(Debug)]
+struct AsyncProviderModule {
+    calls: Arc<AtomicUsize>,
+}
+
+impl Module for AsyncProviderModule {
+    fn name(&self) -> &'static str {
+        "async-provider"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        let calls = Arc::clone(&self.calls);
+        Ok(vec![
+            ProviderDefinition::singleton(SharedConfig { value: "shared" }),
+            ProviderDefinition::async_factory::<RuntimeConfig, _, _>(move |module_ref| {
+                let calls = Arc::clone(&calls);
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    let shared = module_ref.get::<SharedConfig>()?;
+                    Ok(RuntimeConfig {
+                        value: format!("{}-async", shared.value),
+                    })
+                }
+            }),
+            ProviderDefinition::factory::<UsesRuntimeConfig, _>(|module_ref| {
+                Ok(UsesRuntimeConfig {
+                    config: module_ref.get::<RuntimeConfig>()?,
+                })
+            }),
+        ])
+    }
+
+    fn controllers(&self, module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
+        let service = module_ref.get::<UsesRuntimeConfig>()?;
+        Ok(vec![ControllerDefinition::new("/async-provider")?.get(
+            "/",
+            move |_| {
+                let service = Arc::clone(&service);
+                async move { Ok(BootResponse::text(service.config.value.clone())) }
+            },
+        )?])
+    }
+}
+
+#[derive(Debug)]
+struct BadAsyncProviderScopeModule;
+
+impl Module for BadAsyncProviderScopeModule {
+    fn name(&self) -> &'static str {
+        "bad-async-provider-scope"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![
+            ProviderDefinition::async_factory::<RuntimeConfig, _, _>(|_| async {
+                Ok(RuntimeConfig {
+                    value: "bad".to_string(),
+                })
+            })
+            .with_scope(ProviderScope::Transient),
+        ])
+    }
 }
 
 #[derive(Debug)]
@@ -864,6 +928,86 @@ fn provider_factories_can_return_shared_arc_values() {
     assert_eq!(dependent.config.value, "shared");
     assert!(Arc::ptr_eq(&config, &dependent.config));
     assert_eq!(named.value, "named");
+}
+
+#[tokio::test]
+async fn async_provider_factories_are_awaited_before_controllers_build() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let app = BootApplication::builder()
+        .import(AsyncProviderModule {
+            calls: Arc::clone(&calls),
+        })
+        .build_async()
+        .await
+        .unwrap();
+
+    let config = app.get::<RuntimeConfig>().unwrap();
+    let dependent = app.get::<UsesRuntimeConfig>().unwrap();
+    let response = app
+        .call(BootRequest::new(HttpMethod::Get, "/async-provider"))
+        .await
+        .unwrap();
+
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(config.value, "shared-async");
+    assert!(Arc::ptr_eq(&config, &dependent.config));
+    assert_eq!(response.body_text().unwrap(), "shared-async");
+}
+
+#[test]
+fn sync_build_rejects_async_provider_factories() {
+    let result = BootApplication::builder()
+        .import(AsyncProviderModule {
+            calls: Arc::new(AtomicUsize::new(0)),
+        })
+        .build();
+
+    assert!(
+        matches!(result, Err(BootError::Internal(message)) if message.contains("async provider factory requires async registration"))
+    );
+}
+
+#[tokio::test]
+async fn async_provider_factories_must_be_singletons() {
+    let result = BootApplication::builder()
+        .import(BadAsyncProviderScopeModule)
+        .build_async()
+        .await;
+
+    assert!(
+        matches!(result, Err(BootError::Internal(message)) if message.contains("async provider factories require singleton scope"))
+    );
+}
+
+#[tokio::test]
+async fn testing_module_compile_async_resolves_async_provider_factories() {
+    let testing = TestingModule::builder()
+        .provider(ProviderDefinition::async_factory::<RuntimeConfig, _, _>(
+            |_| async {
+                Ok(RuntimeConfig {
+                    value: "testing-async".to_string(),
+                })
+            },
+        ))
+        .compile_async()
+        .await
+        .unwrap();
+
+    assert_eq!(
+        testing.get::<RuntimeConfig>().unwrap().value,
+        "testing-async"
+    );
+}
+
+#[tokio::test]
+async fn boot_factory_create_async_resolves_async_provider_factories() {
+    let handle = BootFactory::create_async(AsyncProviderModule {
+        calls: Arc::new(AtomicUsize::new(0)),
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(handle.get::<RuntimeConfig>().unwrap().value, "shared-async");
 }
 
 #[test]

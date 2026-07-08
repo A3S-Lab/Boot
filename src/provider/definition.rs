@@ -1,9 +1,12 @@
 use super::{AnyProvider, ModuleRef, ProviderToken};
 use crate::{BootError, BoxFuture, Result};
 use std::fmt;
+use std::future::Future;
 use std::sync::Arc;
 
 type ProviderFactory = dyn Fn(&ModuleRef) -> Result<Arc<AnyProvider>> + Send + Sync;
+type AsyncProviderFactory =
+    dyn Fn(ModuleRef) -> BoxFuture<'static, Result<Arc<AnyProvider>>> + Send + Sync;
 type ProviderModuleInitHook = dyn Fn(Arc<AnyProvider>, &ModuleRef) -> Result<()> + Send + Sync;
 type ProviderApplicationHook =
     dyn Fn(Arc<AnyProvider>, ModuleRef) -> BoxFuture<'static, Result<()>> + Send + Sync;
@@ -46,10 +49,16 @@ pub enum ProviderScope {
 #[derive(Clone)]
 pub struct ProviderDefinition {
     token: ProviderToken,
-    factory: Arc<ProviderFactory>,
+    factory: ProviderFactoryKind,
     scope: ProviderScope,
     lifecycle: ProviderLifecycleHooks,
     alias_target: Option<ProviderToken>,
+}
+
+#[derive(Clone)]
+enum ProviderFactoryKind {
+    Sync(Arc<ProviderFactory>),
+    Async(Arc<AsyncProviderFactory>),
 }
 
 #[derive(Clone, Default)]
@@ -84,8 +93,15 @@ impl fmt::Debug for ProviderDefinition {
         f.debug_struct("ProviderDefinition")
             .field("token", &self.token)
             .field("scope", &self.scope)
+            .field("async", &self.factory.is_async())
             .field("alias_target", &self.alias_target)
             .finish_non_exhaustive()
+    }
+}
+
+impl ProviderFactoryKind {
+    fn is_async(&self) -> bool {
+        matches!(self, Self::Async(_))
     }
 }
 
@@ -120,7 +136,9 @@ impl ProviderDefinition {
         let factory_value = Arc::clone(&value);
         Self {
             token,
-            factory: Arc::new(move |_| Ok(Arc::clone(&factory_value) as Arc<AnyProvider>)),
+            factory: ProviderFactoryKind::Sync(Arc::new(move |_| {
+                Ok(Arc::clone(&factory_value) as Arc<AnyProvider>)
+            })),
             scope: ProviderScope::Singleton,
             lifecycle: ProviderLifecycleHooks::default(),
             alias_target: None,
@@ -150,9 +168,9 @@ impl ProviderDefinition {
     {
         Self {
             token: ProviderToken::named(token),
-            factory: Arc::new(move |module_ref| {
+            factory: ProviderFactoryKind::Sync(Arc::new(move |module_ref| {
                 Ok(Arc::new(factory(module_ref)?) as Arc<AnyProvider>)
-            }),
+            })),
             scope: ProviderScope::Singleton,
             lifecycle: ProviderLifecycleHooks::default(),
             alias_target: None,
@@ -166,7 +184,63 @@ impl ProviderDefinition {
     {
         Self {
             token: ProviderToken::named(token),
-            factory: Arc::new(move |module_ref| Ok(factory(module_ref)? as Arc<AnyProvider>)),
+            factory: ProviderFactoryKind::Sync(Arc::new(move |module_ref| {
+                Ok(factory(module_ref)? as Arc<AnyProvider>)
+            })),
+            scope: ProviderScope::Singleton,
+            lifecycle: ProviderLifecycleHooks::default(),
+            alias_target: None,
+        }
+    }
+
+    pub fn async_factory<T, F, Fut>(factory: F) -> Self
+    where
+        T: Send + Sync + 'static,
+        F: Fn(ModuleRef) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<T>> + Send + 'static,
+    {
+        Self::named_async_factory(ProviderToken::of::<T>().as_str(), factory)
+    }
+
+    pub fn async_factory_arc<T, F, Fut>(factory: F) -> Self
+    where
+        T: Send + Sync + 'static,
+        F: Fn(ModuleRef) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Arc<T>>> + Send + 'static,
+    {
+        Self::named_async_factory_arc(ProviderToken::of::<T>().as_str(), factory)
+    }
+
+    pub fn named_async_factory<T, F, Fut>(token: impl Into<String>, factory: F) -> Self
+    where
+        T: Send + Sync + 'static,
+        F: Fn(ModuleRef) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<T>> + Send + 'static,
+    {
+        Self {
+            token: ProviderToken::named(token),
+            factory: ProviderFactoryKind::Async(Arc::new(move |module_ref| {
+                let future = factory(module_ref);
+                Box::pin(async move { Ok(Arc::new(future.await?) as Arc<AnyProvider>) })
+            })),
+            scope: ProviderScope::Singleton,
+            lifecycle: ProviderLifecycleHooks::default(),
+            alias_target: None,
+        }
+    }
+
+    pub fn named_async_factory_arc<T, F, Fut>(token: impl Into<String>, factory: F) -> Self
+    where
+        T: Send + Sync + 'static,
+        F: Fn(ModuleRef) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Arc<T>>> + Send + 'static,
+    {
+        Self {
+            token: ProviderToken::named(token),
+            factory: ProviderFactoryKind::Async(Arc::new(move |module_ref| {
+                let future = factory(module_ref);
+                Box::pin(async move { Ok(future.await? as Arc<AnyProvider>) })
+            })),
             scope: ProviderScope::Singleton,
             lifecycle: ProviderLifecycleHooks::default(),
             alias_target: None,
@@ -197,11 +271,11 @@ impl ProviderDefinition {
     pub fn named_alias(token: impl Into<String>, target: ProviderToken) -> Self {
         Self {
             token: ProviderToken::named(token),
-            factory: Arc::new(|_| {
+            factory: ProviderFactoryKind::Sync(Arc::new(|_| {
                 Err(BootError::Internal(
                     "provider aliases must be resolved through ModuleRef".to_string(),
                 ))
-            }),
+            })),
             scope: ProviderScope::Singleton,
             lifecycle: ProviderLifecycleHooks::default(),
             alias_target: Some(target),
@@ -356,6 +430,10 @@ impl ProviderDefinition {
         self.alias_target.is_some()
     }
 
+    pub(super) fn is_async_factory(&self) -> bool {
+        self.factory.is_async()
+    }
+
     pub(super) fn alias_target(&self) -> Option<&ProviderToken> {
         self.alias_target.as_ref()
     }
@@ -365,7 +443,20 @@ impl ProviderDefinition {
     }
 
     pub(super) fn build(&self, module_ref: &ModuleRef) -> Result<Arc<AnyProvider>> {
-        (self.factory)(module_ref)
+        match &self.factory {
+            ProviderFactoryKind::Sync(factory) => factory(module_ref),
+            ProviderFactoryKind::Async(_) => Err(BootError::Internal(format!(
+                "async provider factory requires async application build: {}",
+                self.token
+            ))),
+        }
+    }
+
+    pub(super) async fn build_async(&self, module_ref: ModuleRef) -> Result<Arc<AnyProvider>> {
+        match &self.factory {
+            ProviderFactoryKind::Sync(factory) => factory(&module_ref),
+            ProviderFactoryKind::Async(factory) => factory(module_ref).await,
+        }
     }
 }
 
