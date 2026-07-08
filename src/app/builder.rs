@@ -2,13 +2,12 @@ use super::application::BootApplication;
 use super::lazy::LazyModuleLoader;
 use super::registration::{ModuleRegistrationSink, ModuleRegistry};
 use crate::pipeline::PipelineComponents;
-use crate::routing::path::join_paths;
 #[cfg(feature = "auth")]
 use crate::AuthGuard;
 use crate::{
     ApiVersioning, BootError, BootErrorKind, BootResponse, ExceptionFilter, ExecutionInterceptor,
-    Guard, Interceptor, MessagePatternDefinition, Middleware, Module, ModuleRef, OpenApiDocument,
-    OpenApiInfo, Pipe, ProviderDefinition, ProviderToken, Result, RouteDefinition,
+    Guard, Interceptor, MessagePatternDefinition, Middleware, MiddlewareRoute, Module, ModuleRef,
+    OpenApiDocument, OpenApiInfo, Pipe, ProviderDefinition, ProviderToken, Result, RouteDefinition,
     SerializationInterceptor, WebSocketGatewayDefinition,
 };
 #[cfg(feature = "compression")]
@@ -35,6 +34,7 @@ pub struct BootApplicationBuilder {
     global_execution_guards: Vec<Arc<dyn Guard>>,
     global_execution_interceptors: Vec<Arc<dyn ExecutionInterceptor>>,
     global_prefix: Option<String>,
+    global_prefix_exclusions: Vec<MiddlewareRoute>,
     api_versioning: Option<ApiVersioning>,
     openapi_routes: Vec<(String, OpenApiInfo)>,
     openapi_ui_routes: Vec<OpenApiUiRoute>,
@@ -105,6 +105,15 @@ impl BootApplicationBuilder {
     /// Prefix every route in the built application, for example `/api/v1`.
     pub fn global_prefix(mut self, prefix: impl Into<String>) -> Self {
         self.global_prefix = Some(prefix.into());
+        self
+    }
+
+    /// Exclude selected HTTP routes from the application-wide global prefix.
+    pub fn exclude_global_prefix<I>(mut self, routes: I) -> Self
+    where
+        I: IntoIterator<Item = MiddlewareRoute>,
+    {
+        self.global_prefix_exclusions.extend(routes);
         self
     }
 
@@ -332,7 +341,11 @@ impl BootApplicationBuilder {
             lazy_module_loader.seed_module(name, registered.module_ref, registered.exports)?;
         }
 
-        let mut routes = apply_global_prefix(routes, self.global_prefix.as_deref())?;
+        let mut routes = apply_global_prefix(
+            routes,
+            self.global_prefix.as_deref(),
+            &self.global_prefix_exclusions,
+        )?;
         let gateways = apply_global_gateway_prefix(gateways, self.global_prefix.as_deref())?
             .into_iter()
             .map(|gateway| {
@@ -357,10 +370,11 @@ impl BootApplicationBuilder {
             let document = OpenApiDocument::from_routes(info, &documented_routes);
             let route =
                 openapi_json_route(path, document)?.with_pipeline_prefix(&self.global_pipeline);
-            let route = match self.global_prefix.as_deref() {
-                Some(prefix) => route.with_path_prefix(prefix)?,
-                None => route,
-            };
+            let route = apply_global_prefix_to_route(
+                route,
+                self.global_prefix.as_deref(),
+                &self.global_prefix_exclusions,
+            )?;
             routes.push(route);
         }
         for ui in self.openapi_ui_routes {
@@ -369,6 +383,7 @@ impl BootApplicationBuilder {
                 ui,
                 &documented_routes,
                 self.global_prefix.as_deref(),
+                &self.global_prefix_exclusions,
                 &self.global_pipeline,
             )?;
         }
@@ -437,7 +452,11 @@ impl BootApplicationBuilder {
             lazy_module_loader.seed_module(name, registered.module_ref, registered.exports)?;
         }
 
-        let mut routes = apply_global_prefix(routes, self.global_prefix.as_deref())?;
+        let mut routes = apply_global_prefix(
+            routes,
+            self.global_prefix.as_deref(),
+            &self.global_prefix_exclusions,
+        )?;
         let gateways = apply_global_gateway_prefix(gateways, self.global_prefix.as_deref())?
             .into_iter()
             .map(|gateway| {
@@ -462,10 +481,11 @@ impl BootApplicationBuilder {
             let document = OpenApiDocument::from_routes(info, &documented_routes);
             let route =
                 openapi_json_route(path, document)?.with_pipeline_prefix(&self.global_pipeline);
-            let route = match self.global_prefix.as_deref() {
-                Some(prefix) => route.with_path_prefix(prefix)?,
-                None => route,
-            };
+            let route = apply_global_prefix_to_route(
+                route,
+                self.global_prefix.as_deref(),
+                &self.global_prefix_exclusions,
+            )?;
             routes.push(route);
         }
         for ui in self.openapi_ui_routes {
@@ -474,6 +494,7 @@ impl BootApplicationBuilder {
                 ui,
                 &documented_routes,
                 self.global_prefix.as_deref(),
+                &self.global_prefix_exclusions,
                 &self.global_pipeline,
             )?;
         }
@@ -538,24 +559,19 @@ fn add_openapi_ui_routes(
     ui: OpenApiUiRoute,
     documented_routes: &[RouteDefinition],
     global_prefix: Option<&str>,
+    global_prefix_exclusions: &[MiddlewareRoute],
     pipeline: &PipelineComponents,
 ) -> Result<()> {
     let document = OpenApiDocument::from_routes(ui.info.clone(), documented_routes);
     let document_path = ui.document_path;
     let ui_path = ui.path;
-    let public_document_path = prefixed_public_path(global_prefix, &document_path)?;
     let json_route = openapi_json_route(document_path, document)?.with_pipeline_prefix(pipeline);
+    let json_route =
+        apply_global_prefix_to_route(json_route, global_prefix, global_prefix_exclusions)?;
+    let public_document_path = json_route.path().to_string();
     let ui_route =
         openapi_ui_route(ui_path, public_document_path, ui.info)?.with_pipeline_prefix(pipeline);
-
-    let json_route = match global_prefix {
-        Some(prefix) => json_route.with_path_prefix(prefix)?,
-        None => json_route,
-    };
-    let ui_route = match global_prefix {
-        Some(prefix) => ui_route.with_path_prefix(prefix)?,
-        None => ui_route,
-    };
+    let ui_route = apply_global_prefix_to_route(ui_route, global_prefix, global_prefix_exclusions)?;
     routes.push(json_route);
     routes.push(ui_route);
     Ok(())
@@ -608,13 +624,6 @@ fn openapi_ui_html(title: &str, document_path: &str) -> String {
     )
 }
 
-fn prefixed_public_path(global_prefix: Option<&str>, path: &str) -> Result<String> {
-    match global_prefix {
-        Some(prefix) => join_paths(prefix, path),
-        None => Ok(path.to_string()),
-    }
-}
-
 fn escape_html(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -660,14 +669,32 @@ fn add_cors_preflight_routes(
 fn apply_global_prefix(
     routes: Vec<RouteDefinition>,
     prefix: Option<&str>,
+    exclusions: &[MiddlewareRoute],
 ) -> Result<Vec<RouteDefinition>> {
-    match prefix {
-        Some(prefix) => routes
-            .into_iter()
-            .map(|route| route.with_path_prefix(prefix))
-            .collect(),
-        None => Ok(routes),
+    routes
+        .into_iter()
+        .map(|route| apply_global_prefix_to_route(route, prefix, exclusions))
+        .collect()
+}
+
+fn apply_global_prefix_to_route(
+    route: RouteDefinition,
+    prefix: Option<&str>,
+    exclusions: &[MiddlewareRoute],
+) -> Result<RouteDefinition> {
+    let Some(prefix) = prefix else {
+        return Ok(route);
+    };
+    if global_prefix_excludes(&route, exclusions) {
+        return Ok(route);
     }
+    route.with_path_prefix(prefix)
+}
+
+fn global_prefix_excludes(route: &RouteDefinition, exclusions: &[MiddlewareRoute]) -> bool {
+    exclusions
+        .iter()
+        .any(|exclusion| exclusion.matches(route.method(), &[route.path().to_string()]))
 }
 
 fn validate_unique_routes(

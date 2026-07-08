@@ -1,6 +1,6 @@
 use a3s_boot::{
-    BootApplication, BootRequest, BootResponse, ControllerDefinition, HttpMethod, OpenApiInfo,
-    OpenApiResponse, OpenApiSchema, RouteDefinition,
+    BootApplication, BootRequest, BootResponse, ControllerDefinition, HttpMethod, MiddlewareRoute,
+    OpenApiInfo, OpenApiResponse, OpenApiSchema, RouteDefinition,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -371,6 +371,46 @@ async fn openapi_ui_uses_global_prefix_for_html_and_document_urls() {
         .as_object()
         .unwrap()
         .contains_key("/api/docs"));
+}
+
+#[tokio::test]
+async fn openapi_ui_respects_global_prefix_exclusions_for_document_url() {
+    let app = BootApplication::builder()
+        .global_prefix("/api")
+        .exclude_global_prefix([MiddlewareRoute::get("/docs/openapi.json").unwrap()])
+        .route(RouteDefinition::get("/health", |_| async { Ok(BootResponse::text("ok")) }).unwrap())
+        .serve_openapi_ui(
+            "/docs",
+            "/docs/openapi.json",
+            OpenApiInfo::new("Cats API", "1.0.0"),
+        )
+        .build()
+        .unwrap();
+
+    assert!(app.routes().iter().any(|route| route.path() == "/api/docs"));
+    assert!(app
+        .routes()
+        .iter()
+        .any(|route| route.path() == "/docs/openapi.json"));
+
+    let html = app
+        .call(BootRequest::new(HttpMethod::Get, "/api/docs"))
+        .await
+        .unwrap()
+        .body_text()
+        .unwrap();
+    let document = app
+        .call(BootRequest::new(HttpMethod::Get, "/docs/openapi.json"))
+        .await
+        .unwrap()
+        .body_json::<Value>()
+        .unwrap();
+
+    assert!(html.contains(r#"url: "/docs/openapi.json""#));
+    assert!(document["paths"]
+        .as_object()
+        .unwrap()
+        .contains_key("/api/health"));
 }
 
 #[derive(Debug, serde::Deserialize)]

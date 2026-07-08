@@ -351,6 +351,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | `forwardRef(() => Module)` | `forward_imports = [Module]`, `Module::forward_imports()`, or `DynamicModule::forward_import(...)` |
 | `@Module({ imports, providers, controllers, exports })` | `#[module(...)]` on a module struct, or an explicit `impl Module` |
 | `RouterModule.register([{ path: "api", module: CatsModule }])` | `#[module(route_prefix = "/api", ...)]` or `Module::route_prefix()` |
+| `app.setGlobalPrefix("api", { exclude: [...] })` | `global_prefix("/api").exclude_global_prefix([MiddlewareRoute::get("/health")?])` |
 | `configure(consumer: MiddlewareConsumer)` | `Module::configure(...)` with `MiddlewareConsumer::apply(...).for_routes(...)` |
 | `NestFactory.create(AppModule)` | `BootFactory::create(AppModule)?` |
 | `app.listen(3000)` | `app.listen_with(&AxumAdapter::new(), addr).await` |
@@ -4311,21 +4312,32 @@ fn cats_controller() -> Result<ControllerDefinition> {
 
 ## Global Prefix And Headers
 
-Use an application prefix when an adapter should expose every route under a
-shared base path:
+Use an application prefix when an adapter should expose routes under a shared
+base path. Nest-style exclusions keep selected HTTP routes at their original
+paths:
 
 ```rust
-use a3s_boot::{BootApplication, BootResponse, RouteDefinition, Result};
+use a3s_boot::{BootApplication, BootRequest, BootResponse, MiddlewareRoute, RouteDefinition, Result};
 
 fn app() -> Result<BootApplication> {
     BootApplication::builder()
         .global_prefix("/api/v1")
+        .exclude_global_prefix([MiddlewareRoute::get("/health")?])
         .route(RouteDefinition::get("/health", |_| async {
             Ok(BootResponse::text("ok").with_header("X-Boot", "ready"))
+        })?)
+        .route(RouteDefinition::get("/cats/{id}", |request: BootRequest| async move {
+            Ok(BootResponse::text(request.param("id").unwrap_or("unknown")))
         })?)
         .build()
 }
 ```
+
+`/health` remains unprefixed, while `/cats/{id}` is exposed as
+`/api/v1/cats/{id}`. Exclusions use the same `MiddlewareRoute` selectors as
+`MiddlewareConsumer`, including method-specific and method-agnostic matches.
+They apply to HTTP routes; WebSocket gateway prefixes still follow
+`global_prefix(...)`.
 
 Header helpers normalize names for storage and lookup:
 

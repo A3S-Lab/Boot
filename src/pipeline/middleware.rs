@@ -99,7 +99,7 @@ impl MiddlewareRoute {
         })
     }
 
-    fn matches(&self, route_method: HttpMethod, path_candidates: &[String]) -> bool {
+    pub(crate) fn matches(&self, route_method: HttpMethod, path_candidates: &[String]) -> bool {
         self.matches_method(route_method)
             && path_candidates
                 .iter()

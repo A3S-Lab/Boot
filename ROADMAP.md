@@ -99,8 +99,8 @@ Implemented today:
   controller-level `Pipe`, `Guard`, `Interceptor`, and `ExceptionFilter`
   support.
 - Adapter-neutral request/response types, typed params/query helpers, typed
-  single-value parsing helpers, header helpers, route matching, global prefixes,
-  lifecycle hooks, and an Axum adapter.
+  single-value parsing helpers, header helpers, route matching, global prefixes
+  with Nest-style HTTP route exclusions, lifecycle hooks, and an Axum adapter.
 - OpenAPI route metadata, schema-crate-neutral document generation from resolved
   routes, automatic path-parameter documentation, and optional
   `serve_openapi(...)` JSON route registration plus `serve_openapi_ui(...)`

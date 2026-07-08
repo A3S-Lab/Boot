@@ -1,6 +1,6 @@
 use a3s_boot::{
     BootApplication, BootError, BootRequest, BootResponse, ControllerDefinition, HttpMethod,
-    RouteDefinition,
+    MiddlewareRoute, RouteDefinition,
 };
 use serde::Deserialize;
 
@@ -412,6 +412,54 @@ fn applies_global_prefix_to_direct_routes() {
         .unwrap();
 
     assert_eq!(app.routes()[0].path(), "/api/v1/health");
+}
+
+#[tokio::test]
+async fn global_prefix_exclusions_leave_matching_routes_unprefixed() {
+    let app = BootApplication::builder()
+        .global_prefix("/api")
+        .exclude_global_prefix([MiddlewareRoute::get("/health").unwrap()])
+        .route(
+            RouteDefinition::get("/health", |_| async { Ok(BootResponse::text("get")) }).unwrap(),
+        )
+        .route(
+            RouteDefinition::post("/health", |_| async { Ok(BootResponse::text("post")) }).unwrap(),
+        )
+        .route(
+            RouteDefinition::get("/items/{id}", |request: BootRequest| async move {
+                Ok(BootResponse::text(
+                    request.param("id").unwrap_or("missing").to_string(),
+                ))
+            })
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+
+    assert!(app
+        .routes()
+        .iter()
+        .any(|route| route.method() == HttpMethod::Get && route.path() == "/health"));
+    assert!(app
+        .routes()
+        .iter()
+        .any(|route| route.method() == HttpMethod::Post && route.path() == "/api/health"));
+    assert!(app
+        .routes()
+        .iter()
+        .any(|route| route.method() == HttpMethod::Get && route.path() == "/api/items/{id}"));
+
+    let health = app
+        .call(BootRequest::new(HttpMethod::Get, "/health"))
+        .await
+        .unwrap();
+    assert_eq!(health.body_text().unwrap(), "get");
+
+    let item = app
+        .call(BootRequest::new(HttpMethod::Get, "/api/items/42"))
+        .await
+        .unwrap();
+    assert_eq!(item.body_text().unwrap(), "42");
 }
 
 #[test]
