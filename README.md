@@ -64,6 +64,16 @@ a3s-boot = { version = "0.1", features = ["cache"] }
 serde = { version = "1", features = ["derive"] }
 ```
 
+Enable the optional authentication module when the application needs Nest-style
+strategy-backed guards:
+
+```toml
+[dependencies]
+a3s-boot = { version = "0.1", features = ["auth"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
 Enable the optional scheduler module when the application needs Nest-style
 scheduled jobs:
 
@@ -3476,6 +3486,66 @@ when it exists. `with_fallback_file("index.html")` enables SPA fallback for
 missing client-side routes. Dotfiles are not served by default, and paths that
 try to escape the configured root return `BootError::Forbidden`.
 
+## Authentication
+
+Enable the `auth` feature to register provider-backed authentication strategies
+and protect routes with `AuthGuard`, similar to Nest's `AuthGuard("jwt")`
+pattern. `AuthModule` exports `AuthService`; `AuthGuard` resolves that provider
+from the current module scope, runs the selected strategy, checks optional
+roles/scopes metadata, and attaches an `AuthPrincipal` to `BootRequest`.
+
+```rust
+use a3s_boot::{
+    AuthModule, AuthPrincipal, BootApplication, BootRequest, BootResponse,
+    ExecutionContext, Result, RouteDefinition, AUTH_PUBLIC_METADATA,
+    AUTH_ROLES_METADATA,
+};
+use serde_json::json;
+
+fn app() -> Result<BootApplication> {
+    BootApplication::builder()
+        .import(
+            AuthModule::new("auth")
+                .bearer(|token: String, _context: ExecutionContext| async move {
+                    match token.as_str() {
+                        "admin-token" => Ok(Some(
+                            AuthPrincipal::new("cat-1")
+                                .with_role("admin")
+                                .with_scope("cats:read")
+                                .with_claim("name", "Milo")?,
+                        )),
+                        _ => Ok(None),
+                    }
+                })
+                .global(),
+        )
+        .use_global_auth()
+        .route(
+            RouteDefinition::get("/me", |request: BootRequest| async move {
+                let principal = request.require_auth_principal()?;
+                BootResponse::json(&json!({
+                    "subject": principal.subject(),
+                    "name": principal.claim("name"),
+                }))
+            })?
+            .with_metadata_value(AUTH_ROLES_METADATA, json!(["admin"])),
+        )
+        .route(
+            RouteDefinition::get("/public", |_| async { Ok(BootResponse::text("ok")) })?
+                .with_metadata_value(AUTH_PUBLIC_METADATA, json!(true)),
+        )
+        .build()
+}
+```
+
+Use `AuthModule::bearer(...)` for JWT or opaque bearer-token verification.
+Use `AuthModule::strategy("api-key", ...)` plus route metadata
+`AUTH_STRATEGY_METADATA` when a route needs a named strategy. Controller and
+route macros can attach the same metadata with
+`#[metadata("auth.public", true)]`, `#[metadata("auth.roles", ["admin"])]`,
+`#[metadata("auth.scopes", ["cats:read"])]`, and
+`#[metadata("auth.strategy", "api-key")]`.
+
 ## Security Helpers
 
 Enable the `security` feature to use Nest-style security hooks through the
@@ -3874,6 +3944,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | Message transport | Adapter-neutral request-response and event-only message patterns |
 | Event emitter | Optional provider-backed in-process application events |
 | CQRS | Optional command, query, and event buses through `CqrsModule` |
+| Authentication | Optional strategy-backed auth provider and `AuthGuard` |
 | Health check | Optional provider-backed readiness/liveness reports |
 | Configuration | Optional ACL-backed typed providers through `ConfigModule` |
 | HTTP client | Optional provider-backed outbound HTTP client through `HttpModule` |
@@ -3906,6 +3977,7 @@ The crate is split by framework concern:
 src/
 ├── adapters/     # Optional backend adapters such as Axum
 ├── app/          # Application instance, builder, and module registration
+├── auth.rs       # Optional strategy-backed authentication module and guard
 ├── cache.rs      # Optional typed cache module and in-memory store
 ├── compression.rs # Optional gzip response compression interceptor
 ├── config.rs     # Optional ACL-backed typed configuration module

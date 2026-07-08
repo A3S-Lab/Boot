@@ -2,6 +2,8 @@ use super::application::BootApplication;
 use super::lazy::LazyModuleLoader;
 use super::registration::{ModuleRegistrationSink, ModuleRegistry};
 use crate::pipeline::PipelineComponents;
+#[cfg(feature = "auth")]
+use crate::AuthGuard;
 use crate::{
     ApiVersioning, BootError, BootErrorKind, BootResponse, ExceptionFilter, ExecutionInterceptor,
     Guard, Interceptor, MessagePatternDefinition, Middleware, Module, ModuleRef, OpenApiDocument,
@@ -130,6 +132,21 @@ impl BootApplicationBuilder {
         let guard: Arc<dyn Guard> = Arc::new(guard);
         self.global_pipeline.push_guard_arc(Arc::clone(&guard));
         self.global_execution_guards.push(guard);
+        self
+    }
+
+    /// Add a provider-backed authentication guard using the default auth strategy.
+    #[cfg(feature = "auth")]
+    pub fn use_global_auth(mut self) -> Self {
+        self.global_pipeline.push_guard(AuthGuard::new());
+        self
+    }
+
+    /// Add a provider-backed authentication guard using a named auth strategy.
+    #[cfg(feature = "auth")]
+    pub fn use_global_auth_strategy(mut self, strategy: impl Into<String>) -> Self {
+        self.global_pipeline
+            .push_guard(AuthGuard::new().strategy(strategy));
         self
     }
 

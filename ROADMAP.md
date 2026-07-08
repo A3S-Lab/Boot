@@ -125,6 +125,9 @@ Implemented today:
 - Optional CQRS buses with `CqrsModule`, typed `CommandBus`, `QueryBus`, and
   `EventBus`, module-scoped provider resolution through `CqrsContext`, duplicate
   command/query handler diagnostics, and multi-handler event publishing.
+- Optional provider-backed authentication with `AuthModule`, `AuthService`,
+  bearer or custom strategies, `AuthGuard`, route/controller auth metadata,
+  roles/scopes checks, public-route bypass, and `BootRequest` principals.
 - Typed cache modules with `CacheModule`, `Cache`, in-memory storage,
   default TTLs, named/global provider exports, and cache-store abstraction.
 - Provider-backed task scheduling with `ScheduleModule`, `Scheduler`,
@@ -546,6 +549,7 @@ Nest equivalent areas:
 - queues (implemented)
 - application events (implemented)
 - CQRS command, query, and event buses (implemented)
+- authentication strategies and guards (implemented)
 - health checks (implemented)
 - outbound HTTP client module (implemented)
 - logging (implemented)
@@ -580,6 +584,9 @@ Acceptance:
   and query results; publish typed events to multiple handlers; resolve providers
   from handler context; export buses globally; and reject duplicate command or
   query handlers. (Covered)
+- Authentication can register bearer or custom strategies, select strategies
+  from guard configuration or route metadata, attach principals to requests,
+  allow public routes, and enforce role/scope metadata. (Covered)
 - Cache can register typed providers, cache serde values with TTL, and
   participate in module imports/exports. (Covered)
 - Schedule can register typed providers, run timeout/interval/cron jobs through

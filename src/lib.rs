@@ -11,6 +11,8 @@ use std::pin::Pin;
 
 mod adapters;
 mod app;
+#[cfg(feature = "auth")]
+mod auth;
 #[cfg(feature = "cache")]
 mod cache;
 #[cfg(feature = "compression")]
@@ -73,6 +75,12 @@ pub use adapters::AxumAdapter;
 pub use app::{
     BootApplication, BootApplicationBuilder, BootApplicationContext, BootApplicationHandle,
     BootFactory, BootMicroservice, LazyLoadedModule, LazyModuleLoader, RouteMatch,
+};
+#[cfg(feature = "auth")]
+pub use auth::{
+    AuthCredentials, AuthGuard, AuthModule, AuthPrincipal, AuthService, AuthStrategy,
+    AuthStrategyDefinition, BearerAuthStrategy, BearerTokenVerifier, AUTH_PUBLIC_METADATA,
+    AUTH_ROLES_METADATA, AUTH_SCOPES_METADATA, AUTH_STRATEGY_METADATA,
 };
 #[cfg(feature = "cache")]
 pub use cache::{Cache, CacheModule, CacheOptions, CacheStore, InMemoryCacheStore};

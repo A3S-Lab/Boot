@@ -8,12 +8,16 @@ use super::method::HttpMethod;
 use super::query::{parse_query, parse_query_pairs, split_path_query};
 use crate::percent::validate_percent_encoding;
 use crate::routing::host::normalize_host_header;
+#[cfg(feature = "auth")]
+use crate::AuthPrincipal;
 use crate::{validate_value, BootError, ModuleRef, ProviderToken, Result, Validate};
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
+#[cfg(feature = "auth")]
+use std::sync::RwLock;
 
 /// Framework-neutral HTTP request passed to Boot route handlers.
 #[derive(Debug, Clone)]
@@ -28,6 +32,8 @@ pub struct BootRequest {
     pub appended_headers: Vec<(String, String)>,
     pub body: Vec<u8>,
     module_ref: Option<ModuleRef>,
+    #[cfg(feature = "auth")]
+    auth_principal: Arc<RwLock<Option<AuthPrincipal>>>,
 }
 
 impl PartialEq for BootRequest {
@@ -60,6 +66,8 @@ impl BootRequest {
             appended_headers: Vec::new(),
             body: Vec::new(),
             module_ref: None,
+            #[cfg(feature = "auth")]
+            auth_principal: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -134,6 +142,47 @@ impl BootRequest {
             Some(module_ref) => module_ref.get_optional_named::<T>(token),
             None => Ok(None),
         }
+    }
+
+    #[cfg(feature = "auth")]
+    pub fn with_auth_principal(mut self, principal: AuthPrincipal) -> Self {
+        self.auth_principal = Arc::new(RwLock::new(Some(principal)));
+        self
+    }
+
+    #[cfg(feature = "auth")]
+    pub fn set_auth_principal(&self, principal: AuthPrincipal) -> Result<()> {
+        *self
+            .auth_principal
+            .write()
+            .map_err(|_| BootError::Internal("auth principal lock is poisoned".to_string()))? =
+            Some(principal);
+        Ok(())
+    }
+
+    #[cfg(feature = "auth")]
+    pub fn clear_auth_principal(&self) -> Result<()> {
+        *self
+            .auth_principal
+            .write()
+            .map_err(|_| BootError::Internal("auth principal lock is poisoned".to_string()))? =
+            None;
+        Ok(())
+    }
+
+    #[cfg(feature = "auth")]
+    pub fn auth_principal(&self) -> Result<Option<AuthPrincipal>> {
+        Ok(self
+            .auth_principal
+            .read()
+            .map_err(|_| BootError::Internal("auth principal lock is poisoned".to_string()))?
+            .clone())
+    }
+
+    #[cfg(feature = "auth")]
+    pub fn require_auth_principal(&self) -> Result<AuthPrincipal> {
+        self.auth_principal()?
+            .ok_or_else(|| BootError::Unauthorized("missing authenticated principal".to_string()))
     }
 
     pub fn with_path_params(mut self, params: BTreeMap<String, String>) -> Self {

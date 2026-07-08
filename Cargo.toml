@@ -17,6 +17,7 @@ path = "src/lib.rs"
 
 [features]
 default = ["axum", "macros"]
+auth = []
 axum = ["dep:axum", "dep:http-body-util", "dep:tokio"]
 cache = []
 compression = ["dep:flate2"]
