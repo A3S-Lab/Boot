@@ -1,5 +1,6 @@
 use super::application::ModuleInstance;
 use crate::pipeline::PipelineComponents;
+use crate::routing::path::join_paths;
 use crate::{
     BootError, BoxFuture, ControllerDefinition, MessagePatternDefinition, Module, ModuleRef,
     ProviderDefinition, ProviderToken, Result, RouteDefinition, WebSocketGatewayDefinition,
@@ -41,6 +42,16 @@ impl ModuleRegistry {
         global_pipeline: &PipelineComponents,
         sink: &mut ModuleRegistrationSink<'_>,
     ) -> Result<RegisteredModule> {
+        self.register_module_with_prefix(module, global_pipeline, sink, "")
+    }
+
+    fn register_module_with_prefix(
+        &mut self,
+        module: Arc<dyn Module>,
+        global_pipeline: &PipelineComponents,
+        sink: &mut ModuleRegistrationSink<'_>,
+        parent_route_prefix: &str,
+    ) -> Result<RegisteredModule> {
         let name = module.name();
         if name.trim().is_empty() {
             return Err(BootError::EmptyModuleName);
@@ -51,7 +62,8 @@ impl ModuleRegistry {
         }
 
         self.enter_module(name)?;
-        let result = self.register_module_inner(module, name, global_pipeline, sink);
+        let result =
+            self.register_module_inner(module, name, global_pipeline, sink, parent_route_prefix);
         self.exit_module();
         result
     }
@@ -61,6 +73,16 @@ impl ModuleRegistry {
         module: Arc<dyn Module>,
         global_pipeline: &'a PipelineComponents,
         sink: &'a mut ModuleRegistrationSink<'_>,
+    ) -> BoxFuture<'a, Result<RegisteredModule>> {
+        self.register_module_async_with_prefix(module, global_pipeline, sink, "")
+    }
+
+    fn register_module_async_with_prefix<'a>(
+        &'a mut self,
+        module: Arc<dyn Module>,
+        global_pipeline: &'a PipelineComponents,
+        sink: &'a mut ModuleRegistrationSink<'_>,
+        parent_route_prefix: &'a str,
     ) -> BoxFuture<'a, Result<RegisteredModule>> {
         Box::pin(async move {
             let name = module.name();
@@ -74,7 +96,13 @@ impl ModuleRegistry {
 
             self.enter_module(name)?;
             let result = self
-                .register_module_async_inner(module, name, global_pipeline, sink)
+                .register_module_async_inner(
+                    module,
+                    name,
+                    global_pipeline,
+                    sink,
+                    parent_route_prefix,
+                )
                 .await;
             self.exit_module();
             result
@@ -94,10 +122,17 @@ impl ModuleRegistry {
         name: &'static str,
         global_pipeline: &PipelineComponents,
         sink: &mut ModuleRegistrationSink<'_>,
+        parent_route_prefix: &str,
     ) -> Result<RegisteredModule> {
+        let route_prefix = module_route_prefix(parent_route_prefix, module.route_prefix())?;
         let mut imported_modules = Vec::new();
         for imported in module.imports() {
-            imported_modules.push(self.register_module(imported, global_pipeline, sink)?);
+            imported_modules.push(self.register_module_with_prefix(
+                imported,
+                global_pipeline,
+                sink,
+                &route_prefix,
+            )?);
         }
 
         let module_ref = ModuleRef::new();
@@ -138,18 +173,20 @@ impl ModuleRegistry {
                 &module_ref,
                 global_pipeline,
                 &module_pipeline,
+                &route_prefix,
                 sink.routes,
-            );
+            )?;
         }
 
-        sink.routes
-            .extend(module.routes()?.into_iter().map(|route| {
-                route
-                    .with_pipeline_prefix(&module_pipeline)
-                    .with_pipeline_prefix(global_pipeline)
-                    .with_module_name(name)
-                    .with_module_ref(module_ref.clone())
-            }));
+        for route in module.routes()? {
+            let route = route
+                .with_pipeline_prefix(&module_pipeline)
+                .with_pipeline_prefix(global_pipeline)
+                .with_module_name(name)
+                .with_module_ref(module_ref.clone());
+            let route = with_route_prefix(route, &route_prefix)?;
+            sink.routes.push(route);
+        }
         sink.gateways.extend(
             module
                 .gateways(&module_ref)?
@@ -180,13 +217,20 @@ impl ModuleRegistry {
         name: &'static str,
         global_pipeline: &'a PipelineComponents,
         sink: &'a mut ModuleRegistrationSink<'_>,
+        parent_route_prefix: &'a str,
     ) -> BoxFuture<'a, Result<RegisteredModule>> {
         Box::pin(async move {
+            let route_prefix = module_route_prefix(parent_route_prefix, module.route_prefix())?;
             let mut imported_modules = Vec::new();
             for imported in module.imports() {
                 imported_modules.push(
-                    self.register_module_async(imported, global_pipeline, sink)
-                        .await?,
+                    self.register_module_async_with_prefix(
+                        imported,
+                        global_pipeline,
+                        sink,
+                        &route_prefix,
+                    )
+                    .await?,
                 );
             }
 
@@ -228,18 +272,20 @@ impl ModuleRegistry {
                     &module_ref,
                     global_pipeline,
                     &module_pipeline,
+                    &route_prefix,
                     sink.routes,
-                );
+                )?;
             }
 
-            sink.routes
-                .extend(module.routes()?.into_iter().map(|route| {
-                    route
-                        .with_pipeline_prefix(&module_pipeline)
-                        .with_pipeline_prefix(global_pipeline)
-                        .with_module_name(name)
-                        .with_module_ref(module_ref.clone())
-                }));
+            for route in module.routes()? {
+                let route = route
+                    .with_pipeline_prefix(&module_pipeline)
+                    .with_pipeline_prefix(global_pipeline)
+                    .with_module_name(name)
+                    .with_module_ref(module_ref.clone());
+                let route = with_route_prefix(route, &route_prefix)?;
+                sink.routes.push(route);
+            }
             sink.gateways.extend(
                 module
                     .gateways(&module_ref)?
@@ -303,13 +349,37 @@ fn register_controller(
     module_ref: &ModuleRef,
     global_pipeline: &PipelineComponents,
     module_pipeline: &PipelineComponents,
+    route_prefix: &str,
     routes: &mut Vec<RouteDefinition>,
-) {
-    routes.extend(controller.into_routes().into_iter().map(|route| {
-        route
+) -> Result<()> {
+    for route in controller.into_routes() {
+        let route = route
             .with_pipeline_prefix(module_pipeline)
             .with_pipeline_prefix(global_pipeline)
             .with_module_name(module_name)
-            .with_module_ref(module_ref.clone())
-    }));
+            .with_module_ref(module_ref.clone());
+        routes.push(with_route_prefix(route, route_prefix)?);
+    }
+    Ok(())
+}
+
+fn module_route_prefix(parent_prefix: &str, module_prefix: Option<&str>) -> Result<String> {
+    let module_prefix = module_prefix.unwrap_or("");
+    if parent_prefix.is_empty() && (module_prefix.is_empty() || module_prefix == "/") {
+        return Ok(String::new());
+    }
+
+    if module_prefix.is_empty() || module_prefix == "/" {
+        return Ok(parent_prefix.to_string());
+    }
+
+    join_paths(parent_prefix, module_prefix)
+}
+
+fn with_route_prefix(route: RouteDefinition, route_prefix: &str) -> Result<RouteDefinition> {
+    if route_prefix.is_empty() {
+        Ok(route)
+    } else {
+        route.with_path_prefix(route_prefix)
+    }
 }

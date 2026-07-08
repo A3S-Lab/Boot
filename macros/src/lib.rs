@@ -522,6 +522,11 @@ fn expand_module(
     let routes = args.routes;
     let gateways = args.gateways;
     let message_controllers = args.message_controllers;
+    let route_prefix = args.route_prefix;
+    let route_prefix_body = match route_prefix {
+        Some(route_prefix) => quote!(Some(#route_prefix)),
+        None => quote!(None),
+    };
     let controllers_body = if controllers.is_empty() {
         quote!({
             let _ = module_ref;
@@ -587,6 +592,10 @@ fn expand_module(
 
             fn is_global(&self) -> bool {
                 #global
+            }
+
+            fn route_prefix(&self) -> ::std::option::Option<&str> {
+                #route_prefix_body
             }
 
             fn controllers(
@@ -3346,6 +3355,7 @@ struct ModuleArgs {
     message_controllers: Vec<Type>,
     exports: Vec<ModuleExportSpec>,
     global: bool,
+    route_prefix: Option<LitStr>,
 }
 
 impl Parse for ModuleArgs {
@@ -3375,6 +3385,9 @@ impl Parse for ModuleArgs {
             input.parse::<Token![=]>()?;
             match key.as_str() {
                 "name" => set_once(&mut args.name, input.parse::<LitStr>()?, name)?,
+                "route_prefix" => {
+                    set_once(&mut args.route_prefix, input.parse::<LitStr>()?, name)?;
+                }
                 "imports" => args.imports.extend(parse_expr_array(input)?),
                 "providers" => args.providers.extend(parse_expr_array(input)?),
                 "controllers" => args.controllers.extend(parse_type_array(input)?),
@@ -3387,7 +3400,7 @@ impl Parse for ModuleArgs {
                 _ => {
                     return Err(syn::Error::new_spanned(
                         name,
-                        "expected `name`, `imports`, `providers`, `controllers`, `routes`, `gateways`, `message_controllers`, `exports`, or `global`",
+                        "expected `name`, `route_prefix`, `imports`, `providers`, `controllers`, `routes`, `gateways`, `message_controllers`, `exports`, or `global`",
                     ));
                 }
             }

@@ -27,7 +27,8 @@ Official Nest.js areas used as reference:
 
 Implemented today:
 
-- `Module` with imports, providers, controllers, direct routes, and lifecycle hooks.
+- `Module` with imports, providers, controllers, direct routes, module route
+  prefixes, and lifecycle hooks.
 - `BootFactory` with NestFactory-style `create`, `create_application_context`,
   `create_microservice`, async provider-aware `create_async`,
   `create_application_context_async`, and `create_microservice_async`, managed
@@ -59,8 +60,8 @@ Implemented today:
   structs and named-field structs whose dependencies are `Arc<T>` or
   `Option<Arc<T>>`, with `#[inject("token")]` for named provider lookup.
   `#[module]` implements `Module` from Nest-style metadata lists for imports,
-  providers, controllers, routes, gateways, message controllers, exports, and
-  global modules.
+  providers, controllers, routes, gateways, message controllers, exports,
+  route prefixes, and global modules.
 - Host-scoped HTTP routes with `RouteDefinition::with_host(...)` and
   `ControllerDefinition::with_host(...)` for Nest-style host-based controllers.
 - API versioning macros: `#[version]`, `#[versions]`, and
@@ -108,9 +109,9 @@ Implemented today:
   controller-level, route-level validation switches, and `#[validate]` /
   `#[skip_validation]` macros.
 - Module-scoped provider registries, explicit provider exports, transitive
-  re-exports, global module exports, and `DynamicModule` for runtime-built
-  provider modules, with provider-only lazy module loading and contextual
-  module import cycle diagnostics.
+  re-exports, global module exports, module route prefixes, and `DynamicModule`
+  for runtime-built provider modules, with provider-only lazy module loading
+  and contextual module import cycle diagnostics.
 - Provider lifecycle scopes with default singleton providers, request-scoped
   providers cached per in-process request context, transient providers built per
   resolution, async singleton provider factories awaited during async graph
@@ -421,6 +422,9 @@ Tasks:
   `Module::is_global`)
 - Add dynamic module builders for configuration-driven providers. (Implemented
   with `DynamicModule`)
+- Add module route prefixes comparable to Nest `RouterModule.register(...)`,
+  including import-tree composition and `DynamicModule::route_prefix(...)`.
+  (Implemented)
 - Preserve direct host access through `BootApplication::get(...)` where it makes
   sense, but avoid accidentally exposing private feature-module providers.
   (Implemented; root scopes and global exports are visible to the host)

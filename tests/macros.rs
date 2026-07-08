@@ -787,6 +787,30 @@ impl Module for MacroSerializationModule {
     }
 }
 
+#[injectable]
+#[derive(Debug)]
+struct MacroPrefixedController;
+
+#[controller("/dogs")]
+impl MacroPrefixedController {
+    #[get("/{id}")]
+    async fn find(&self, #[param("id")] id: String) -> Result<MacroCatDto> {
+        Ok(MacroCatDto {
+            id,
+            name: "Rex".to_string(),
+        })
+    }
+}
+
+#[a3s_boot::module(
+    name = "macro-prefixed",
+    route_prefix = "/api",
+    providers = [MacroPrefixedController],
+    controllers = [MacroPrefixedController]
+)]
+#[derive(Debug)]
+struct MacroPrefixedModule;
+
 #[tokio::test]
 async fn macros_register_injectable_services_and_controller_routes() {
     let app = BootApplication::builder()
@@ -1464,6 +1488,29 @@ async fn macro_pipeline_decorators_register_controller_and_route_hooks() {
         .await
         .unwrap_err();
     assert!(matches!(unfiltered, BootError::Unauthorized(message) if message == "macro private"));
+}
+
+#[tokio::test]
+async fn module_macro_registers_route_prefixes() {
+    let app = BootApplication::builder()
+        .import(MacroPrefixedModule)
+        .build()
+        .unwrap();
+
+    assert_eq!(MacroPrefixedModule.route_prefix(), Some("/api"));
+    assert_eq!(app.routes()[0].path(), "/api/dogs/{id}");
+
+    let response = app
+        .call(BootRequest::new(a3s_boot::HttpMethod::Get, "/api/dogs/42"))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.body_json::<MacroCatDto>().unwrap(),
+        MacroCatDto {
+            id: "42".to_string(),
+            name: "Rex".to_string(),
+        }
+    );
 }
 
 #[tokio::test]

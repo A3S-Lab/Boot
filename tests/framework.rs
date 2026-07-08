@@ -150,6 +150,68 @@ impl Module for MetadataModule {
     }
 }
 
+#[derive(Debug)]
+struct PrefixedChildModule;
+
+impl Module for PrefixedChildModule {
+    fn name(&self) -> &'static str {
+        "prefixed-child"
+    }
+
+    fn route_prefix(&self) -> Option<&str> {
+        Some("/children")
+    }
+
+    fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
+        Ok(vec![ControllerDefinition::new("/cats")?
+            .get("/{id}", |_| async {
+                Ok(BootResponse::text("cat"))
+            })?])
+    }
+
+    fn routes(&self) -> Result<Vec<RouteDefinition>> {
+        Ok(vec![RouteDefinition::get("/health", |_| async {
+            Ok(BootResponse::text("child"))
+        })?])
+    }
+}
+
+#[derive(Debug)]
+struct PrefixedParentModule;
+
+impl Module for PrefixedParentModule {
+    fn name(&self) -> &'static str {
+        "prefixed-parent"
+    }
+
+    fn route_prefix(&self) -> Option<&str> {
+        Some("/api")
+    }
+
+    fn imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(PrefixedChildModule)]
+    }
+
+    fn routes(&self) -> Result<Vec<RouteDefinition>> {
+        Ok(vec![RouteDefinition::get("/parent", |_| async {
+            Ok(BootResponse::text("parent"))
+        })?])
+    }
+}
+
+#[derive(Debug)]
+struct InvalidRoutePrefixModule;
+
+impl Module for InvalidRoutePrefixModule {
+    fn name(&self) -> &'static str {
+        "invalid-route-prefix"
+    }
+
+    fn route_prefix(&self) -> Option<&str> {
+        Some("api")
+    }
+}
+
 #[test]
 fn exposes_route_module_and_controller_metadata() {
     let app = BootApplication::builder()
@@ -186,6 +248,76 @@ fn exposes_route_module_and_controller_metadata() {
     assert_eq!(module_route.controller_prefix(), None);
     assert_eq!(controller_route.module_name(), Some("metadata"));
     assert_eq!(controller_route.controller_prefix(), Some("/items"));
+}
+
+#[tokio::test]
+async fn module_route_prefixes_apply_to_nested_http_routes() {
+    let app = BootApplication::builder()
+        .global_prefix("/v1")
+        .import(PrefixedParentModule)
+        .build_async()
+        .await
+        .unwrap();
+
+    assert!(app
+        .routes()
+        .iter()
+        .any(|route| route.path() == "/v1/api/parent"));
+    let child_route = app
+        .routes()
+        .iter()
+        .find(|route| route.path() == "/v1/api/children/health")
+        .unwrap();
+    let controller_route = app
+        .routes()
+        .iter()
+        .find(|route| route.path() == "/v1/api/children/cats/{id}")
+        .unwrap();
+
+    assert_eq!(child_route.module_name(), Some("prefixed-child"));
+    assert_eq!(child_route.controller_prefix(), None);
+    assert_eq!(controller_route.module_name(), Some("prefixed-child"));
+    assert_eq!(controller_route.controller_prefix(), Some("/cats"));
+
+    let response = app
+        .call(a3s_boot::BootRequest::new(
+            HttpMethod::Get,
+            "/v1/api/children/cats/42",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.body_text().unwrap(), "cat");
+}
+
+#[test]
+fn dynamic_module_route_prefixes_apply_to_declared_routes() {
+    let app = BootApplication::builder()
+        .import(
+            a3s_boot::DynamicModule::new("dynamic-routes")
+                .route_prefix("/dynamic")
+                .route(
+                    RouteDefinition::get("/health", |_| async {
+                        Ok(BootResponse::text("dynamic"))
+                    })
+                    .unwrap(),
+                ),
+        )
+        .build()
+        .unwrap();
+
+    assert_eq!(app.routes()[0].path(), "/dynamic/health");
+}
+
+#[test]
+fn module_route_prefixes_reject_relative_paths() {
+    let result = BootApplication::builder()
+        .import(InvalidRoutePrefixModule)
+        .build();
+
+    assert!(matches!(
+        result,
+        Err(BootError::InvalidRoutePath(path)) if path == "api"
+    ));
 }
 
 struct RecordingAdapter;

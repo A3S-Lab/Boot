@@ -18,6 +18,7 @@ pub struct DynamicModule {
     gateways: Vec<WebSocketGatewayDefinition>,
     message_patterns: Vec<MessagePatternDefinition>,
     global: bool,
+    route_prefix: Option<String>,
 }
 
 impl DynamicModule {
@@ -33,6 +34,7 @@ impl DynamicModule {
             gateways: Vec::new(),
             message_patterns: Vec::new(),
             global: false,
+            route_prefix: None,
         }
     }
 
@@ -95,6 +97,11 @@ impl DynamicModule {
         self
     }
 
+    pub fn route_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.route_prefix = Some(prefix.into());
+        self
+    }
+
     pub fn gateway(mut self, gateway: WebSocketGatewayDefinition) -> Self {
         self.gateways.push(gateway);
         self
@@ -130,6 +137,10 @@ impl Module for DynamicModule {
 
     fn is_global(&self) -> bool {
         self.global
+    }
+
+    fn route_prefix(&self) -> Option<&str> {
+        self.route_prefix.as_deref()
     }
 
     fn middleware(&self) -> Vec<Arc<dyn Middleware>> {

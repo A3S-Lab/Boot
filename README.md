@@ -347,6 +347,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@Inject("TOKEN")` | `#[inject("token")]` on an `Arc<T>` or `Option<Arc<T>>` field |
 | `@Optional()` | `Option<Arc<T>>` on an injectable field |
 | `@Module({ imports, providers, controllers, exports })` | `#[module(...)]` on a module struct, or an explicit `impl Module` |
+| `RouterModule.register([{ path: "api", module: CatsModule }])` | `#[module(route_prefix = "/api", ...)]` or `Module::route_prefix()` |
 | `NestFactory.create(AppModule)` | `BootFactory::create(AppModule)?` |
 | `app.listen(3000)` | `app.listen_with(&AxumAdapter::new(), addr).await` |
 | `app.close()` | `app.close().await` |
@@ -477,6 +478,7 @@ impl CatsController {
 
 #[module(
     name = "cats",
+    route_prefix = "/api",
     providers = [CatsService, CatsController],
     controllers = [CatsController],
     exports = [CatsService],
@@ -500,12 +502,12 @@ named provider. `#[controller("/cats")]` adds a
 impl block. `#[module(...)]` implements `Module` for a struct from Nest-style
 metadata lists: `imports = [...]`, `providers = [...]`, `controllers = [...]`,
 `gateways = [...]`, `message_controllers = [...]`, `routes = [...]`,
-`exports = [...]`, and `global`. Provider entries that are plain type paths
-expand to `Type::provider()`; entries that are full expressions are used as
-`ProviderDefinition` values. Controller, gateway, and message-controller entries
-are resolved from the module's `ModuleRef`, so they should usually be listed in
-`providers` as injectables. GET, POST, PUT, PATCH, and DELETE route attributes
-default to JSON.
+`exports = [...]`, `route_prefix = "/api"`, and `global`. Provider entries that
+are plain type paths expand to `Type::provider()`; entries that are full
+expressions are used as `ProviderDefinition` values. Controller, gateway, and
+message-controller entries are resolved from the module's `ModuleRef`, so they
+should usually be listed in `providers` as injectables. GET, POST, PUT, PATCH,
+and DELETE route attributes default to JSON.
 Use extractor attributes on method arguments for Nest-style request binding:
 `#[param("id")]`, `#[params]`, `#[query]`, `#[query("name")]`, `#[body]`,
 `#[header("name")]`, `#[headers]`, `#[host_param("account")]`, `#[ip]`, and
@@ -2357,7 +2359,8 @@ module stay private unless that module returns their `ProviderToken` from
 
 ```rust
 use a3s_boot::{
-    BootApplication, Module, ModuleRef, ProviderDefinition, ProviderToken, Result,
+    BootApplication, BootResponse, Module, ModuleRef, ProviderDefinition, ProviderToken,
+    Result, RouteDefinition,
 };
 use std::sync::Arc;
 
@@ -2460,6 +2463,43 @@ fn config_module(database_url: String) -> DynamicModule {
 `BootApplication::get(...)` resolves from root module scopes and global exports.
 Private providers from imported feature modules are not exposed unless they are
 exported into a root-visible scope.
+
+Modules can also mount their HTTP controllers and direct routes under a module
+route prefix, similar to Nest's `RouterModule.register(...)`. Prefixes compose
+through the import tree and still run before the application `global_prefix(...)`:
+
+```rust
+#[derive(Debug)]
+struct AdminModule;
+
+impl Module for AdminModule {
+    fn name(&self) -> &'static str {
+        "admin"
+    }
+
+    fn route_prefix(&self) -> Option<&str> {
+        Some("/admin")
+    }
+
+    fn routes(&self) -> Result<Vec<RouteDefinition>> {
+        Ok(vec![RouteDefinition::get("/health", |_| async {
+            Ok(BootResponse::text("ok"))
+        })?])
+    }
+}
+
+let app = BootApplication::builder()
+    .global_prefix("/api")
+    .import(AdminModule)
+    .build()?;
+
+assert_eq!(app.routes()[0].path(), "/api/admin/health");
+```
+
+`DynamicModule::route_prefix("/admin")` provides the same behavior for
+runtime-built modules. Module route prefixes apply to HTTP controllers and
+direct HTTP routes, while WebSocket gateways and microservice patterns keep
+their own transport paths.
 
 ## Lazy Module Loading
 

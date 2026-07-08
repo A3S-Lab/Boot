@@ -36,6 +36,11 @@ pub trait Module: Send + Sync + 'static {
         false
     }
 
+    /// Optional HTTP route prefix applied to controllers and direct routes in this module and its imports.
+    fn route_prefix(&self) -> Option<&str> {
+        None
+    }
+
     /// Middleware applied to controllers and direct routes declared by this module.
     fn middleware(&self) -> Vec<Arc<dyn Middleware>> {
         Vec::new()
