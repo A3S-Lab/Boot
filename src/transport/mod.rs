@@ -9,11 +9,15 @@ use std::future::Future;
 use std::ops::Deref;
 use std::sync::Arc;
 
+#[cfg(feature = "nats-transport")]
+mod nats;
 #[cfg(feature = "redis-transport")]
 mod redis;
 #[cfg(feature = "tcp-transport")]
 mod tcp;
 
+#[cfg(feature = "nats-transport")]
+pub use self::nats::{NatsTransport, NatsTransportClient, NatsTransportOptions};
 #[cfg(feature = "redis-transport")]
 pub use self::redis::{RedisTransport, RedisTransportClient, RedisTransportOptions};
 #[cfg(feature = "tcp-transport")]

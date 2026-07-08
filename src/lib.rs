@@ -147,6 +147,8 @@ pub use transport::{
     MessagePatternKind, MessageTransport, TransportContext, TransportGuard, TransportInterceptor,
     TransportMessage, TransportPipe, TransportReply,
 };
+#[cfg(feature = "nats-transport")]
+pub use transport::{NatsTransport, NatsTransportClient, NatsTransportOptions};
 #[cfg(feature = "redis-transport")]
 pub use transport::{RedisTransport, RedisTransportClient, RedisTransportOptions};
 #[cfg(feature = "tcp-transport")]

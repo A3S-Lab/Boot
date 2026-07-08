@@ -28,6 +28,7 @@ logging = []
 macros = ["dep:a3s-boot-macros"]
 openapi-schemas = ["dep:schemars"]
 queue = ["dep:tokio"]
+nats-transport = ["dep:async-nats", "dep:tokio"]
 redis-transport = ["dep:redis", "dep:tokio"]
 schedule = ["dep:chrono", "dep:cron", "dep:tokio"]
 security = []
@@ -37,6 +38,7 @@ tcp-transport = ["dep:tokio"]
 [dependencies]
 a3s-acl = { version = "0.2.1", optional = true }
 a3s-boot-macros = { version = "0.1.0", path = "macros", optional = true }
+async-nats = { version = "0.49.1", default-features = false, optional = true }
 axum = { version = "0.8", features = ["ws"], optional = true }
 bytes = { version = "1", optional = true }
 chrono = { version = "0.4", optional = true }

@@ -4,6 +4,8 @@ use a3s_boot::{
     MessageTransport, Module, ModuleRef, ProviderDefinition, Result, TransportContext,
     TransportInterceptor, TransportMessage, TransportReply, Validate,
 };
+#[cfg(feature = "nats-transport")]
+use a3s_boot::{NatsTransport, NatsTransportClient, NatsTransportOptions};
 #[cfg(feature = "redis-transport")]
 use a3s_boot::{RedisTransport, RedisTransportClient, RedisTransportOptions};
 #[cfg(feature = "tcp-transport")]
@@ -11,13 +13,21 @@ use a3s_boot::{TcpTransport, TcpTransportClient};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
-#[cfg(any(feature = "redis-transport", feature = "tcp-transport"))]
+#[cfg(any(
+    feature = "nats-transport",
+    feature = "redis-transport",
+    feature = "tcp-transport"
+))]
 use std::time::Duration;
-#[cfg(feature = "redis-transport")]
+#[cfg(any(feature = "nats-transport", feature = "redis-transport"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(feature = "tcp-transport")]
 use tokio::net::TcpListener;
-#[cfg(any(feature = "redis-transport", feature = "tcp-transport"))]
+#[cfg(any(
+    feature = "nats-transport",
+    feature = "redis-transport",
+    feature = "tcp-transport"
+))]
 use tokio::time::sleep;
 
 #[derive(Debug)]
@@ -328,6 +338,112 @@ async fn in_process_transport_builds_a_message_client() {
         .unwrap();
 
     assert_eq!(reply.data_as::<NumberPayload>().unwrap().value, 14);
+}
+
+#[cfg(feature = "nats-transport")]
+#[test]
+fn nats_transport_builds_a_message_client_with_custom_options() {
+    let options = NatsTransportOptions::new()
+        .with_subject_prefix("a3s.boot.test")
+        .with_queue_group("workers")
+        .with_request_timeout(Duration::from_secs(2));
+    let app = BootApplication::builder().build().unwrap();
+    let client = NatsTransport::with_options("nats://127.0.0.1:4222", options.clone())
+        .build(app)
+        .unwrap();
+
+    assert_eq!(client.url(), "nats://127.0.0.1:4222");
+    assert_eq!(client.options(), &options);
+    assert_eq!(client.options().request_subject(), "a3s.boot.test.requests");
+    assert_eq!(client.options().event_subject(), "a3s.boot.test.events");
+    assert_eq!(client.options().queue_group(), Some("workers"));
+}
+
+#[cfg(feature = "nats-transport")]
+#[tokio::test]
+async fn nats_transport_round_trips_when_nats_url_is_set() {
+    let Some(url) = nats_test_url() else {
+        return;
+    };
+    let options = NatsTransportOptions::new()
+        .with_subject_prefix(unique_transport_prefix("nats-round-trip"))
+        .with_queue_group("round-trip-workers")
+        .with_request_timeout(Duration::from_secs(2));
+    let app = BootApplication::builder()
+        .message_pattern(
+            MessagePatternDefinition::request_json(
+                "math.double",
+                |payload: NumberPayload| async move {
+                    Ok(NumberPayload {
+                        value: payload.value * 2,
+                    })
+                },
+            )
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+    let transport = NatsTransport::with_options(url.clone(), options.clone());
+    let server = tokio::spawn({
+        let app = app.clone();
+        async move { transport.serve(app).await }
+    });
+    let client = NatsTransportClient::with_options(url, options);
+
+    let reply = send_nats_with_retry(
+        &client,
+        TransportMessage::json("math.double", &NumberPayload { value: 9 }).unwrap(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(reply.data_as::<NumberPayload>().unwrap().value, 18);
+    server.abort();
+}
+
+#[cfg(feature = "nats-transport")]
+#[tokio::test]
+async fn nats_transport_emits_events_when_nats_url_is_set() {
+    let Some(url) = nats_test_url() else {
+        return;
+    };
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let event_log = Arc::clone(&observed);
+    let options = NatsTransportOptions::new()
+        .with_subject_prefix(unique_transport_prefix("nats-event"))
+        .with_queue_group("event-workers")
+        .with_request_timeout(Duration::from_secs(2));
+    let app = BootApplication::builder()
+        .message_pattern(
+            MessagePatternDefinition::event_json("math.observed", move |payload: NumberPayload| {
+                let event_log = Arc::clone(&event_log);
+                async move {
+                    event_log.lock().unwrap().push(payload.value);
+                    Ok(())
+                }
+            })
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+    let transport = NatsTransport::with_options(url.clone(), options.clone());
+    let server = tokio::spawn({
+        let app = app.clone();
+        async move { transport.serve(app).await }
+    });
+    let client = NatsTransportClient::with_options(url, options);
+
+    emit_nats_until_observed(
+        &client,
+        TransportMessage::json("math.observed", &NumberPayload { value: 11 }).unwrap(),
+        Arc::clone(&observed),
+    )
+    .await
+    .unwrap();
+
+    assert!(observed.lock().unwrap().contains(&11));
+    server.abort();
 }
 
 #[cfg(feature = "redis-transport")]
@@ -679,6 +795,62 @@ async fn send_tcp_with_retry(
     ))
 }
 
+#[cfg(feature = "nats-transport")]
+fn nats_test_url() -> Option<String> {
+    std::env::var("A3S_BOOT_NATS_URL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
+#[cfg(feature = "nats-transport")]
+async fn send_nats_with_retry(
+    client: &NatsTransportClient,
+    message: TransportMessage,
+) -> Result<Option<TransportReply>> {
+    let mut last_error = None;
+    for _ in 0..50 {
+        match client.send(message.clone()).await {
+            Ok(reply) => return Ok(reply),
+            Err(BootError::Adapter(message))
+                if message.contains("no responders") || message.contains("timed out") =>
+            {
+                last_error = Some(BootError::Adapter(message));
+                sleep(Duration::from_millis(20)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_error
+        .unwrap_or_else(|| BootError::Adapter("nats transport did not start".to_string())))
+}
+
+#[cfg(feature = "nats-transport")]
+async fn emit_nats_until_observed(
+    client: &NatsTransportClient,
+    message: TransportMessage,
+    observed: Arc<Mutex<Vec<i32>>>,
+) -> Result<()> {
+    let mut last_error = None;
+    for _ in 0..50 {
+        match client.emit(message.clone()).await {
+            Ok(()) => {
+                sleep(Duration::from_millis(20)).await;
+                if !observed.lock().unwrap().is_empty() {
+                    return Ok(());
+                }
+            }
+            Err(error) => {
+                last_error = Some(error);
+                sleep(Duration::from_millis(20)).await;
+            }
+        }
+    }
+
+    Err(last_error
+        .unwrap_or_else(|| BootError::Adapter("nats transport event was not observed".to_string())))
+}
+
 #[cfg(feature = "redis-transport")]
 fn redis_test_url() -> Option<String> {
     std::env::var("A3S_BOOT_REDIS_URL")
@@ -736,7 +908,7 @@ async fn emit_redis_until_observed(
     }))
 }
 
-#[cfg(feature = "redis-transport")]
+#[cfg(any(feature = "nats-transport", feature = "redis-transport"))]
 fn unique_transport_prefix(name: &str) -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

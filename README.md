@@ -103,6 +103,16 @@ serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
+Enable the optional NATS microservice transport when services need Nest-style
+request-response and event-only message patterns over NATS subjects:
+
+```toml
+[dependencies]
+a3s-boot = { version = "0.1", features = ["nats-transport"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
 Enable the optional structured logger module when the application needs
 provider-backed logging without forcing a concrete backend:
 
@@ -950,7 +960,8 @@ Microservice message patterns mirror Nest's `@MessagePattern()` and
 implement `MessageTransport`. `InProcessTransport` is included for tests,
 workers, and single-process dispatch. Enable the `tcp-transport` feature to use
 `TcpTransport` for newline-delimited JSON messages over TCP, or
-`redis-transport` to use Redis Pub/Sub channels.
+`redis-transport` to use Redis Pub/Sub channels, or `nats-transport` to use
+NATS subjects.
 
 ```rust
 use std::sync::Arc;
@@ -1143,6 +1154,55 @@ async fn run_redis_microservice() -> Result<()> {
 async fn call_redis_microservice() -> Result<()> {
     let options = RedisTransportOptions::new().with_channel_prefix("cats");
     let client = RedisTransportClient::with_options("redis://127.0.0.1/", options);
+    let reply = client
+        .send(TransportMessage::json(
+            "cat.find",
+            &FindCatMessage {
+                id: "milo".to_string(),
+            },
+        )?)
+        .await?
+        .unwrap();
+
+    client
+        .emit(TransportMessage::json(
+            "cat.created",
+            &FindCatMessage {
+                id: "luna".to_string(),
+            },
+        )?)
+        .await?;
+
+    assert_eq!(reply.data_as::<CatDto>()?.name, "Milo");
+    Ok(())
+}
+```
+
+With `nats-transport`, request-response messages use NATS request/reply on a
+configured subject. Event messages are published to a separate subject. Use a
+queue group when multiple service instances should share work:
+
+```rust
+use std::time::Duration;
+
+use a3s_boot::{
+    BootFactory, NatsTransport, NatsTransportClient, NatsTransportOptions, Result,
+    TransportMessage,
+};
+
+async fn run_nats_microservice() -> Result<()> {
+    let options = NatsTransportOptions::new()
+        .with_subject_prefix("cats")
+        .with_queue_group("cats-workers")
+        .with_request_timeout(Duration::from_secs(5));
+    let transport = NatsTransport::with_options("nats://127.0.0.1:4222", options);
+    let mut service = BootFactory::create_microservice(CatsModule, transport)?;
+    service.listen().await
+}
+
+async fn call_nats_microservice() -> Result<()> {
+    let options = NatsTransportOptions::new().with_subject_prefix("cats");
+    let client = NatsTransportClient::with_options("nats://127.0.0.1:4222", options);
     let reply = client
         .send(TransportMessage::json(
             "cat.find",
