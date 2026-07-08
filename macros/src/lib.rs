@@ -1,6 +1,7 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
+use syn::punctuated::Punctuated;
 use syn::{
     parse_macro_input, Attribute, Expr, FnArg, GenericArgument, Ident, ImplItem, ImplItemFn, Item,
     ItemImpl, LitBool, LitInt, LitStr, Pat, PatType, PathArguments, Result, Token, Type,
@@ -204,6 +205,21 @@ pub fn host(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
+pub fn version(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    version_attribute_outside_controller("version", item)
+}
+
+#[proc_macro_attribute]
+pub fn versions(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    version_attribute_outside_controller("versions", item)
+}
+
+#[proc_macro_attribute]
+pub fn version_neutral(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    version_attribute_outside_controller("version_neutral", item)
+}
+
+#[proc_macro_attribute]
 pub fn tag(_attr: TokenStream, item: TokenStream) -> TokenStream {
     openapi_attribute_outside_controller("tag", item)
 }
@@ -341,6 +357,8 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
         take_controller_pipeline_attrs(&clean_impl_attrs);
     let (clean_impl_attrs, controller_host, controller_host_errors) =
         take_controller_host_attrs(&clean_impl_attrs);
+    let (clean_impl_attrs, controller_version, controller_version_errors) =
+        take_controller_version_attrs(&clean_impl_attrs);
     item_impl.attrs = clean_impl_attrs;
     for error in controller_validation_errors {
         push_error(&mut errors, error);
@@ -357,10 +375,14 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
     for error in controller_host_errors {
         push_error(&mut errors, error);
     }
+    for error in controller_version_errors {
+        push_error(&mut errors, error);
+    }
     let controller_openapi = controller_openapi.tokens();
     let controller_metadata = controller_metadata.tokens();
     let controller_pipeline = controller_pipeline.tokens();
     let controller_host = controller_host.tokens();
+    let controller_version = controller_version.tokens();
 
     for item in &mut item_impl.items {
         let ImplItem::Fn(method) = item else {
@@ -379,6 +401,7 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
         let (clean_attrs, pipeline_specs, pipeline_errors) =
             take_route_pipeline_attrs(&clean_attrs);
         let (clean_attrs, host_specs, host_errors) = take_route_host_attrs(&clean_attrs);
+        let (clean_attrs, version_specs, version_errors) = take_route_version_attrs(&clean_attrs);
         method.attrs = clean_attrs;
         for error in route_errors {
             push_error(&mut errors, error);
@@ -402,6 +425,9 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
             push_error(&mut errors, error);
         }
         for error in host_errors {
+            push_error(&mut errors, error);
+        }
+        for error in version_errors {
             push_error(&mut errors, error);
         }
         if method_routes.is_empty() && !openapi_specs.is_empty() {
@@ -437,6 +463,15 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
                 syn::Error::new_spanned(
                     &method.sig.ident,
                     "host route attributes must be used on route methods",
+                ),
+            );
+        }
+        if method_routes.is_empty() && version_specs.is_some() {
+            push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &method.sig.ident,
+                    "version route attributes must be used on route methods",
                 ),
             );
         }
@@ -497,6 +532,7 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
                 &response_specs,
                 &pipeline_specs,
                 host_specs.as_ref(),
+                version_specs.as_ref(),
                 &openapi_specs,
             ) {
                 Ok(registration) => routes.push(registration),
@@ -529,6 +565,9 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
                 )*
                 #(
                     __a3s_boot_controller = __a3s_boot_controller.#controller_host?;
+                )*
+                #(
+                    __a3s_boot_controller = __a3s_boot_controller.#controller_version;
                 )*
                 #(
                     __a3s_boot_controller = #routes;
@@ -1017,6 +1056,7 @@ fn route_registration(
     response_specs: &[RouteResponseSpec],
     pipeline_specs: &[PipelineSpec],
     host_spec: Option<&HostSpec>,
+    version_spec: Option<&VersionSpec>,
     openapi_specs: &[RouteOpenApiSpec],
 ) -> Result<proc_macro2::TokenStream> {
     if method.sig.asyncness.is_none() {
@@ -1146,6 +1186,8 @@ fn route_registration(
 
     let route_definition = host_route_definition(route_definition, host_spec);
 
+    let route_definition = version_route_definition(route_definition, version_spec);
+
     let route_definition = response_route_definition(route_definition, response_specs)?;
 
     let route_definition = openapi_route_definition(
@@ -1211,6 +1253,19 @@ fn host_route_definition(
     let token = spec.token();
     quote! {
         (#route_definition).#token?
+    }
+}
+
+fn version_route_definition(
+    route_definition: proc_macro2::TokenStream,
+    version_spec: Option<&VersionSpec>,
+) -> proc_macro2::TokenStream {
+    let Some(spec) = version_spec else {
+        return route_definition;
+    };
+    let token = spec.token();
+    quote! {
+        (#route_definition).#token
     }
 }
 
@@ -1993,6 +2048,68 @@ fn is_host_attribute(attr: &Attribute) -> bool {
         .is_some_and(|segment| segment.ident == "host")
 }
 
+fn take_controller_version_attrs(
+    attrs: &[Attribute],
+) -> (Vec<Attribute>, ControllerVersionAttrs, Vec<syn::Error>) {
+    let mut clean_attrs = Vec::new();
+    let mut version = ControllerVersionAttrs::default();
+    let mut errors = Vec::new();
+
+    for attr in attrs {
+        let Some(kind) = VersionAttrKind::from_attribute(attr) else {
+            clean_attrs.push(attr.clone());
+            continue;
+        };
+
+        match VersionSpec::from_attribute(kind, attr) {
+            Ok(spec) => {
+                if version.spec.is_some() {
+                    errors.push(syn::Error::new_spanned(
+                        attr,
+                        "controller impl blocks can use at most one version attribute",
+                    ));
+                } else {
+                    version.spec = Some(spec);
+                }
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+
+    (clean_attrs, version, errors)
+}
+
+fn take_route_version_attrs(
+    attrs: &[Attribute],
+) -> (Vec<Attribute>, Option<VersionSpec>, Vec<syn::Error>) {
+    let mut clean_attrs = Vec::new();
+    let mut spec = None;
+    let mut errors = Vec::new();
+
+    for attr in attrs {
+        let Some(kind) = VersionAttrKind::from_attribute(attr) else {
+            clean_attrs.push(attr.clone());
+            continue;
+        };
+
+        match VersionSpec::from_attribute(kind, attr) {
+            Ok(parsed) => {
+                if spec.is_some() {
+                    errors.push(syn::Error::new_spanned(
+                        attr,
+                        "route methods can use at most one version attribute",
+                    ));
+                } else {
+                    spec = Some(parsed);
+                }
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+
+    (clean_attrs, spec, errors)
+}
+
 fn is_metadata_attribute(attr: &Attribute) -> bool {
     attr.path()
         .segments
@@ -2124,6 +2241,94 @@ impl HostSpec {
     fn token(&self) -> proc_macro2::TokenStream {
         let pattern = &self.pattern;
         quote!(with_host(#pattern))
+    }
+}
+
+#[derive(Default)]
+struct ControllerVersionAttrs {
+    spec: Option<VersionSpec>,
+}
+
+impl ControllerVersionAttrs {
+    fn tokens(&self) -> Vec<proc_macro2::TokenStream> {
+        self.spec.iter().map(VersionSpec::token).collect()
+    }
+}
+
+#[derive(Clone)]
+enum VersionSpec {
+    Version(LitStr),
+    Versions(Vec<LitStr>),
+    Neutral,
+}
+
+impl VersionSpec {
+    fn from_attribute(kind: VersionAttrKind, attr: &Attribute) -> Result<Self> {
+        match kind {
+            VersionAttrKind::Version => {
+                attr.parse_args::<LitStr>().map(Self::Version).map_err(|_| {
+                    syn::Error::new_spanned(attr, "#[version] requires one string literal argument")
+                })
+            }
+            VersionAttrKind::Versions => {
+                let values = attr.parse_args::<VersionList>().map_err(|_| {
+                    syn::Error::new_spanned(
+                        attr,
+                        "#[versions] requires one or more string literal arguments",
+                    )
+                })?;
+                if values.0.is_empty() {
+                    Err(syn::Error::new_spanned(
+                        attr,
+                        "#[versions] requires one or more string literal arguments",
+                    ))
+                } else {
+                    Ok(Self::Versions(values.0))
+                }
+            }
+            VersionAttrKind::Neutral => {
+                expect_no_extractor_args(attr, "version_neutral")?;
+                Ok(Self::Neutral)
+            }
+        }
+    }
+
+    fn token(&self) -> proc_macro2::TokenStream {
+        match self {
+            Self::Version(version) => quote!(with_version(#version)),
+            Self::Versions(versions) => quote!(with_versions([#(#versions),*])),
+            Self::Neutral => quote!(version_neutral()),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum VersionAttrKind {
+    Version,
+    Versions,
+    Neutral,
+}
+
+impl VersionAttrKind {
+    fn from_attribute(attr: &Attribute) -> Option<Self> {
+        let ident = attr.path().segments.last()?.ident.to_string();
+        match ident.as_str() {
+            "version" => Some(Self::Version),
+            "versions" => Some(Self::Versions),
+            "version_neutral" => Some(Self::Neutral),
+            _ => None,
+        }
+    }
+}
+
+struct VersionList(Vec<LitStr>);
+
+impl Parse for VersionList {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let values = Punctuated::<LitStr, Token![,]>::parse_terminated(input)?
+            .into_iter()
+            .collect();
+        Ok(Self(values))
     }
 }
 
@@ -2695,6 +2900,17 @@ fn pipeline_attribute_outside_controller(name: &str, item: TokenStream) -> Token
 }
 
 fn host_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
+    let item = proc_macro2::TokenStream::from(item);
+    let message =
+        format!("#[{name}] must be used inside an impl block annotated with #[controller]");
+    quote! {
+        compile_error!(#message);
+        #item
+    }
+    .into()
+}
+
+fn version_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
     let item = proc_macro2::TokenStream::from(item);
     let message =
         format!("#[{name}] must be used inside an impl block annotated with #[controller]");

@@ -62,6 +62,8 @@ This repository contains the first framework slice:
   `#[redirect("/new", status = 301)]`, pipeline decorators such as
   `#[use_guard(AuthGuard)]`, `#[use_interceptor(TraceInterceptor)]`,
   `#[use_filter(HttpErrorFilter)]`, and `#[use_pipe(ParsePipe)]`, and
+  API versioning macros such as `#[version("1")]`, `#[versions("1", "2")]`,
+  and `#[version_neutral]`, plus
   WebSocket macros such as
   `#[websocket_gateway]` and
   `#[subscribe_message]`, plus microservice macros such as
@@ -330,6 +332,9 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@UsePipes(ParsePipe)` | `#[use_pipe(ParsePipe)]` on a controller impl or route method |
 | `@UsePipes(new ValidationPipe())` | `#[validate]` on a controller impl or route method for DTO validation |
 | `@SetMetadata("roles", ["admin"])` | `#[metadata("roles", ["admin"])]` below `#[controller]` or on a route method |
+| `@Version("1")` | `#[version("1")]` below `#[controller]` or on a route method |
+| `@Version(["1", "2"])` | `#[versions("1", "2")]` below `#[controller]` or on a route method |
+| `VERSION_NEUTRAL` | `#[version_neutral]` below `#[controller]` or on a route method |
 | `@HttpCode(202)` | `#[http_code(202)]` on a JSON route method |
 | `@Header("cache-control", "max-age=60")` | `#[header("cache-control", "max-age=60")]` on a route method |
 | `@Redirect("/new", 301)` | `#[redirect("/new", status = 301)]` on a route method |
@@ -689,6 +694,38 @@ fn cats_controller() -> Result<ControllerDefinition> {
                 "version": "1"
             }))
         })
+}
+```
+
+The macro form mirrors Nest's `@Version()` decorator. Put `#[version("1")]`,
+`#[versions("1", "2")]`, or `#[version_neutral]` below `#[controller]` or on a
+route method:
+
+```rust
+use a3s_boot::{controller, get, Result};
+
+#[derive(Debug)]
+struct CatsController;
+
+#[controller("/cats")]
+#[version("1")]
+impl CatsController {
+    #[get("/")]
+    async fn list_v1(&self) -> Result<String> {
+        Ok("cats v1".to_string())
+    }
+
+    #[get("/")]
+    #[version("2")]
+    async fn list_v2(&self) -> Result<String> {
+        Ok("cats v2".to_string())
+    }
+
+    #[get("/health")]
+    #[version_neutral]
+    async fn health(&self) -> Result<String> {
+        Ok("ok".to_string())
+    }
 }
 ```
 

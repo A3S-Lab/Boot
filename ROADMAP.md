@@ -43,6 +43,8 @@ Implemented today:
   for redirect responses.
 - Host-scoped HTTP routes with `RouteDefinition::with_host(...)` and
   `ControllerDefinition::with_host(...)` for Nest-style host-based controllers.
+- API versioning macros: `#[version]`, `#[versions]`, and
+  `#[version_neutral]` at controller and route scope.
 - Nest-style generic pipeline macros: `#[use_guard]`, `#[use_interceptor]`,
   `#[use_filter]`, and `#[use_pipe]` at controller and route scope.
 - JSON body and JSON response helpers.
@@ -523,8 +525,8 @@ Acceptance:
   integration points without forcing a concrete backend. (Covered)
 - API versioning can route by URI segment, request header, or media type
   parameter; inherit controller versions; use default versions; expose
-  version-neutral routes; and reject duplicate routes only when version metadata
-  overlaps. (Covered)
+  version-neutral routes; reject duplicate routes only when version metadata
+  overlaps; and expose Nest-style version macros. (Covered)
 - Serialization can shape JSON response objects and arrays through global
   interceptors plus route/controller metadata, leave non-JSON responses
   unchanged, and keep content length valid after rewriting. (Covered)

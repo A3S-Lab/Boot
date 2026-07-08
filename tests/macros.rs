@@ -4,8 +4,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use a3s_boot::{
-    controller, injectable, BootApplication, BootError, BootRequest, BootResponse, BoxFuture,
-    ControllerDefinition, ExceptionFilter, ExecutionContext, Guard, Interceptor,
+    controller, injectable, ApiVersioning, BootApplication, BootError, BootRequest, BootResponse,
+    BoxFuture, ControllerDefinition, ExceptionFilter, ExecutionContext, Guard, Interceptor,
     MessagePatternDefinition, Module, ModuleRef, OpenApiInfo, Pipe, ProviderDefinition, Result,
     SseEvent, SseStream, TransportMessage, TransportReply, Validate, WebSocketGatewayDefinition,
     WebSocketMessage,
@@ -504,6 +504,49 @@ impl Module for MacroHostModule {
     }
 }
 
+#[derive(Debug)]
+struct MacroVersionController;
+
+#[controller("/macro-version")]
+#[version("1")]
+impl MacroVersionController {
+    #[get("/cats")]
+    async fn cats_v1(&self) -> Result<String> {
+        Ok("v1".to_string())
+    }
+
+    #[get("/cats")]
+    #[version("2")]
+    async fn cats_v2(&self) -> Result<String> {
+        Ok("v2".to_string())
+    }
+
+    #[get("/health")]
+    #[version_neutral]
+    async fn health(&self) -> Result<String> {
+        Ok("ok".to_string())
+    }
+
+    #[get("/multi")]
+    #[versions("2", "3")]
+    async fn multi(&self) -> Result<String> {
+        Ok("multi".to_string())
+    }
+}
+
+#[derive(Debug)]
+struct MacroVersionModule;
+
+impl Module for MacroVersionModule {
+    fn name(&self) -> &'static str {
+        "macro-version"
+    }
+
+    fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
+        Ok(vec![Arc::new(MacroVersionController).controller()?])
+    }
+}
+
 #[tokio::test]
 async fn macros_register_injectable_services_and_controller_routes() {
     let app = BootApplication::builder()
@@ -961,6 +1004,49 @@ async fn macro_host_and_ip_extractors_register_host_scoped_routes() {
         .await;
 
     assert_eq!(missing.status(), 404);
+}
+
+#[tokio::test]
+async fn macro_version_decorators_register_controller_and_route_versions() {
+    let app = BootApplication::builder()
+        .enable_api_versioning(ApiVersioning::header("x-api-version"))
+        .import(MacroVersionModule)
+        .build()
+        .unwrap();
+
+    let v1 = app
+        .call(
+            BootRequest::new(a3s_boot::HttpMethod::Get, "/macro-version/cats")
+                .with_header("x-api-version", "1"),
+        )
+        .await
+        .unwrap();
+    let v2 = app
+        .call(
+            BootRequest::new(a3s_boot::HttpMethod::Get, "/macro-version/cats")
+                .with_header("x-api-version", "2"),
+        )
+        .await
+        .unwrap();
+    let neutral = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-version/health",
+        ))
+        .await
+        .unwrap();
+    let multi = app
+        .call(
+            BootRequest::new(a3s_boot::HttpMethod::Get, "/macro-version/multi")
+                .with_header("x-api-version", "3"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(v1.body_json::<String>().unwrap(), "v1");
+    assert_eq!(v2.body_json::<String>().unwrap(), "v2");
+    assert_eq!(neutral.body_json::<String>().unwrap(), "ok");
+    assert_eq!(multi.body_json::<String>().unwrap(), "multi");
 }
 
 #[tokio::test]
