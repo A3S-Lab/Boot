@@ -1,6 +1,8 @@
 use super::request::BootRequest;
 use crate::{BootError, Result};
+use std::any::type_name;
 use std::fmt;
+use std::str::FromStr;
 
 /// Custom request value extractor used by Nest-style controller argument binding.
 pub trait RequestExtractor<T>: Send + Sync + 'static {
@@ -91,6 +93,73 @@ where
             BootError::BadRequest(format!(
                 "validation failed: numeric string is expected for {}: {error}",
                 T::target_name()
+            ))
+        })
+    }
+}
+
+/// Built-in Nest-style pipe that parses separated request values into arrays.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ParseArrayPipe;
+
+impl ParseArrayPipe {
+    pub fn separator(separator: impl Into<String>) -> ParseArraySeparatorPipe {
+        ParseArraySeparatorPipe::new(separator)
+    }
+}
+
+impl<T> RequestValuePipe<String, Vec<T>> for ParseArrayPipe
+where
+    T: FromStr + Send + Sync + 'static,
+    T::Err: fmt::Display,
+{
+    fn transform(&self, value: String) -> Result<Vec<T>> {
+        parse_array_value(value, ",")
+    }
+}
+
+/// Built-in Nest-style pipe that parses request values with a custom separator.
+#[derive(Debug, Clone)]
+pub struct ParseArraySeparatorPipe {
+    separator: String,
+}
+
+impl ParseArraySeparatorPipe {
+    pub fn new(separator: impl Into<String>) -> Self {
+        Self {
+            separator: separator.into(),
+        }
+    }
+
+    pub fn separator(&self) -> &str {
+        &self.separator
+    }
+}
+
+impl<T> RequestValuePipe<String, Vec<T>> for ParseArraySeparatorPipe
+where
+    T: FromStr + Send + Sync + 'static,
+    T::Err: fmt::Display,
+{
+    fn transform(&self, value: String) -> Result<Vec<T>> {
+        parse_array_value(value, &self.separator)
+    }
+}
+
+/// Built-in Nest-style pipe that parses enum-like request values through `FromStr`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ParseEnumPipe;
+
+impl<T> RequestValuePipe<String, T> for ParseEnumPipe
+where
+    T: FromStr + Send + Sync + 'static,
+    T::Err: fmt::Display,
+{
+    fn transform(&self, value: String) -> Result<T> {
+        value.trim().parse::<T>().map_err(|error| {
+            BootError::BadRequest(format!(
+                "validation failed: enum value is expected for {}: {error}",
+                type_name::<T>()
             ))
         })
     }
@@ -252,6 +321,36 @@ macro_rules! impl_parse_float_target {
 
 impl_parse_int_target!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize,);
 impl_parse_float_target!(f32, f64);
+
+fn parse_array_value<T>(value: String, separator: &str) -> Result<Vec<T>>
+where
+    T: FromStr,
+    T::Err: fmt::Display,
+{
+    if separator.is_empty() {
+        return Err(BootError::BadRequest(
+            "validation failed: array separator cannot be empty".to_string(),
+        ));
+    }
+
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    value
+        .split(separator)
+        .map(str::trim)
+        .map(|item| {
+            item.parse::<T>().map_err(|error| {
+                BootError::BadRequest(format!(
+                    "validation failed: array item is invalid for {}: {error}",
+                    type_name::<T>()
+                ))
+            })
+        })
+        .collect()
+}
 
 fn parse_uuid_value(value: String, version: UuidVersion) -> Result<String> {
     let value = value.trim();

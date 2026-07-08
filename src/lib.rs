@@ -126,10 +126,10 @@ pub use health::{
 };
 pub use http::{
     extract_request_value, transform_request_value, BootRequest, BootResponse, CookieOptions,
-    CookieSameSite, DefaultValuePipe, HttpMethod, ParseBoolPipe, ParseFloatPipe, ParseFloatTarget,
-    ParseIntPipe, ParseIntTarget, ParseUuidPipe, ParseUuidVersionPipe, RequestExtractor,
-    RequestValuePipe, SseEvent, SseStream, StreamableFile, StreamableFileOptions,
-    StreamableFileStream, UuidVersion,
+    CookieSameSite, DefaultValuePipe, HttpMethod, ParseArrayPipe, ParseArraySeparatorPipe,
+    ParseBoolPipe, ParseEnumPipe, ParseFloatPipe, ParseFloatTarget, ParseIntPipe, ParseIntTarget,
+    ParseUuidPipe, ParseUuidVersionPipe, RequestExtractor, RequestValuePipe, SseEvent, SseStream,
+    StreamableFile, StreamableFileOptions, StreamableFileStream, UuidVersion,
 };
 #[cfg(feature = "http-client")]
 pub use http_client::{

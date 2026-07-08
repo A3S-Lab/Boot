@@ -1,14 +1,16 @@
 #![cfg(feature = "macros")]
 
 use std::collections::BTreeMap;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use a3s_boot::{
     controller, injectable, ApiVersioning, BootApplication, BootError, BootErrorKind, BootRequest,
     BootResponse, BoxFuture, ControllerDefinition, ExceptionFilter, ExecutionContext, Guard,
-    Interceptor, Module, ModuleRef, OpenApiInfo, ParseBoolPipe, ParseFloatPipe, ParseIntPipe,
-    ParseUuidPipe, Pipe, ProviderToken, Result, SseEvent, SseStream, StringTemplateViewEngine,
-    TransportMessage, TransportReply, UuidVersion, Validate, ViewModule, WebSocketMessage,
+    Interceptor, Module, ModuleRef, OpenApiInfo, ParseArrayPipe, ParseBoolPipe, ParseEnumPipe,
+    ParseFloatPipe, ParseIntPipe, ParseUuidPipe, Pipe, ProviderToken, Result, SseEvent, SseStream,
+    StringTemplateViewEngine, TransportMessage, TransportReply, UuidVersion, Validate, ViewModule,
+    WebSocketMessage,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -122,6 +124,33 @@ fn normalize_macro_kind(value: String) -> Result<String> {
 
 fn normalize_macro_ip(value: String) -> Result<String> {
     Ok(format!("ip:{value}"))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum MacroCatKind {
+    Tabby,
+    Tuxedo,
+}
+
+impl MacroCatKind {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Tabby => "tabby",
+            Self::Tuxedo => "tuxedo",
+        }
+    }
+}
+
+impl FromStr for MacroCatKind {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "tabby" => Ok(Self::Tabby),
+            "tuxedo" => Ok(Self::Tuxedo),
+            _ => Err(format!("unknown cat kind: {value}")),
+        }
+    }
 }
 
 #[a3s_boot::websocket_gateway("/macro-cats/ws")]
@@ -262,6 +291,22 @@ impl MacroCatsController {
         #[query("request", pipe = ParseUuidPipe::version(UuidVersion::V4))] request: String,
     ) -> Result<MacroCatDto> {
         Ok(MacroCatDto { id, name: request })
+    }
+
+    #[get("/array-enum")]
+    async fn array_enum_pipe(
+        &self,
+        #[query("ids", pipe = ParseArrayPipe)] ids: Vec<u16>,
+        #[query("kind", pipe = ParseEnumPipe)] kind: MacroCatKind,
+    ) -> Result<MacroCatDto> {
+        Ok(MacroCatDto {
+            id: ids
+                .into_iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join("|"),
+            name: kind.as_str().to_string(),
+        })
     }
 
     #[get("/params/{id}/{kind}")]
@@ -749,7 +794,7 @@ async fn macros_register_injectable_services_and_controller_routes() {
         .build()
         .unwrap();
 
-    assert_eq!(app.routes().len(), 18);
+    assert_eq!(app.routes().len(), 19);
     assert_eq!(app.gateways().len(), 1);
     assert_eq!(app.message_patterns().len(), 3);
     let exports = MacroCatsModule.exports().unwrap();
@@ -966,6 +1011,43 @@ async fn macros_register_injectable_services_and_controller_routes() {
         .unwrap_err();
     assert!(
         matches!(invalid_uuid_version_pipe, BootError::BadRequest(message) if message.contains("UUID v4 string is expected"))
+    );
+
+    let array_enum_pipe = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-cats/array-enum?ids=1,2,3&kind=tabby",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        array_enum_pipe.body_json::<MacroCatDto>().unwrap(),
+        MacroCatDto {
+            id: "1|2|3".to_string(),
+            name: "tabby".to_string(),
+        }
+    );
+
+    let invalid_array_pipe = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-cats/array-enum?ids=1,cat&kind=tabby",
+        ))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(invalid_array_pipe, BootError::BadRequest(message) if message.contains("array item is invalid"))
+    );
+
+    let invalid_enum_pipe = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-cats/array-enum?ids=1,2&kind=calico",
+        ))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(invalid_enum_pipe, BootError::BadRequest(message) if message.contains("enum value is expected"))
     );
 
     let params = app

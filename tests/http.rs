@@ -1,12 +1,31 @@
 use a3s_boot::{
     BootError, BootErrorKind, BootRequest, BootResponse, CookieOptions, CookieSameSite,
-    DefaultValuePipe, HttpMethod, ParseBoolPipe, ParseFloatPipe, ParseIntPipe, ParseUuidPipe,
-    SseEvent, StreamableFile, StreamableFileOptions, UuidVersion,
+    DefaultValuePipe, HttpMethod, ParseArrayPipe, ParseBoolPipe, ParseEnumPipe, ParseFloatPipe,
+    ParseIntPipe, ParseUuidPipe, SseEvent, StreamableFile, StreamableFileOptions, UuidVersion,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
+use std::str::FromStr;
 use std::time::Duration;
+
+#[derive(Debug, PartialEq, Eq)]
+enum TestCatKind {
+    Tabby,
+    Tuxedo,
+}
+
+impl FromStr for TestCatKind {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "tabby" => Ok(Self::Tabby),
+            "tuxedo" => Ok(Self::Tuxedo),
+            _ => Err(format!("unknown cat kind: {value}")),
+        }
+    }
+}
 
 #[test]
 fn built_in_request_value_pipes_parse_and_default_values() {
@@ -34,6 +53,35 @@ fn built_in_request_value_pipes_parse_and_default_values() {
             .unwrap(),
         3
     );
+    assert_eq!(
+        a3s_boot::transform_request_value::<String, Vec<u8>, _>(
+            "1, 2,3".to_string(),
+            ParseArrayPipe,
+        )
+        .unwrap(),
+        vec![1, 2, 3]
+    );
+    assert_eq!(
+        a3s_boot::transform_request_value::<String, Vec<TestCatKind>, _>(
+            "tabby|tuxedo".to_string(),
+            ParseArrayPipe::separator("|"),
+        )
+        .unwrap(),
+        vec![TestCatKind::Tabby, TestCatKind::Tuxedo]
+    );
+    assert_eq!(
+        a3s_boot::transform_request_value::<String, TestCatKind, _>(
+            "tabby".to_string(),
+            ParseEnumPipe,
+        )
+        .unwrap(),
+        TestCatKind::Tabby
+    );
+    assert!(a3s_boot::transform_request_value::<String, TestCatKind, _>(
+        "calico".to_string(),
+        ParseEnumPipe,
+    )
+    .is_err());
     assert_eq!(
         a3s_boot::transform_request_value::<String, String, _>(
             " 550e8400-e29b-41d4-a716-446655440000 ".to_string(),

@@ -306,6 +306,8 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@Query()` / `@Query("page")` | `#[query]` for a DTO or `#[query("page")]` for one value |
 | `@Query("page", ParsePipe)` | `#[query("page", pipe = parse_page)]` on a method argument |
 | `@Query("page", new DefaultValuePipe(1), ParseIntPipe)` | `#[query("page", default = 1, pipe = ParseIntPipe)]` |
+| `@Query("ids", new ParseArrayPipe({ separator: "," }))` | `#[query("ids", pipe = ParseArrayPipe)]` on a `Vec<T>` argument |
+| `@Query("kind", ParseEnumPipe)` | `#[query("kind", pipe = ParseEnumPipe)]` on an enum argument that implements `FromStr` |
 | `@Body()` | `#[body]` on a JSON body DTO argument |
 | `@Headers("x-request-id")` | `#[header("x-request-id")]` on a method argument |
 | `@Ip()` | `#[ip]` on a method argument |
@@ -513,13 +515,31 @@ work without a separate parse pipe. For custom Nest-style parameter pipes, add
 `pipe = <expr>` to `#[param]`, `#[query("name")]`, `#[header]`,
 `#[host_param]`, or `#[ip]`; the pipe receives the raw `String` and returns
 `Result<T>`. Boot also includes `ParseIntPipe`, `ParseBoolPipe`,
-`ParseFloatPipe`, and `ParseUuidPipe` for common single-value parsing, plus
-`default = <expr>` for DefaultValuePipe-style fallbacks on missing query,
-header, host, or path values:
+`ParseFloatPipe`, `ParseArrayPipe`, `ParseEnumPipe`, and `ParseUuidPipe` for
+common request value parsing, plus `default = <expr>` for
+DefaultValuePipe-style fallbacks on missing query, header, host, or path values:
 
 ```rust
 #[derive(Debug)]
 struct CatId(String);
+
+#[derive(Debug)]
+enum CatKind {
+    Tabby,
+    Tuxedo,
+}
+
+impl std::str::FromStr for CatKind {
+    type Err = BootError;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "tabby" => Ok(Self::Tabby),
+            "tuxedo" => Ok(Self::Tuxedo),
+            _ => Err(BootError::BadRequest("invalid cat kind".to_string())),
+        }
+    }
+}
 
 fn parse_cat_id(value: String) -> Result<CatId> {
     if value.starts_with("cat_") {
@@ -536,10 +556,17 @@ async fn find(
     #[query("legacy_id", pipe = parse_cat_id)] legacy_id: Option<CatId>,
     #[query("page", default = 1, pipe = ParseIntPipe)] page: u16,
     #[query("active", pipe = ParseBoolPipe)] active: Option<bool>,
+    #[query("ids", pipe = ParseArrayPipe)] ids: Vec<u64>,
+    #[query("kind", pipe = ParseEnumPipe)] kind: CatKind,
 ) -> Result<CatDto> {
-    self.cats.find(id, legacy_id, page, active).await
+    self.cats.find(id, legacy_id, page, active, ids, kind).await
 }
 ```
+
+`ParseArrayPipe` splits comma-separated values by default and parses each item
+with `FromStr`; use `ParseArrayPipe::separator("|")` for a custom separator.
+`ParseEnumPipe` uses the target enum's `FromStr` implementation, so applications
+keep enum aliases and error messages explicit in Rust code.
 
 For Nest-style exception filters, put `#[catch(...)]` on the filter struct. The
 macro accepts `BootErrorKind` variants, either fully qualified or by variant

@@ -10,9 +10,10 @@ mod streamable_file;
 
 pub use cookie::{CookieOptions, CookieSameSite};
 pub use extractor::{
-    extract_request_value, transform_request_value, DefaultValuePipe, ParseBoolPipe,
-    ParseFloatPipe, ParseFloatTarget, ParseIntPipe, ParseIntTarget, ParseUuidPipe,
-    ParseUuidVersionPipe, RequestExtractor, RequestValuePipe, UuidVersion,
+    extract_request_value, transform_request_value, DefaultValuePipe, ParseArrayPipe,
+    ParseArraySeparatorPipe, ParseBoolPipe, ParseEnumPipe, ParseFloatPipe, ParseFloatTarget,
+    ParseIntPipe, ParseIntTarget, ParseUuidPipe, ParseUuidVersionPipe, RequestExtractor,
+    RequestValuePipe, UuidVersion,
 };
 pub use method::HttpMethod;
 pub use request::BootRequest;
