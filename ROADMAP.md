@@ -116,8 +116,9 @@ Implemented today:
   path/param/query/header/metadata access, pipeline-local values, and auth
   principal propagation when authentication is enabled.
 - DTO validation with `Validate`, body/query/params validation hooks, global,
-  controller-level, route-level validation switches, and `#[validate]` /
-  `#[skip_validation]` macros.
+  controller-level, route-level validation switches, Nest-style whitelist and
+  forbid-non-whitelisted options through `ValidationOptions` and
+  `ValidationSchema`, and `#[validate]` / `#[skip_validation]` macros.
 - Module-scoped provider registries, explicit provider exports, transitive
   re-exports, global module exports, module route prefixes, and `DynamicModule`
   for runtime-built provider modules, with provider-only lazy module loading,
@@ -386,6 +387,9 @@ Tasks:
   party crate such as `garde` or `validator`. (Implemented through ordinary
   `Pipe` composition plus explicit `Validate` implementations)
 - Support request body, params, and query validation. (Implemented)
+- Support Nest-style whitelist and forbid-non-whitelisted policies for body,
+  query, and params validators. (Implemented with `ValidationOptions` and
+  explicit `ValidationSchema` field metadata)
 - Add consistent validation error response mapping. (Implemented through
   `BootError::BadRequest` / HTTP 400)
 
@@ -393,6 +397,9 @@ Acceptance:
 
 - Invalid JSON body DTOs return HTTP 400 with contextual messages. (Covered)
 - Invalid query/param DTOs return HTTP 400. (Covered)
+- Whitelist validation can strip unknown body, query, and path fields before
+  handlers run, or reject those requests when forbid-non-whitelisted is enabled.
+  (Covered)
 - Validation can be enabled globally, controller-level, and route-level.
   (Covered through `use_global_validation`, `ControllerDefinition::with_validation`,
   `RouteDefinition::with_validation`, and `#[validate]`)

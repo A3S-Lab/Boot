@@ -3,8 +3,10 @@ use crate::pipeline::{
     ExecutionInterceptorAdapter, PipelineComponent, PipelineComponents, PipelineOverrides,
 };
 use crate::{
-    body_validator, params_validator, query_validator, BootErrorKind, ExceptionFilter,
-    ExecutionInterceptor, Guard, Interceptor, Middleware, Pipe, Validate,
+    body_validator, body_validator_with_options, params_validator, params_validator_with_options,
+    query_validator, query_validator_with_options, BootErrorKind, ExceptionFilter,
+    ExecutionInterceptor, Guard, Interceptor, Middleware, Pipe, Validate, ValidationOptions,
+    ValidationSchema,
 };
 use serde::de::DeserializeOwned;
 use std::sync::Arc;
@@ -112,6 +114,15 @@ impl RouteDefinition {
         self
     }
 
+    pub fn with_body_validation_options<T>(mut self, options: ValidationOptions) -> Self
+    where
+        T: DeserializeOwned + Validate + ValidationSchema + 'static,
+    {
+        self.validators
+            .push(body_validator_with_options::<T>(options));
+        self
+    }
+
     pub fn with_params_validation<T>(mut self) -> Self
     where
         T: DeserializeOwned + Validate + 'static,
@@ -120,11 +131,29 @@ impl RouteDefinition {
         self
     }
 
+    pub fn with_params_validation_options<T>(mut self, options: ValidationOptions) -> Self
+    where
+        T: DeserializeOwned + Validate + ValidationSchema + 'static,
+    {
+        self.validators
+            .push(params_validator_with_options::<T>(options));
+        self
+    }
+
     pub fn with_query_validation<T>(mut self) -> Self
     where
         T: DeserializeOwned + Validate + 'static,
     {
         self.validators.push(query_validator::<T>());
+        self
+    }
+
+    pub fn with_query_validation_options<T>(mut self, options: ValidationOptions) -> Self
+    where
+        T: DeserializeOwned + Validate + ValidationSchema + 'static,
+    {
+        self.validators
+            .push(query_validator_with_options::<T>(options));
         self
     }
 }

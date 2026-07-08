@@ -122,11 +122,15 @@ impl RouteDefinition {
 
         if self.validation_enabled {
             for validator in &self.validators {
-                if let Err(error) = validator(&request) {
-                    return self
-                        .handle_error(self.execution_context(request.clone()), error)
-                        .await;
-                }
+                let context_request = request.clone();
+                request = match validator(request) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        return self
+                            .handle_error(self.execution_context(context_request), error)
+                            .await;
+                    }
+                };
             }
         }
 

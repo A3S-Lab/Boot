@@ -1,8 +1,9 @@
 use a3s_boot::{
     BootApplication, BootError, BootRequest, BootResponse, ControllerDefinition, HttpMethod,
-    Result, RouteDefinition, Validate,
+    Result, RouteDefinition, Validate, ValidationOptions, ValidationSchema,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::sync::Arc;
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -16,6 +17,12 @@ impl Validate for ValidatedCreateItemDto {
             return Err(BootError::BadRequest("name is required".to_string()));
         }
         Ok(())
+    }
+}
+
+impl ValidationSchema for ValidatedCreateItemDto {
+    fn allowed_fields() -> &'static [&'static str] {
+        &["name"]
     }
 }
 
@@ -35,6 +42,12 @@ impl Validate for ValidatedItemQuery {
     }
 }
 
+impl ValidationSchema for ValidatedItemQuery {
+    fn allowed_fields() -> &'static [&'static str] {
+        &["page"]
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct ValidatedItemParams {
     id: String,
@@ -48,6 +61,12 @@ impl Validate for ValidatedItemParams {
             ));
         }
         Ok(())
+    }
+}
+
+impl ValidationSchema for ValidatedItemParams {
+    fn allowed_fields() -> &'static [&'static str] {
+        &["id"]
     }
 }
 
@@ -181,4 +200,136 @@ async fn raw_handlers_do_not_validate_without_registered_validators() {
         .unwrap();
 
     assert_eq!(response.body_text().unwrap(), r#"{"name":""}"#);
+}
+
+#[tokio::test]
+async fn validation_options_whitelist_unknown_body_properties() {
+    let route = RouteDefinition::post("/", |request: BootRequest| async move {
+        BootResponse::json(&request.json::<serde_json::Value>()?)
+    })
+    .unwrap()
+    .with_body_validation_options::<ValidatedCreateItemDto>(
+        ValidationOptions::new().whitelist(true),
+    )
+    .with_validation();
+
+    let response = route
+        .call(
+            BootRequest::new(HttpMethod::Post, "/")
+                .with_content_type("application/json")
+                .with_body(r#"{"name":"Milo","role":"admin"}"#),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.body_json::<serde_json::Value>().unwrap(),
+        json!({ "name": "Milo" })
+    );
+}
+
+#[tokio::test]
+async fn validation_options_whitelist_updates_body_content_length() {
+    let route = RouteDefinition::post("/", |request: BootRequest| async move {
+        Ok(BootResponse::text(
+            request.strict_content_length()?.unwrap().to_string(),
+        ))
+    })
+    .unwrap()
+    .with_body_validation_options::<ValidatedCreateItemDto>(
+        ValidationOptions::new().whitelist(true),
+    )
+    .with_validation();
+
+    let body = r#"{"name":"Milo","role":"admin"}"#;
+    let stripped_body = serde_json::to_vec(&json!({ "name": "Milo" })).unwrap();
+    let response = route
+        .call(
+            BootRequest::new(HttpMethod::Post, "/")
+                .with_content_type("application/json")
+                .with_body(body)
+                .with_content_length(body.len() as u64)
+                .append_header("Content-Length", body.len().to_string()),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.body_text().unwrap(),
+        stripped_body.len().to_string()
+    );
+}
+
+#[tokio::test]
+async fn validation_options_forbid_unknown_body_properties() {
+    let called = Arc::new(std::sync::Mutex::new(false));
+    let called_handler = Arc::clone(&called);
+    let route = RouteDefinition::post("/", move |_| {
+        let called_handler = Arc::clone(&called_handler);
+        async move {
+            *called_handler.lock().unwrap() = true;
+            Ok(BootResponse::text("unreachable"))
+        }
+    })
+    .unwrap()
+    .with_body_validation_options::<ValidatedCreateItemDto>(
+        ValidationOptions::new()
+            .whitelist(true)
+            .forbid_non_whitelisted(true),
+    )
+    .with_validation();
+
+    let error = route
+        .call(
+            BootRequest::new(HttpMethod::Post, "/")
+                .with_content_type("application/json")
+                .with_body(r#"{"name":"Milo","role":"admin"}"#),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(error, BootError::BadRequest(message) if message == "non-whitelisted body properties: role")
+    );
+    assert!(!*called.lock().unwrap());
+}
+
+#[tokio::test]
+async fn validation_options_whitelist_unknown_query_parameters() {
+    let route = RouteDefinition::get("/", |request: BootRequest| async move {
+        Ok(BootResponse::text(format!(
+            "{}:{}",
+            request.query_param("page").unwrap_or("missing"),
+            request.query_param("extra").unwrap_or("stripped")
+        )))
+    })
+    .unwrap()
+    .with_query_validation_options::<ValidatedItemQuery>(ValidationOptions::new().whitelist(true))
+    .with_validation();
+
+    let response = route
+        .call(BootRequest::new(HttpMethod::Get, "/?page=2&extra=yes"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.body_text().unwrap(), "2:stripped");
+}
+
+#[tokio::test]
+async fn validation_options_forbid_unknown_path_parameters() {
+    let route = RouteDefinition::get("/{id}/{extra}", |_| async { Ok(BootResponse::text("ok")) })
+        .unwrap()
+        .with_params_validation_options::<ValidatedItemParams>(
+            ValidationOptions::new().forbid_non_whitelisted(true),
+        )
+        .with_validation();
+
+    let error = route
+        .call(BootRequest::new(HttpMethod::Get, "/42/ignored"))
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(error, BootError::BadRequest(message) if message == "non-whitelisted path parameters: extra")
+    );
 }

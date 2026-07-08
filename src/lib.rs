@@ -209,10 +209,11 @@ pub use transport::{RabbitMqTransport, RabbitMqTransportClient, RabbitMqTranspor
 pub use transport::{RedisTransport, RedisTransportClient, RedisTransportOptions};
 #[cfg(feature = "tcp-transport")]
 pub use transport::{TcpTransport, TcpTransportClient, TcpTransportOptions};
-pub use validation::Validate;
 pub(crate) use validation::{
-    body_validator, params_validator, query_validator, validate_value, RequestValidator,
+    body_validator, body_validator_with_options, params_validator, params_validator_with_options,
+    query_validator, query_validator_with_options, validate_value, RequestValidator,
 };
+pub use validation::{Validate, ValidationOptions, ValidationSchema};
 pub use versioning::{ApiVersioning, ApiVersioningStrategy, RouteVersioning};
 pub use view::{StringTemplateViewEngine, ViewEngine, ViewModule, ViewRenderer};
 pub use websocket::{
