@@ -91,6 +91,45 @@ fn route_definitions_expose_path_shape_and_param_names() {
 }
 
 #[test]
+fn route_definitions_expose_host_shape_and_param_names() {
+    let route = RouteDefinition::get("/items", |_| async { Ok(BootResponse::text("ok")) })
+        .unwrap()
+        .with_host(":tenant.example.com")
+        .unwrap();
+
+    let params = route
+        .host_params(Some("Acme.example.com:3000"))
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(route.host(), Some(":tenant.example.com"));
+    assert_eq!(route.host_shape().as_deref(), Some("{}.example.com"));
+    assert_eq!(route.host_param_names(), vec!["tenant"]);
+    assert!(route.matches_host(Some("ACME.example.com")));
+    assert!(!route.matches_host(Some("example.com")));
+    assert_eq!(params.get("tenant").map(String::as_str), Some("Acme"));
+}
+
+#[test]
+fn rejects_malformed_host_patterns() {
+    for host in [
+        "",
+        "https://example.com",
+        "{tenant.example.com",
+        "{id}.{id}.com",
+    ] {
+        let result = RouteDefinition::get("/items", |_| async { Ok(BootResponse::text("ok")) })
+            .unwrap()
+            .with_host(host);
+
+        assert!(
+            matches!(result, Err(BootError::InvalidHostPattern(_))),
+            "{host} should be rejected"
+        );
+    }
+}
+
+#[test]
 fn route_definitions_match_paths_and_decode_path_params() {
     let route = RouteDefinition::get("/files/{path}/versions/{version}", |_| async {
         Ok(BootResponse::text("ok"))
@@ -197,6 +236,47 @@ fn rejects_routes_with_the_same_method_and_ambiguous_path_shape() {
         .build();
 
     assert!(matches!(result, Err(BootError::DuplicateRoute(_))));
+}
+
+#[test]
+fn rejects_routes_with_the_same_method_path_and_host_shape() {
+    let result = BootApplication::builder()
+        .route(
+            RouteDefinition::get("/items", |_| async { Ok(BootResponse::text("one")) })
+                .unwrap()
+                .with_host("{tenant}.example.com")
+                .unwrap(),
+        )
+        .route(
+            RouteDefinition::get("/items", |_| async { Ok(BootResponse::text("two")) })
+                .unwrap()
+                .with_host(":account.example.com")
+                .unwrap(),
+        )
+        .build();
+
+    assert!(matches!(result, Err(BootError::DuplicateRoute(_))));
+}
+
+#[test]
+fn allows_routes_that_share_a_path_with_different_hosts() {
+    let app = BootApplication::builder()
+        .route(
+            RouteDefinition::get("/items", |_| async { Ok(BootResponse::text("acme")) })
+                .unwrap()
+                .with_host("acme.example.com")
+                .unwrap(),
+        )
+        .route(
+            RouteDefinition::get("/items", |_| async { Ok(BootResponse::text("globex")) })
+                .unwrap()
+                .with_host("globex.example.com")
+                .unwrap(),
+        )
+        .build()
+        .unwrap();
+
+    assert_eq!(app.routes().len(), 2);
 }
 
 #[test]
@@ -531,6 +611,67 @@ async fn application_call_dispatches_matching_routes() {
 
     assert_eq!(get_response.body, b"hammer:true");
     assert_eq!(post_response.body, b"created");
+}
+
+#[tokio::test]
+async fn application_call_prefers_matching_host_specific_routes() {
+    let app = BootApplication::builder()
+        .route(
+            RouteDefinition::get("/items", |_| async { Ok(BootResponse::text("global")) }).unwrap(),
+        )
+        .route(
+            RouteDefinition::get("/items", |request: BootRequest| async move {
+                Ok(BootResponse::text(format!(
+                    "tenant:{}",
+                    request.host_param("tenant").unwrap_or("missing")
+                )))
+            })
+            .unwrap()
+            .with_host("{tenant}.example.com")
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+
+    let tenant = app
+        .call(
+            BootRequest::new(HttpMethod::Get, "/items")
+                .with_header("host", "acme.example.com:3000"),
+        )
+        .await
+        .unwrap();
+    let global = app
+        .call(BootRequest::new(HttpMethod::Get, "/items"))
+        .await
+        .unwrap();
+
+    assert_eq!(tenant.body_text().unwrap(), "tenant:acme");
+    assert_eq!(global.body_text().unwrap(), "global");
+}
+
+#[tokio::test]
+async fn application_call_ignores_routes_with_non_matching_hosts() {
+    let app = BootApplication::builder()
+        .route(
+            RouteDefinition::get("/items", |_| async {
+                Ok(BootResponse::text("unreachable"))
+            })
+            .unwrap()
+            .with_host("api.example.com")
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+
+    let error = app
+        .call(BootRequest::new(HttpMethod::Get, "/items").with_header("host", "www.example.com"))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        BootError::NotFound(message) if message == "GET /items"
+    ));
 }
 
 #[tokio::test]

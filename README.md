@@ -82,6 +82,8 @@ This repository contains the first framework slice:
   `empty(...)`, and `no_content()` response helpers, redirect helpers,
   response body helpers, response status predicates, and response validation
 - `SseEvent` and streaming `text/event-stream` route helpers for Nest-style SSE
+- host-scoped routes with host parameter extraction for Nest-style
+  host-based controllers
 - `WebSocketGatewayDefinition`, `WebSocketMessage`, gateway pipes, guards, and
   interceptors, plus Axum WebSocket route registration behind the `axum` feature
 - `MessagePatternDefinition`, `TransportMessage`, `TransportReply`,
@@ -305,12 +307,15 @@ write Rust attributes that feel close to Nest.js decorators:
 | --- | --- |
 | `@Injectable()` | `#[injectable]` on a service struct |
 | `@Controller("cats")` | `#[controller("/cats")]` on an inherent `impl` block |
+| `@Controller({ host: ":account.example.com" })` | `#[host("{account}.example.com")]` below `#[controller]` |
 | `@Get(":id")` | `#[get("/{id}")]` on an async method |
 | `@Post()` | `#[post("/", status = 201)]` on an async method |
 | `@Param("id")` | `#[param("id")]` on a method argument |
+| `@HostParam("account")` | `#[host_param("account")]` on a method argument |
 | `@Query()` / `@Query("page")` | `#[query]` for a DTO or `#[query("page")]` for one value |
 | `@Body()` | `#[body]` on a JSON body DTO argument |
 | `@Headers("x-request-id")` | `#[header("x-request-id")]` on a method argument |
+| `@Ip()` | `#[ip]` on a method argument |
 | `@Req()` | `#[request]` on a `BootRequest` argument |
 | `@Sse("events")` | `#[sse("/events")]` on an async method returning an SSE event stream |
 | `@WebSocketGateway()` | `#[websocket_gateway("/ws")]` on an inherent `impl` block |
@@ -479,14 +484,45 @@ async fn main() -> Result<()> {
 impl block. GET, POST, PUT, PATCH, and DELETE route attributes default to JSON.
 Use extractor attributes on method arguments for Nest-style request binding:
 `#[param("id")]`, `#[params]`, `#[query]`, `#[query("name")]`, `#[body]`,
-`#[header("name")]`, `#[headers]`, and `#[request]`. Add `raw` only when the
-method should return `Result<BootResponse>` directly, for example
-`#[get("/health", raw)]`. The explicit `*_json` route attributes remain
-available as compatibility aliases, but typical code should use `#[get]` and
-`#[post]` directly.
+`#[header("name")]`, `#[headers]`, `#[host_param("account")]`, `#[ip]`, and
+`#[request]`. Add `raw` only when the method should return
+`Result<BootResponse>` directly, for example `#[get("/health", raw)]`. The
+explicit `*_json` route attributes remain available as compatibility aliases,
+but typical code should use `#[get]` and `#[post]` directly.
 `#[sse("/events")]` registers a GET endpoint that returns a
 `text/event-stream` response and accepts any stream whose items are
 `Result<SseEvent>`.
+
+Host-scoped controllers mirror Nest's host-based controller option. Put
+`#[host("{account}.example.com")]` below `#[controller]` to constrain every
+route in that controller, or put `#[host("api.example.com")]` on a route method
+to override the controller default:
+
+```rust
+use a3s_boot::{controller, get, Result};
+
+#[derive(Debug)]
+struct CatsController;
+
+#[controller("/cats")]
+#[host("{account}.example.com")]
+impl CatsController {
+    #[get("/")]
+    async fn list(
+        &self,
+        #[host_param("account")] account: String,
+        #[ip] ip: Option<String>,
+    ) -> Result<String> {
+        Ok(format!("{account}:{:?}", ip))
+    }
+}
+```
+
+Host parameters accept both Boot's `{account}.example.com` style and Nest's
+`:account.example.com` style in explicit route definitions. `#[ip]` reads the
+standard forwarding headers (`Forwarded`, `X-Forwarded-For`, then `X-Real-Ip`)
+as an adapter-neutral client IP hint; when the argument is not `Option<T>`,
+missing or invalid values map to `BootError::BadRequest`.
 
 ## Validation Pipeline
 

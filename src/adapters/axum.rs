@@ -49,8 +49,9 @@ impl HttpAdapter for AxumAdapter {
     type Output = Router;
 
     fn build(&self, app: BootApplication) -> Result<Self::Output> {
-        let versioning_enabled = app.api_versioning().is_some();
-        let mut router = if versioning_enabled {
+        let fallback_routing = app.api_versioning().is_some()
+            || app.routes().iter().any(|route| route.host().is_some());
+        let mut router = if fallback_routing {
             let body_limit = self.body_limit;
             let app = app.clone();
             Router::new().fallback(move |request: Request| {
@@ -61,7 +62,7 @@ impl HttpAdapter for AxumAdapter {
             Router::new().fallback(not_found_fallback)
         };
 
-        if !versioning_enabled {
+        if !fallback_routing {
             for route in app.routes().iter().cloned() {
                 let path = axum_route_path(route.path());
                 router = router.route(

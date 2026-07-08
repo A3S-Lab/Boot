@@ -227,9 +227,13 @@ impl BootApplication {
     /// Dispatch a framework-neutral request through the resolved route table.
     pub async fn call(&self, request: BootRequest) -> Result<BootResponse> {
         let candidates = self.request_candidates(&request);
-        let Some((candidate_index, best_specificity)) =
-            best_path_specificity(&self.routes, &candidates, self.api_versioning.as_ref())
-        else {
+        let host = request.host();
+        let Some((candidate_index, best_specificity)) = best_request_specificity(
+            &self.routes,
+            &candidates,
+            self.api_versioning.as_ref(),
+            host,
+        ) else {
             return Err(BootError::NotFound(format!(
                 "{} {}",
                 request.method.as_str(),
@@ -243,6 +247,7 @@ impl BootApplication {
             candidate,
             &best_specificity,
             self.api_versioning.as_ref(),
+            host,
             |route| route.method() == request.method,
         ) {
             let request = request.with_matched_path(candidate.path.clone());
@@ -254,6 +259,7 @@ impl BootApplication {
             candidate,
             &best_specificity,
             self.api_versioning.as_ref(),
+            host,
             |_| true,
         ) {
             return route.call(request).await;
@@ -379,13 +385,14 @@ impl BootApplication {
         let (candidate_index, best_specificity) =
             best_path_specificity(&self.routes, candidates, self.api_versioning.as_ref())?;
         let candidate = &candidates[candidate_index];
-        let route = matching_route_with_specificity(
-            &self.routes,
-            candidate,
-            &best_specificity,
-            self.api_versioning.as_ref(),
-            |route| route.method() == method,
-        )?;
+        let route = self.routes.iter().find(|route| {
+            route_matches_candidate(
+                route,
+                candidate,
+                &best_specificity,
+                self.api_versioning.as_ref(),
+            ) && route.method() == method
+        })?;
 
         Some(MatchedRoute {
             route,
@@ -429,14 +436,42 @@ fn matching_route_with_specificity<'a, P>(
     candidate: &ApiVersionCandidate,
     specificity: &[u8],
     versioning: Option<&ApiVersioning>,
+    host: Option<&str>,
     mut predicate: P,
 ) -> Option<&'a RouteDefinition>
 where
     P: FnMut(&RouteDefinition) -> bool,
 {
     routes.iter().find(|route| {
-        route_matches_candidate(route, candidate, specificity, versioning) && predicate(route)
+        route_matches_request_candidate(route, candidate, specificity, versioning, host)
+            && predicate(route)
     })
+}
+
+fn best_request_specificity(
+    routes: &[RouteDefinition],
+    candidates: &[ApiVersionCandidate],
+    versioning: Option<&ApiVersioning>,
+    host: Option<&str>,
+) -> Option<(usize, Vec<u8>)> {
+    let mut best = None;
+
+    for (candidate_index, candidate) in candidates.iter().enumerate() {
+        for route in routes {
+            if route_matches_path_version_and_host(route, candidate, versioning, host) {
+                let specificity = request_specificity(route);
+                if best
+                    .as_ref()
+                    .map(|(_, best_specificity)| specificity > *best_specificity)
+                    .unwrap_or(true)
+                {
+                    best = Some((candidate_index, specificity));
+                }
+            }
+        }
+    }
+
+    best
 }
 
 fn route_matches_candidate(
@@ -447,6 +482,17 @@ fn route_matches_candidate(
 ) -> bool {
     route_matches_path_and_version(route, candidate, versioning)
         && route.path_specificity().as_slice() == specificity
+}
+
+fn route_matches_request_candidate(
+    route: &RouteDefinition,
+    candidate: &ApiVersionCandidate,
+    specificity: &[u8],
+    versioning: Option<&ApiVersioning>,
+    host: Option<&str>,
+) -> bool {
+    route_matches_path_version_and_host(route, candidate, versioning, host)
+        && request_specificity(route).as_slice() == specificity
 }
 
 fn route_matches_path_and_version(
@@ -464,4 +510,20 @@ fn route_matches_path_and_version(
             .matches(candidate.version.as_deref(), versioning.default_version()),
         None => true,
     }
+}
+
+fn route_matches_path_version_and_host(
+    route: &RouteDefinition,
+    candidate: &ApiVersionCandidate,
+    versioning: Option<&ApiVersioning>,
+    host: Option<&str>,
+) -> bool {
+    route_matches_path_and_version(route, candidate, versioning) && route.matches_host(host)
+}
+
+fn request_specificity(route: &RouteDefinition) -> Vec<u8> {
+    let mut specificity = route.path_specificity();
+    specificity.push(2);
+    specificity.extend(route.host_specificity());
+    specificity
 }

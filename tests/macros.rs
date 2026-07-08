@@ -463,6 +463,47 @@ impl Module for MacroPipelineModule {
     }
 }
 
+#[derive(Debug)]
+struct MacroHostController;
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+struct MacroHostDto {
+    tenant: String,
+    ip: Option<String>,
+}
+
+#[controller("/macro-host")]
+#[host("{tenant}.example.com")]
+impl MacroHostController {
+    #[get("/who")]
+    async fn who(
+        &self,
+        #[host_param("tenant")] tenant: String,
+        #[ip] ip: Option<String>,
+    ) -> Result<MacroHostDto> {
+        Ok(MacroHostDto { tenant, ip })
+    }
+
+    #[get("/api")]
+    #[host("api.example.com")]
+    async fn api(&self, #[ip] ip: Option<String>) -> Result<String> {
+        Ok(ip.unwrap_or_else(|| "missing".to_string()))
+    }
+}
+
+#[derive(Debug)]
+struct MacroHostModule;
+
+impl Module for MacroHostModule {
+    fn name(&self) -> &'static str {
+        "macro-host"
+    }
+
+    fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
+        Ok(vec![Arc::new(MacroHostController).controller()?])
+    }
+}
+
 #[tokio::test]
 async fn macros_register_injectable_services_and_controller_routes() {
     let app = BootApplication::builder()
@@ -875,6 +916,51 @@ async fn macro_pipeline_decorators_register_controller_and_route_hooks() {
         filtered.body_text().unwrap(),
         "/macro-pipeline/filtered: bad request: macro filter"
     );
+}
+
+#[tokio::test]
+async fn macro_host_and_ip_extractors_register_host_scoped_routes() {
+    let app = BootApplication::builder()
+        .import(MacroHostModule)
+        .build()
+        .unwrap();
+
+    let response = app
+        .call(
+            BootRequest::new(a3s_boot::HttpMethod::Get, "/macro-host/who")
+                .with_header("host", "acme.example.com:3000")
+                .with_header("x-forwarded-for", "203.0.113.7, 203.0.113.8"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.body_json::<MacroHostDto>().unwrap(),
+        MacroHostDto {
+            tenant: "acme".to_string(),
+            ip: Some("203.0.113.7".to_string()),
+        }
+    );
+
+    let api = app
+        .call(
+            BootRequest::new(a3s_boot::HttpMethod::Get, "/macro-host/api")
+                .with_header("host", "api.example.com")
+                .with_header("x-real-ip", "192.0.2.24"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(api.body_json::<String>().unwrap(), "192.0.2.24");
+
+    let missing = app
+        .handle(
+            BootRequest::new(a3s_boot::HttpMethod::Get, "/macro-host/who")
+                .with_header("host", "www.other.com"),
+        )
+        .await;
+
+    assert_eq!(missing.status(), 404);
 }
 
 #[tokio::test]

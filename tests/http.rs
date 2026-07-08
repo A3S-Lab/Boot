@@ -168,6 +168,29 @@ fn request_and_response_header_entries_include_primary_and_appended_headers() {
 }
 
 #[test]
+fn request_host_and_ip_helpers_read_forwarded_headers() {
+    let request = BootRequest::new(HttpMethod::Get, "/")
+        .with_header("Host", "Acme.Example.com:3000")
+        .with_header("Forwarded", r#"for="203.0.113.10";proto=https"#)
+        .with_host_param("tenant", "acme");
+
+    assert_eq!(request.host(), Some("Acme.Example.com"));
+    assert_eq!(request.ip().as_deref(), Some("203.0.113.10"));
+    assert_eq!(request.host_param("tenant"), Some("acme"));
+
+    let request = BootRequest::new(HttpMethod::Get, "/")
+        .with_header("Host", "[::1]:3000")
+        .with_header("X-Forwarded-For", "198.51.100.4, 198.51.100.5");
+
+    assert_eq!(request.host(), Some("::1"));
+    assert_eq!(request.ip().as_deref(), Some("198.51.100.4"));
+
+    let request = BootRequest::new(HttpMethod::Get, "/").with_header("X-Real-Ip", "192.0.2.9");
+
+    assert_eq!(request.ip().as_deref(), Some("192.0.2.9"));
+}
+
+#[test]
 fn request_header_helpers_validate_header_names_and_values() {
     let valid = BootRequest::new(HttpMethod::Get, "/items")
         .with_header("X-Trace-Id", "abc-123")

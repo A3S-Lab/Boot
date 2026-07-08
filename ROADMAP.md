@@ -36,10 +36,13 @@ Implemented today:
   `#[post]`, `#[put]`, `#[patch]`, `#[delete]`, `#[sse]`, raw route mode, and
   method argument extractors including `#[body]`, `#[request]`,
   `#[param("name")]`, `#[params]`, `#[query]`, `#[query("name")]`,
-  `#[header("name")]`, and `#[headers]`, plus `#[metadata]` for
-  Nest-style custom route/controller metadata and `#[http_code]` for
-  Nest-style response status metadata, `#[header]` for response headers, and
-  `#[redirect]` for redirect responses.
+  `#[header("name")]`, `#[headers]`, `#[host_param("name")]`, and `#[ip]`,
+  plus `#[host]` for host-scoped controllers and routes, `#[metadata]` for
+  Nest-style custom route/controller metadata and `#[http_code]` for Nest-style
+  response status metadata, `#[header]` for response headers, and `#[redirect]`
+  for redirect responses.
+- Host-scoped HTTP routes with `RouteDefinition::with_host(...)` and
+  `ControllerDefinition::with_host(...)` for Nest-style host-based controllers.
 - Nest-style generic pipeline macros: `#[use_guard]`, `#[use_interceptor]`,
   `#[use_filter]`, and `#[use_pipe]` at controller and route scope.
 - JSON body and JSON response helpers.
@@ -135,8 +138,10 @@ Nest equivalent:
 
 - `@Body()`
 - `@Param("id")`
+- `@HostParam("account")`
 - `@Query()`
 - `@Headers("x-request-id")`
+- `@Ip()`
 - `@Req()`
 
 Proposed A3S Boot shape:
@@ -150,8 +155,18 @@ impl CatsController {
         #[param("id")] id: String,
         #[query] query: FindCatQuery,
         #[header("x-request-id")] request_id: Option<String>,
+        #[ip] ip: Option<String>,
     ) -> Result<CatDto> {
-        self.cats.find_one(id, query, request_id).await
+        self.cats.find_one(id, query, request_id, ip).await
+    }
+
+    #[get("/host")]
+    #[host("{account}.example.com")]
+    async fn host_scoped(
+        &self,
+        #[host_param("account")] account: String,
+    ) -> Result<CatDto> {
+        self.cats.find_for_account(account).await
     }
 
     #[post("/", status = 201)]
@@ -165,7 +180,11 @@ Completed tasks:
 
 - Extend `a3s-boot-macros` to parse attributes on route method arguments.
 - Support `#[body]`, `#[request]`, `#[param("name")]`, `#[params]`,
-  `#[query]`, `#[query("name")]`, `#[header("name")]`, and `#[headers]`.
+  `#[query]`, `#[query("name")]`, `#[header("name")]`, `#[headers]`,
+  `#[host_param("name")]`, and `#[ip]`.
+- Support host-scoped controller and route macros through `#[host("...")]`,
+  plus explicit `RouteDefinition::with_host(...)` and
+  `ControllerDefinition::with_host(...)` APIs.
 - Generate a wrapper that receives `BootRequest`, extracts typed values, then
   calls the original method.
 - Keep existing direct DTO body handlers working.

@@ -7,6 +7,8 @@ pub enum BootError {
     EmptyModuleName,
     #[error("route path must start with '/': {0}")]
     InvalidRoutePath(String),
+    #[error("host pattern is invalid: {0}")]
+    InvalidHostPattern(String),
     #[error("route is already registered: {0}")]
     DuplicateRoute(String),
     #[error("route was not found: {0}")]
@@ -78,6 +80,7 @@ impl BootError {
         match self {
             Self::EmptyModuleName => Self::EmptyModuleName,
             Self::InvalidRoutePath(message) => Self::InvalidRoutePath(message.clone()),
+            Self::InvalidHostPattern(message) => Self::InvalidHostPattern(message.clone()),
             Self::DuplicateRoute(message) => Self::DuplicateRoute(message.clone()),
             Self::NotFound(message) => Self::NotFound(message.clone()),
             Self::MethodNotAllowed(message) => Self::MethodNotAllowed(message.clone()),

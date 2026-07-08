@@ -32,6 +32,24 @@ impl RouteDefinition {
             }
         };
         request = request.with_path_params(params);
+        let host_params = match self.host_params(request.host()) {
+            Ok(Some(params)) => params,
+            Ok(None) => {
+                let message = format!("{} {}", request.method.as_str(), request.path);
+                return self
+                    .handle_error(
+                        self.execution_context(request),
+                        BootError::NotFound(message),
+                    )
+                    .await;
+            }
+            Err(error) => {
+                return self
+                    .handle_error(self.execution_context(request), error)
+                    .await;
+            }
+        };
+        request = request.with_host_params(host_params);
         if let Some(module_ref) = &self.module_ref {
             request = request.with_module_ref(module_ref.request_scope());
         }

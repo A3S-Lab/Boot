@@ -9,6 +9,10 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::routing::handler::{RequestScopedRouteHandler, RouteHandler};
+use crate::routing::host::{
+    host_param_names, host_shape_key, host_specificity, match_host_params, match_host_shape,
+    validate_host_pattern,
+};
 use crate::routing::path::{
     match_path_params, match_path_shape, route_param_names, route_shape_key, validate_route_path,
 };
@@ -19,6 +23,7 @@ use crate::ModuleRef;
 pub struct RouteDefinition {
     pub(super) method: HttpMethod,
     pub(super) path: String,
+    pub(super) host: Option<String>,
     pub(super) handler: Arc<dyn RouteHandler>,
     pub(super) middleware: Vec<Arc<dyn Middleware>>,
     pub(super) pipes: Vec<Arc<dyn Pipe>>,
@@ -47,6 +52,7 @@ impl RouteDefinition {
         Ok(Self {
             method,
             path,
+            host: None,
             handler: Arc::new(handler),
             middleware: Vec::new(),
             pipes: Vec::new(),
@@ -82,20 +88,50 @@ impl RouteDefinition {
         &self.path
     }
 
+    pub fn host(&self) -> Option<&str> {
+        self.host.as_deref()
+    }
+
     pub fn path_shape(&self) -> String {
         route_shape_key(&self.path)
+    }
+
+    pub fn host_shape(&self) -> Option<String> {
+        self.host.as_deref().map(host_shape_key)
     }
 
     pub fn path_param_names(&self) -> Vec<&str> {
         route_param_names(&self.path)
     }
 
+    pub fn host_param_names(&self) -> Vec<&str> {
+        self.host
+            .as_deref()
+            .map(host_param_names)
+            .unwrap_or_default()
+    }
+
     pub fn matches_path(&self, path: &str) -> bool {
         match_path_shape(&self.path, path)
     }
 
+    pub fn matches_host(&self, host: Option<&str>) -> bool {
+        match &self.host {
+            Some(pattern) => host.is_some_and(|host| match_host_shape(pattern, host)),
+            None => true,
+        }
+    }
+
     pub fn path_params(&self, path: &str) -> Result<Option<BTreeMap<String, String>>> {
         match_path_params(&self.path, path)
+    }
+
+    pub fn host_params(&self, host: Option<&str>) -> Result<Option<BTreeMap<String, String>>> {
+        match (&self.host, host) {
+            (Some(pattern), Some(host)) => match_host_params(pattern, host),
+            (Some(_), None) => Ok(None),
+            (None, _) => Ok(Some(BTreeMap::new())),
+        }
     }
 
     pub fn module_name(&self) -> Option<&str> {
@@ -149,6 +185,18 @@ impl RouteDefinition {
 
     pub fn validation_enabled(&self) -> bool {
         self.validation_enabled
+    }
+
+    pub fn with_host(mut self, pattern: impl Into<String>) -> Result<Self> {
+        let pattern = pattern.into();
+        validate_host_pattern(&pattern)?;
+        self.host = Some(pattern);
+        Ok(self)
+    }
+
+    pub fn without_host(mut self) -> Self {
+        self.host = None;
+        self
     }
 
     pub fn with_version(mut self, version: impl Into<String>) -> Self {
@@ -209,5 +257,22 @@ impl RouteDefinition {
     ) -> Self {
         self.metadata.entry(key.into()).or_insert(value);
         self
+    }
+
+    pub(crate) fn with_host_default(mut self, host: Option<&str>) -> Result<Self> {
+        if self.host.is_none() {
+            if let Some(host) = host {
+                self = self.with_host(host.to_string())?;
+            }
+        }
+        Ok(self)
+    }
+
+    pub(crate) fn host_shape_key(&self) -> Option<String> {
+        self.host.as_deref().map(host_shape_key)
+    }
+
+    pub(crate) fn host_specificity(&self) -> Vec<u8> {
+        host_specificity(self.host.as_deref())
     }
 }

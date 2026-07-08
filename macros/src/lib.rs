@@ -189,6 +189,21 @@ pub fn headers(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
+pub fn host_param(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    extractor_attribute_outside_controller("host_param", item)
+}
+
+#[proc_macro_attribute]
+pub fn ip(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    extractor_attribute_outside_controller("ip", item)
+}
+
+#[proc_macro_attribute]
+pub fn host(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    host_attribute_outside_controller("host", item)
+}
+
+#[proc_macro_attribute]
 pub fn tag(_attr: TokenStream, item: TokenStream) -> TokenStream {
     openapi_attribute_outside_controller("tag", item)
 }
@@ -324,6 +339,8 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
         take_controller_metadata_attrs(&clean_impl_attrs);
     let (clean_impl_attrs, controller_pipeline, controller_pipeline_errors) =
         take_controller_pipeline_attrs(&clean_impl_attrs);
+    let (clean_impl_attrs, controller_host, controller_host_errors) =
+        take_controller_host_attrs(&clean_impl_attrs);
     item_impl.attrs = clean_impl_attrs;
     for error in controller_validation_errors {
         push_error(&mut errors, error);
@@ -337,9 +354,13 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
     for error in controller_pipeline_errors {
         push_error(&mut errors, error);
     }
+    for error in controller_host_errors {
+        push_error(&mut errors, error);
+    }
     let controller_openapi = controller_openapi.tokens();
     let controller_metadata = controller_metadata.tokens();
     let controller_pipeline = controller_pipeline.tokens();
+    let controller_host = controller_host.tokens();
 
     for item in &mut item_impl.items {
         let ImplItem::Fn(method) = item else {
@@ -357,6 +378,7 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
             take_route_response_attrs(&clean_attrs);
         let (clean_attrs, pipeline_specs, pipeline_errors) =
             take_route_pipeline_attrs(&clean_attrs);
+        let (clean_attrs, host_specs, host_errors) = take_route_host_attrs(&clean_attrs);
         method.attrs = clean_attrs;
         for error in route_errors {
             push_error(&mut errors, error);
@@ -377,6 +399,9 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
             push_error(&mut errors, error);
         }
         for error in pipeline_errors {
+            push_error(&mut errors, error);
+        }
+        for error in host_errors {
             push_error(&mut errors, error);
         }
         if method_routes.is_empty() && !openapi_specs.is_empty() {
@@ -403,6 +428,15 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
                 syn::Error::new_spanned(
                     &method.sig.ident,
                     "pipeline route attributes must be used on route methods",
+                ),
+            );
+        }
+        if method_routes.is_empty() && host_specs.is_some() {
+            push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &method.sig.ident,
+                    "host route attributes must be used on route methods",
                 ),
             );
         }
@@ -462,6 +496,7 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
                 http_code.as_ref(),
                 &response_specs,
                 &pipeline_specs,
+                host_specs.as_ref(),
                 &openapi_specs,
             ) {
                 Ok(registration) => routes.push(registration),
@@ -491,6 +526,9 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
                 )*
                 #(
                     __a3s_boot_controller = __a3s_boot_controller.#controller_pipeline;
+                )*
+                #(
+                    __a3s_boot_controller = __a3s_boot_controller.#controller_host?;
                 )*
                 #(
                     __a3s_boot_controller = #routes;
@@ -978,6 +1016,7 @@ fn route_registration(
     http_code: Option<&LitInt>,
     response_specs: &[RouteResponseSpec],
     pipeline_specs: &[PipelineSpec],
+    host_spec: Option<&HostSpec>,
     openapi_specs: &[RouteOpenApiSpec],
 ) -> Result<proc_macro2::TokenStream> {
     if method.sig.asyncness.is_none() {
@@ -1105,6 +1144,8 @@ fn route_registration(
 
     let route_definition = pipeline_route_definition(route_definition, pipeline_specs);
 
+    let route_definition = host_route_definition(route_definition, host_spec);
+
     let route_definition = response_route_definition(route_definition, response_specs)?;
 
     let route_definition = openapi_route_definition(
@@ -1158,6 +1199,19 @@ fn pipeline_route_definition(
         };
     }
     route_definition
+}
+
+fn host_route_definition(
+    route_definition: proc_macro2::TokenStream,
+    host_spec: Option<&HostSpec>,
+) -> proc_macro2::TokenStream {
+    let Some(spec) = host_spec else {
+        return route_definition;
+    };
+    let token = spec.token();
+    quote! {
+        (#route_definition).#token?
+    }
 }
 
 fn validation_route_definition(
@@ -1223,7 +1277,9 @@ fn extractor_validation_tokens(
             | Extractor::Param(_)
             | Extractor::Query(Some(_))
             | Extractor::Header(_)
-            | Extractor::Headers => {}
+            | Extractor::Headers
+            | Extractor::HostParam(_)
+            | Extractor::Ip => {}
         }
     }
 
@@ -1409,6 +1465,20 @@ fn extractor_tokens(arg: MethodArg, extractor: Extractor) -> proc_macro2::TokenS
         Extractor::Headers => quote! {
             let #ident: #ty = __a3s_boot_request.headers.clone();
         },
+        Extractor::HostParam(name) => single_value_extractor_tokens(
+            ident,
+            ty,
+            &name,
+            "host parameter",
+            quote!(__a3s_boot_request.host_param(#name).map(::std::string::ToString::to_string)),
+        ),
+        Extractor::Ip => single_value_extractor_tokens_by_name(
+            ident,
+            ty,
+            "ip",
+            "IP address",
+            quote!(__a3s_boot_request.ip()),
+        ),
     }
 }
 
@@ -1419,7 +1489,16 @@ fn single_value_extractor_tokens(
     label: &'static str,
     value: proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
-    let name = name.value();
+    single_value_extractor_tokens_by_name(ident, ty, &name.value(), label, value)
+}
+
+fn single_value_extractor_tokens_by_name(
+    ident: Ident,
+    ty: Box<Type>,
+    name: &str,
+    label: &'static str,
+    value: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
     let missing = format!("missing {label}: {name}");
     let invalid = format!("invalid {label} {name}: {{}}");
 
@@ -1527,7 +1606,9 @@ fn extractor_openapi_tokens(
             Extractor::Request
             | Extractor::Params
             | Extractor::Query(None)
-            | Extractor::Headers => {}
+            | Extractor::Headers
+            | Extractor::HostParam(_)
+            | Extractor::Ip => {}
         }
     }
 
@@ -1837,6 +1918,81 @@ fn take_route_pipeline_attrs(
     (clean_attrs, specs, errors)
 }
 
+fn take_controller_host_attrs(
+    attrs: &[Attribute],
+) -> (Vec<Attribute>, ControllerHostAttrs, Vec<syn::Error>) {
+    let mut clean_attrs = Vec::new();
+    let mut host = ControllerHostAttrs::default();
+    let mut errors = Vec::new();
+
+    for attr in attrs {
+        if !is_host_attribute(attr) {
+            clean_attrs.push(attr.clone());
+            continue;
+        }
+
+        match attr.parse_args::<LitStr>() {
+            Ok(pattern) => {
+                if host.pattern.is_some() {
+                    errors.push(syn::Error::new_spanned(
+                        attr,
+                        "controller impl blocks can use at most one #[host] attribute",
+                    ));
+                } else {
+                    host.pattern = Some(pattern);
+                }
+            }
+            Err(_) => errors.push(syn::Error::new_spanned(
+                attr,
+                "#[host] requires one string literal argument",
+            )),
+        }
+    }
+
+    (clean_attrs, host, errors)
+}
+
+fn take_route_host_attrs(
+    attrs: &[Attribute],
+) -> (Vec<Attribute>, Option<HostSpec>, Vec<syn::Error>) {
+    let mut clean_attrs = Vec::new();
+    let mut spec = None;
+    let mut errors = Vec::new();
+
+    for attr in attrs {
+        if !is_host_attribute(attr) {
+            clean_attrs.push(attr.clone());
+            continue;
+        }
+
+        match attr.parse_args::<LitStr>() {
+            Ok(pattern) => {
+                if spec.is_some() {
+                    errors.push(syn::Error::new_spanned(
+                        attr,
+                        "route methods can use at most one #[host] attribute",
+                    ));
+                } else {
+                    spec = Some(HostSpec { pattern });
+                }
+            }
+            Err(_) => errors.push(syn::Error::new_spanned(
+                attr,
+                "#[host] requires one string literal argument",
+            )),
+        }
+    }
+
+    (clean_attrs, spec, errors)
+}
+
+fn is_host_attribute(attr: &Attribute) -> bool {
+    attr.path()
+        .segments
+        .last()
+        .is_some_and(|segment| segment.ident == "host")
+}
+
 fn is_metadata_attribute(attr: &Attribute) -> bool {
     attr.path()
         .segments
@@ -1943,6 +2099,31 @@ impl PipelineAttrKind {
             "use_pipe" => Some(Self::Pipe),
             _ => None,
         }
+    }
+}
+
+#[derive(Default)]
+struct ControllerHostAttrs {
+    pattern: Option<LitStr>,
+}
+
+impl ControllerHostAttrs {
+    fn tokens(&self) -> Vec<proc_macro2::TokenStream> {
+        self.pattern
+            .iter()
+            .map(|pattern| quote!(with_host(#pattern)))
+            .collect()
+    }
+}
+
+struct HostSpec {
+    pattern: LitStr,
+}
+
+impl HostSpec {
+    fn token(&self) -> proc_macro2::TokenStream {
+        let pattern = &self.pattern;
+        quote!(with_host(#pattern))
     }
 }
 
@@ -2513,6 +2694,17 @@ fn pipeline_attribute_outside_controller(name: &str, item: TokenStream) -> Token
     .into()
 }
 
+fn host_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
+    let item = proc_macro2::TokenStream::from(item);
+    let message =
+        format!("#[{name}] must be used inside an impl block annotated with #[controller]");
+    quote! {
+        compile_error!(#message);
+        #item
+    }
+    .into()
+}
+
 fn push_error(slot: &mut Option<syn::Error>, error: syn::Error) {
     if let Some(existing) = slot {
         existing.combine(error);
@@ -2808,6 +3000,8 @@ enum Extractor {
     Query(Option<LitStr>),
     Header(LitStr),
     Headers,
+    HostParam(LitStr),
+    Ip,
 }
 
 impl Extractor {
@@ -2834,6 +3028,11 @@ impl Extractor {
         } else if ident == "headers" {
             expect_no_extractor_args(attr, "headers")?;
             Self::Headers
+        } else if ident == "host_param" {
+            Self::HostParam(parse_extractor_name(attr, "host_param")?)
+        } else if ident == "ip" {
+            expect_no_extractor_args(attr, "ip")?;
+            Self::Ip
         } else {
             return Ok(None);
         };

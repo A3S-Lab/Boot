@@ -1,5 +1,6 @@
 mod controller;
 mod handler;
+pub(crate) mod host;
 pub(crate) mod path;
 mod route;
 

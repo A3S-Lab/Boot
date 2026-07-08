@@ -374,6 +374,7 @@ fn validate_unique_routes(
         for existing in routes.iter().take(index) {
             if existing.method() != route.method()
                 || existing.path_shape_key() != route.path_shape_key()
+                || existing.host_shape_key() != route.host_shape_key()
             {
                 continue;
             }
@@ -388,10 +389,15 @@ fn validate_unique_routes(
                 continue;
             }
 
+            let host = route
+                .host()
+                .map(|host| format!(" host {host}"))
+                .unwrap_or_default();
             return Err(BootError::DuplicateRoute(format!(
-                "{} {} version {}",
+                "{} {}{} version {}",
                 route.method().as_str(),
                 route.path(),
+                host,
                 route.versioning()
             )));
         }

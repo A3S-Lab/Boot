@@ -7,6 +7,7 @@ use super::header::{
 use super::method::HttpMethod;
 use super::query::{parse_query, parse_query_pairs, split_path_query};
 use crate::percent::validate_percent_encoding;
+use crate::routing::host::normalize_host_header;
 use crate::{validate_value, BootError, ModuleRef, ProviderToken, Result, Validate};
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::BTreeMap;
@@ -20,6 +21,7 @@ pub struct BootRequest {
     pub query_string: Option<String>,
     pub query: BTreeMap<String, String>,
     pub params: BTreeMap<String, String>,
+    pub host_params: BTreeMap<String, String>,
     pub headers: BTreeMap<String, String>,
     pub appended_headers: Vec<(String, String)>,
     pub body: Vec<u8>,
@@ -33,6 +35,7 @@ impl PartialEq for BootRequest {
             && self.query_string == other.query_string
             && self.query == other.query
             && self.params == other.params
+            && self.host_params == other.host_params
             && self.headers == other.headers
             && self.appended_headers == other.appended_headers
             && self.body == other.body
@@ -50,6 +53,7 @@ impl BootRequest {
             query_string,
             query,
             params: BTreeMap::new(),
+            host_params: BTreeMap::new(),
             headers: BTreeMap::new(),
             appended_headers: Vec::new(),
             body: Vec::new(),
@@ -135,8 +139,18 @@ impl BootRequest {
         self
     }
 
+    pub fn with_host_params(mut self, params: BTreeMap<String, String>) -> Self {
+        self.host_params = params;
+        self
+    }
+
     pub fn with_param(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.params.insert(name.into(), value.into());
+        self
+    }
+
+    pub fn with_host_param(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.host_params.insert(name.into(), value.into());
         self
     }
 
@@ -226,6 +240,10 @@ impl BootRequest {
         self.params.get(name).map(String::as_str)
     }
 
+    pub fn host_param(&self, name: &str) -> Option<&str> {
+        self.host_params.get(name).map(String::as_str)
+    }
+
     pub fn params<T>(&self) -> Result<T>
     where
         T: DeserializeOwned,
@@ -240,6 +258,23 @@ impl BootRequest {
         T: DeserializeOwned + Validate,
     {
         let value = self.params()?;
+        validate_value(value)
+    }
+
+    pub fn host_params<T>(&self) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        let params = serde_urlencoded::to_string(&self.host_params)
+            .map_err(|err| BootError::BadRequest(err.to_string()))?;
+        serde_urlencoded::from_str(&params).map_err(|err| BootError::BadRequest(err.to_string()))
+    }
+
+    pub fn validated_host_params<T>(&self) -> Result<T>
+    where
+        T: DeserializeOwned + Validate,
+    {
+        let value = self.host_params()?;
         validate_value(value)
     }
 
@@ -277,6 +312,16 @@ impl BootRequest {
         get_header(&self.headers, name)
     }
 
+    pub fn host(&self) -> Option<&str> {
+        self.header("host").and_then(normalize_host_header)
+    }
+
+    pub fn ip(&self) -> Option<String> {
+        self.forwarded_for_ip()
+            .or_else(|| self.forwarded_header_ip("x-forwarded-for"))
+            .or_else(|| self.forwarded_header_ip("x-real-ip"))
+    }
+
     pub fn header_values(&self, name: &str) -> Vec<&str> {
         let mut values = self.header(name).into_iter().collect::<Vec<_>>();
         values.extend(
@@ -290,6 +335,33 @@ impl BootRequest {
 
     pub fn authorization(&self) -> Option<&str> {
         self.header_values("authorization").into_iter().next()
+    }
+
+    fn forwarded_header_ip(&self, name: &str) -> Option<String> {
+        self.header_values(name)
+            .into_iter()
+            .flat_map(|value| value.split(','))
+            .map(str::trim)
+            .find(|value| !value.is_empty())
+            .map(ToString::to_string)
+    }
+
+    fn forwarded_for_ip(&self) -> Option<String> {
+        self.header_values("forwarded")
+            .into_iter()
+            .flat_map(|value| value.split(','))
+            .flat_map(|entry| entry.split(';'))
+            .filter_map(|part| part.trim().split_once('='))
+            .find_map(|(key, value)| {
+                key.trim().eq_ignore_ascii_case("for").then(|| {
+                    value
+                        .trim()
+                        .trim_matches('"')
+                        .trim_matches(['[', ']'])
+                        .to_string()
+                })
+            })
+            .filter(|value| !value.is_empty())
     }
 
     pub fn bearer_token(&self) -> Option<&str> {

@@ -1,4 +1,5 @@
 use super::handler::RouteHandler;
+use super::host::validate_host_pattern;
 use super::path::normalize_prefix;
 use super::route::RouteDefinition;
 use crate::pipeline::PipelineComponents;
@@ -17,6 +18,7 @@ use std::future::Future;
 #[derive(Clone)]
 pub struct ControllerDefinition {
     prefix: String,
+    host: Option<String>,
     routes: Vec<RouteDefinition>,
     pipeline: PipelineComponents,
     openapi_tags: Vec<String>,
@@ -30,6 +32,7 @@ impl ControllerDefinition {
         let prefix = normalize_prefix(&prefix.into())?;
         Ok(Self {
             prefix,
+            host: None,
             routes: Vec::new(),
             pipeline: PipelineComponents::default(),
             openapi_tags: Vec::new(),
@@ -41,6 +44,7 @@ impl ControllerDefinition {
 
     pub fn route(mut self, route: RouteDefinition) -> Result<Self> {
         let mut route = route;
+        route = route.with_host_default(self.host.as_deref())?;
         if route.versioning().is_unspecified() && !self.versioning.is_unspecified() {
             route = match &self.versioning {
                 RouteVersioning::Unspecified => route,
@@ -108,6 +112,32 @@ impl ControllerDefinition {
     pub fn with_validation(mut self) -> Self {
         self.pipeline.enable_validation();
         self
+    }
+
+    pub fn with_host(mut self, pattern: impl Into<String>) -> Result<Self> {
+        let pattern = pattern.into();
+        validate_host_pattern(&pattern)?;
+        self.host = Some(pattern.clone());
+        self.routes = self
+            .routes
+            .into_iter()
+            .map(|route| route.with_host_default(Some(&pattern)))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(self)
+    }
+
+    pub fn without_host(mut self) -> Self {
+        self.host = None;
+        self.routes = self
+            .routes
+            .into_iter()
+            .map(RouteDefinition::without_host)
+            .collect();
+        self
+    }
+
+    pub fn host(&self) -> Option<&str> {
+        self.host.as_deref()
     }
 
     pub fn with_tag(mut self, tag: impl Into<String>) -> Self {

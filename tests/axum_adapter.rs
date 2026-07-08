@@ -72,6 +72,83 @@ async fn axum_adapter_serves_multiple_methods_on_the_same_path() {
 }
 
 #[tokio::test]
+async fn axum_adapter_dispatches_host_scoped_routes_with_duplicate_paths() {
+    use axum::body::{to_bytes, Body};
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    let app = BootApplication::builder()
+        .route(
+            RouteDefinition::get("/items", |request: BootRequest| async move {
+                Ok(BootResponse::text(format!(
+                    "tenant:{}",
+                    request.host_param("tenant").unwrap_or("missing")
+                )))
+            })
+            .unwrap()
+            .with_host("{tenant}.example.com")
+            .unwrap(),
+        )
+        .route(
+            RouteDefinition::get("/items", |_| async { Ok(BootResponse::text("api")) })
+                .unwrap()
+                .with_host("api.internal.test")
+                .unwrap(),
+        )
+        .build()
+        .unwrap();
+    let router = app.into_adapter(&AxumAdapter::new()).unwrap();
+
+    let tenant_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/items")
+                .header("host", "acme.example.com")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let api_response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/items")
+                .header("host", "api.internal.test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let missing_response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/items")
+                .header("host", "other.test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(tenant_response.status(), StatusCode::OK);
+    assert_eq!(api_response.status(), StatusCode::OK);
+    assert_eq!(missing_response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        to_bytes(tenant_response.into_body(), 1024).await.unwrap(),
+        "tenant:acme"
+    );
+    assert_eq!(
+        to_bytes(api_response.into_body(), 1024).await.unwrap(),
+        "api"
+    );
+}
+
+#[tokio::test]
 async fn axum_adapter_serves_multiple_methods_on_the_same_path_shape() {
     use axum::body::{to_bytes, Body};
     use axum::http::{Request, StatusCode};
