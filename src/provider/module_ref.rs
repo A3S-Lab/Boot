@@ -2,6 +2,7 @@ use super::{AnyProvider, FromModuleRef, ProviderDefinition, ProviderScope, Provi
 use crate::{BootError, Result};
 use std::collections::BTreeMap;
 use std::fmt;
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
@@ -13,6 +14,59 @@ pub struct ModuleRef {
     visible_scopes: Arc<RwLock<Vec<ModuleRef>>>,
     request_cache: Option<ProviderCache>,
     resolution_stack: Option<ProviderResolutionStack>,
+}
+
+/// Lazy provider handle for forward-reference-style dependencies.
+#[derive(Clone)]
+pub struct ProviderRef<T> {
+    module_ref: ModuleRef,
+    token: ProviderToken,
+    _marker: PhantomData<fn() -> T>,
+}
+
+impl<T> fmt::Debug for ProviderRef<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProviderRef")
+            .field("token", &self.token)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<T> ProviderRef<T>
+where
+    T: Send + Sync + 'static,
+{
+    pub fn new(module_ref: ModuleRef, token: ProviderToken) -> Self {
+        Self {
+            module_ref,
+            token,
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn token(&self) -> &ProviderToken {
+        &self.token
+    }
+
+    pub fn module_ref(&self) -> &ModuleRef {
+        &self.module_ref
+    }
+
+    pub fn get(&self) -> Result<Arc<T>> {
+        self.module_ref.get_token(&self.token)
+    }
+
+    pub fn get_optional(&self) -> Result<Option<Arc<T>>> {
+        self.module_ref.get_optional_token(&self.token)
+    }
+
+    pub fn resolve(&self) -> Result<Arc<T>> {
+        self.module_ref.resolve_token(&self.token)
+    }
+
+    pub fn resolve_optional(&self) -> Result<Option<Arc<T>>> {
+        self.module_ref.resolve_optional_token(&self.token)
+    }
 }
 
 type ProviderCache = Arc<RwLock<BTreeMap<ProviderCacheKey, Arc<AnyProvider>>>>;
@@ -421,6 +475,46 @@ impl ModuleRef {
         T: Send + Sync + 'static,
     {
         self.get_optional_token::<T>(&ProviderToken::named(token))
+    }
+
+    /// Create a lazy provider handle for a typed dependency.
+    pub fn provider_ref<T>(&self) -> ProviderRef<T>
+    where
+        T: Send + Sync + 'static,
+    {
+        ProviderRef::new(self.clone(), ProviderToken::of::<T>())
+    }
+
+    /// Create a lazy provider handle for a named dependency.
+    pub fn named_provider_ref<T>(&self, token: &str) -> ProviderRef<T>
+    where
+        T: Send + Sync + 'static,
+    {
+        ProviderRef::new(self.clone(), ProviderToken::named(token))
+    }
+
+    /// Create a lazy provider handle only when the typed dependency is visible.
+    pub fn optional_provider_ref<T>(&self) -> Result<Option<ProviderRef<T>>>
+    where
+        T: Send + Sync + 'static,
+    {
+        if self.contains_provider::<T>()? {
+            Ok(Some(self.provider_ref::<T>()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Create a lazy provider handle only when the named dependency is visible.
+    pub fn optional_named_provider_ref<T>(&self, token: &str) -> Result<Option<ProviderRef<T>>>
+    where
+        T: Send + Sync + 'static,
+    {
+        if self.contains_named(token)? {
+            Ok(Some(self.named_provider_ref::<T>(token)))
+        } else {
+            Ok(None)
+        }
     }
 
     /// Resolve a typed provider in a fresh resolution context.

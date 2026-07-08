@@ -37,7 +37,8 @@ Implemented today:
   singleton/request/transient lifecycle scopes, async singleton provider
   factories, singleton provider lifecycle hooks, lookup, `FromModuleRef`
   auto-wired provider factories, named or optional dependency resolution,
-  fresh resolution contexts, and dynamic injectable creation.
+  `ProviderRef<T>` lazy provider handles for forward-reference-style
+  dependencies, fresh resolution contexts, and dynamic injectable creation.
 - `TestingModule` with provider overrides, async provider-aware
   `compile_async`, and typed route pipeline overrides for guards,
   interceptors, exception filters, and pipes.
@@ -122,6 +123,9 @@ Implemented today:
   hooks.
 - Provider aliases that mirror Nest custom provider `useExisting` semantics and
   preserve target provider scope.
+- Lazy `ProviderRef<T>` handles that mirror the useful part of Nest
+  `forwardRef(...)`: explicit delayed provider resolution without weakening
+  normal cycle diagnostics.
 - Request-scoped route/controller handler factories through `*_scoped` helpers.
 - Middleware with request mutation, short-circuit responses, global/module/
   controller/route scopes, `MiddlewareConsumer::apply(...).for_routes(...)`
@@ -391,6 +395,7 @@ Nest equivalent:
 - singleton provider lifecycle hooks
 - request-scoped controllers
 - provider aliases / `useExisting`
+- forward-reference-style provider dependencies
 - lazy module loading
 
 Current gap:
@@ -412,7 +417,10 @@ later in the same module. `LazyModuleLoader` can load provider-only module
 graphs on demand, reuse eagerly registered modules, and resolve async singleton
 factories through `load_async(...)`. `ModuleRef` can resolve providers in a
 fresh temporary request context and dynamically create unregistered
-`FromModuleRef` values.
+`FromModuleRef` values. `ProviderRef<T>` can capture a module context and
+resolve a provider lazily, which gives Rust code an explicit
+forward-reference-style escape hatch while keeping ordinary provider cycles
+diagnostic.
 
 Tasks:
 
@@ -439,6 +447,8 @@ Tasks:
   (Implemented)
 - Add request-scoped route/controller handler factories. (Implemented)
 - Add provider aliases comparable to Nest `useExisting`. (Implemented)
+- Add lazy provider handles comparable to the useful provider side of Nest
+  `forwardRef(...)`. (Implemented with `ProviderRef<T>`)
 - Add Nest-style `ModuleRef::resolve(...)` and `ModuleRef::create(...)`
   runtime APIs. (Implemented)
 - Add contextual diagnostics for transient and request-scoped provider
@@ -465,6 +475,9 @@ Acceptance:
   same request-scoped provider cache as `BootRequest::get(...)`. (Covered)
 - Provider aliases resolve the same singleton instance, preserve request-scoped
   resolution, and reject alias cycles with contextual errors. (Covered)
+- `ProviderRef<T>` resolves lazily, can break an intentional singleton
+  dependency cycle, supports named and optional macro injection, and preserves a
+  captured request scope. (Covered)
 - `ModuleRef::resolve(...)` creates a fresh resolution context for
   request-scoped dependency caches, and `ModuleRef::create(...)` can instantiate
   `FromModuleRef` values without registering them. (Covered)

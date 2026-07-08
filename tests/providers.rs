@@ -1,7 +1,7 @@
 use a3s_boot::{
     BootApplication, BootError, BootFactory, BootRequest, BootResponse, ControllerDefinition,
     DynamicModule, ExecutionContext, FromModuleRef, HttpMethod, Module, ModuleRef,
-    ProviderDefinition, ProviderScope, ProviderToken, Result, TestingModule,
+    ProviderDefinition, ProviderRef, ProviderScope, ProviderToken, Result, TestingModule,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -505,6 +505,16 @@ struct CircularB {
 }
 
 #[derive(Debug)]
+struct LazyCircularA {
+    b: ProviderRef<LazyCircularB>,
+}
+
+#[derive(Debug)]
+struct LazyCircularB {
+    a: Arc<LazyCircularA>,
+}
+
+#[derive(Debug)]
 struct SingletonCycleModule;
 
 impl Module for SingletonCycleModule {
@@ -522,6 +532,30 @@ impl Module for SingletonCycleModule {
             ProviderDefinition::named_factory::<CircularB, _>("cycle-b", |module_ref| {
                 Ok(CircularB {
                     _a: module_ref.get_named::<CircularA>("cycle-a")?,
+                })
+            }),
+        ])
+    }
+}
+
+#[derive(Debug)]
+struct LazyCycleModule;
+
+impl Module for LazyCycleModule {
+    fn name(&self) -> &'static str {
+        "lazy-cycle"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![
+            ProviderDefinition::factory::<LazyCircularA, _>(|module_ref| {
+                Ok(LazyCircularA {
+                    b: module_ref.provider_ref::<LazyCircularB>(),
+                })
+            }),
+            ProviderDefinition::factory::<LazyCircularB, _>(|module_ref| {
+                Ok(LazyCircularB {
+                    a: module_ref.get::<LazyCircularA>()?,
                 })
             }),
         ])
@@ -1048,6 +1082,24 @@ fn singleton_provider_dependency_cycles_return_contextual_errors() {
 }
 
 #[test]
+fn provider_refs_resolve_lazily_and_break_singleton_cycles() {
+    let app = BootApplication::builder()
+        .import(LazyCycleModule)
+        .build()
+        .unwrap();
+
+    let first_a = app.get::<LazyCircularA>().unwrap();
+    let b = first_a.b.get().unwrap();
+    let second_a = b.a.clone();
+
+    assert!(Arc::ptr_eq(&first_a, &second_a));
+    assert_eq!(
+        first_a.b.token().to_string(),
+        ProviderToken::of::<LazyCircularB>().to_string()
+    );
+}
+
+#[test]
 fn request_scoped_provider_dependency_cycles_return_contextual_errors() {
     let module_ref = ModuleRef::new();
     module_ref
@@ -1079,6 +1131,35 @@ fn request_scoped_provider_dependency_cycles_return_contextual_errors() {
         BootError::Internal(message)
             if message == "cyclic provider dependency detected: cycle-a -> cycle-b -> cycle-a"
     ));
+}
+
+#[test]
+fn provider_refs_preserve_request_scope_when_created_from_request_scope() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let module_ref = ModuleRef::new();
+    let counter_calls = Arc::clone(&calls);
+    module_ref
+        .register(ProviderDefinition::request_scoped::<ScopedCounter, _>(
+            move |_| {
+                Ok(ScopedCounter {
+                    id: counter_calls.fetch_add(1, Ordering::SeqCst) + 1,
+                })
+            },
+        ))
+        .unwrap();
+
+    let first_scope = module_ref.request_scope();
+    let first_ref = first_scope.provider_ref::<ScopedCounter>();
+    let first = first_ref.get().unwrap();
+    let second = first_ref.get().unwrap();
+    let second_scope = module_ref.request_scope();
+    let third = second_scope.provider_ref::<ScopedCounter>().get().unwrap();
+
+    assert_eq!(first.id, 1);
+    assert_eq!(second.id, 1);
+    assert_eq!(third.id, 2);
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
 #[test]

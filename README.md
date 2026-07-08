@@ -344,8 +344,9 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@ApiResponse(...)` | `#[response(status = 200, description = "...", schema = CatDto)]` |
 | `@ApiBearerAuth()` | `#[bearer_auth]` on a route method |
 | Constructor injection | `#[injectable]` fields such as `cats: Arc<CatsService>` plus `CatsController::provider()` |
-| `@Inject("TOKEN")` | `#[inject("token")]` on an `Arc<T>` or `Option<Arc<T>>` field |
-| `@Optional()` | `Option<Arc<T>>` on an injectable field |
+| `@Inject("TOKEN")` | `#[inject("token")]` on an `Arc<T>`, `Option<Arc<T>>`, or `ProviderRef<T>` field |
+| `@Optional()` | `Option<Arc<T>>` or `Option<ProviderRef<T>>` on an injectable field |
+| `forwardRef(() => Type)` | `ProviderRef<Type>` on an injectable field, or `module_ref.provider_ref::<Type>()` |
 | `@Module({ imports, providers, controllers, exports })` | `#[module(...)]` on a module struct, or an explicit `impl Module` |
 | `RouterModule.register([{ path: "api", module: CatsModule }])` | `#[module(route_prefix = "/api", ...)]` or `Module::route_prefix()` |
 | `configure(consumer: MiddlewareConsumer)` | `Module::configure(...)` with `MiddlewareConsumer::apply(...).for_routes(...)` |
@@ -1845,10 +1846,10 @@ or shared readiness checks.
 
 Providers can be registered as owned singletons, factories, shared `Arc<T>`
 values, factories that return `Arc<T>`, request-scoped providers, transient
-providers, or aliases to existing providers. Provider tokens are unique inside a
-module scope; different modules can declare the same token without colliding.
-Importing modules can only see providers that imported modules explicitly
-export.
+providers, lazy `ProviderRef<T>` handles, or aliases to existing providers.
+Provider tokens are unique inside a module scope; different modules can declare
+the same token without colliding. Importing modules can only see providers that
+imported modules explicitly export.
 
 Singleton providers are the default and are built once per module. Transient
 providers are built for every resolution. Request-scoped providers are built
@@ -1869,6 +1870,51 @@ During singleton, transient, and request-scoped provider resolution, Boot tracks
 the active provider chain and reports circular dependencies with the full token
 path, for example
 `cyclic provider dependency detected: cats -> repository -> cats`.
+When a real bidirectional relationship is needed, use `ProviderRef<T>` for the
+side that should resolve lazily. This is Boot's Rust shape for Nest's
+`forwardRef(...)` pattern:
+
+```rust
+use a3s_boot::{FromModuleRef, ModuleRef, ProviderRef, Result};
+use std::sync::Arc;
+
+#[derive(Debug)]
+struct CatsService {
+    owners: ProviderRef<OwnersService>,
+}
+
+#[derive(Debug)]
+struct OwnersService {
+    cats: Arc<CatsService>,
+}
+
+impl OwnersService {
+    fn count(&self) -> usize {
+        let _ = &self.cats;
+        1
+    }
+}
+
+impl FromModuleRef for CatsService {
+    fn from_module_ref(module_ref: &ModuleRef) -> Result<Self> {
+        Ok(Self {
+            owners: module_ref.provider_ref::<OwnersService>(),
+        })
+    }
+}
+
+impl CatsService {
+    fn owner_count(&self) -> Result<usize> {
+        Ok(self.owners.get()?.count())
+    }
+}
+```
+
+`ProviderRef::get()` uses the captured module context, while
+`ProviderRef::resolve()` creates a fresh resolution context. If the ref is
+created from a request-scoped `ModuleRef`, request-scoped providers keep the
+same per-request cache. The `#[injectable]` macro also auto-wires
+`ProviderRef<T>`, `Option<ProviderRef<T>>`, and named refs with `#[inject(...)]`.
 
 ```rust
 use std::sync::Arc;

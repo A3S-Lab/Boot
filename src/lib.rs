@@ -156,7 +156,7 @@ pub use pipeline::{
 };
 pub use provider::{
     FromModuleRef, ModuleRef, ProviderDefinition, ProviderOnApplicationBootstrap,
-    ProviderOnApplicationShutdown, ProviderOnModuleInit, ProviderScope, ProviderToken,
+    ProviderOnApplicationShutdown, ProviderOnModuleInit, ProviderRef, ProviderScope, ProviderToken,
 };
 #[cfg(feature = "queue")]
 pub use queue::{

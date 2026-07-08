@@ -8,9 +8,9 @@ use a3s_boot::{
     controller, injectable, ApiVersioning, BootApplication, BootError, BootErrorKind, BootRequest,
     BootResponse, BoxFuture, ControllerDefinition, ExceptionFilter, ExecutionContext, Guard,
     Interceptor, Module, ModuleRef, OpenApiInfo, ParseArrayPipe, ParseBoolPipe, ParseEnumPipe,
-    ParseFloatPipe, ParseIntPipe, ParseUuidPipe, Pipe, ProviderToken, Result, SseEvent, SseStream,
-    StringTemplateViewEngine, TransportMessage, TransportReply, UuidVersion, Validate, ViewModule,
-    WebSocketMessage,
+    ParseFloatPipe, ParseIntPipe, ParseUuidPipe, Pipe, ProviderRef, ProviderToken, Result,
+    SseEvent, SseStream, StringTemplateViewEngine, TransportMessage, TransportReply, UuidVersion,
+    Validate, ViewModule, WebSocketMessage,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -48,18 +48,27 @@ struct MacroAutoCatsReader {
     missing: Option<Arc<MacroMissingCatsService>>,
     #[inject("missing-cats")]
     missing_named: Option<Arc<MacroCatsService>>,
+    lazy: ProviderRef<MacroCatsService>,
+    #[inject("readonly-cats")]
+    lazy_readonly: ProviderRef<MacroCatsService>,
+    missing_lazy: Option<ProviderRef<MacroMissingCatsService>>,
 }
 
 impl MacroAutoCatsReader {
     fn summary(&self) -> String {
         let cat = self.cats.find_one("auto");
         let readonly = self.readonly.find_one("readonly");
+        let lazy = self.lazy.get().unwrap().find_one("lazy");
+        let lazy_readonly = self.lazy_readonly.get().unwrap().find_one("lazy-readonly");
         format!(
-            "{}:{}:{}:{}",
+            "{}:{}:{}:{}:{}:{}:{}",
             cat.id,
             readonly.id,
             self.missing.is_none(),
-            self.missing_named.is_none()
+            self.missing_named.is_none(),
+            lazy.id,
+            lazy_readonly.id,
+            self.missing_lazy.is_none(),
         )
     }
 }
@@ -826,7 +835,10 @@ async fn macros_register_injectable_services_and_controller_routes() {
     assert!(exports.contains(&ProviderToken::named("readonly-cats")));
     let reader = app.get::<MacroAutoCatsReader>().unwrap();
     let controller = app.get::<MacroCatsController>().unwrap();
-    assert_eq!(reader.summary(), "auto:readonly:true:true");
+    assert_eq!(
+        reader.summary(),
+        "auto:readonly:true:true:lazy:lazy-readonly:true"
+    );
     assert!(Arc::ptr_eq(&reader, &controller.reader));
     assert_eq!(
         app.reflector().unwrap().metadata_value(

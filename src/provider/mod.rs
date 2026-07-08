@@ -8,7 +8,7 @@ pub use definition::{
     FromModuleRef, ProviderDefinition, ProviderOnApplicationBootstrap,
     ProviderOnApplicationShutdown, ProviderOnModuleInit, ProviderScope,
 };
-pub use module_ref::ModuleRef;
+pub use module_ref::{ModuleRef, ProviderRef};
 pub use token::ProviderToken;
 
 pub(crate) type AnyProvider = dyn Any + Send + Sync;

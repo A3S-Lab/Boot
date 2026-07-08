@@ -741,10 +741,20 @@ fn injectable_constructor(item_struct: &mut syn::ItemStruct) -> Result<proc_macr
                         Some(token) => quote! { module_ref.get_optional_named::<#inner>(#token)? },
                         None => quote! { module_ref.get_optional::<#inner>()? },
                     },
+                    Some(InjectableFieldDependency::ProviderRef(inner)) => match token {
+                        Some(token) => quote! { module_ref.named_provider_ref::<#inner>(#token) },
+                        None => quote! { module_ref.provider_ref::<#inner>() },
+                    },
+                    Some(InjectableFieldDependency::OptionalProviderRef(inner)) => match token {
+                        Some(token) => {
+                            quote! { module_ref.optional_named_provider_ref::<#inner>(#token)? }
+                        }
+                        None => quote! { module_ref.optional_provider_ref::<#inner>()? },
+                    },
                     None => {
                         return Err(syn::Error::new_spanned(
                             &field.ty,
-                            "#[injectable] fields must be Arc<T> or Option<Arc<T>>",
+                            "#[injectable] fields must be Arc<T>, Option<Arc<T>>, ProviderRef<T>, or Option<ProviderRef<T>>",
                         ));
                     }
                 };
@@ -767,16 +777,26 @@ fn injectable_constructor(item_struct: &mut syn::ItemStruct) -> Result<proc_macr
 enum InjectableFieldDependency<'a> {
     Required(&'a Type),
     Optional(&'a Type),
+    ProviderRef(&'a Type),
+    OptionalProviderRef(&'a Type),
 }
 
 fn injectable_field_dependency(field_type: &Type) -> Option<InjectableFieldDependency<'_>> {
     if let Some(inner) = single_type_argument(field_type, "Arc") {
         return Some(InjectableFieldDependency::Required(inner));
     }
+    if let Some(inner) = single_type_argument(field_type, "ProviderRef") {
+        return Some(InjectableFieldDependency::ProviderRef(inner));
+    }
 
     let inner = single_type_argument(field_type, "Option")?;
-    let inner = single_type_argument(inner, "Arc")?;
-    Some(InjectableFieldDependency::Optional(inner))
+    if let Some(inner) = single_type_argument(inner, "Arc") {
+        return Some(InjectableFieldDependency::Optional(inner));
+    }
+    if let Some(inner) = single_type_argument(inner, "ProviderRef") {
+        return Some(InjectableFieldDependency::OptionalProviderRef(inner));
+    }
+    None
 }
 
 fn single_type_argument<'a>(field_type: &'a Type, outer: &str) -> Option<&'a Type> {
