@@ -99,8 +99,9 @@ Implemented today:
   controller-level `Pipe`, `Guard`, `Interceptor`, and `ExceptionFilter`
   support.
 - Adapter-neutral request/response types, typed params/query helpers, typed
-  single-value parsing helpers, header helpers, route matching, global prefixes
-  with Nest-style HTTP route exclusions, lifecycle hooks, and an Axum adapter.
+  single-value parsing helpers, header helpers, cookie helpers, route matching,
+  global prefixes with Nest-style HTTP route exclusions, lifecycle hooks, and an
+  Axum adapter.
 - OpenAPI route metadata, schema-crate-neutral document generation from resolved
   routes, explicit Nest-style parameter decorators, automatic path-parameter
   documentation, request/response examples, non-JSON media type metadata, and
@@ -113,6 +114,9 @@ Implemented today:
 - Nest-style response passthrough with `ResponsePassthrough` and `#[res]`,
   allowing controller methods to set status codes, headers, and cookies while
   still returning a typed DTO or adapter-neutral `BootResponse`.
+- Nest-style request cookie binding with typed `BootRequest` cookie helpers,
+  `#[cookie("name")]`, `#[cookies]`, pipe/default support for one cookie value,
+  and OpenAPI cookie parameter metadata.
 - Nest-style runtime discovery and devtools-ready application graph snapshots
   for modules, imports, provider tokens, exports, route counts, WebSocket
   gateway counts, and microservice message pattern counts.
@@ -785,6 +789,8 @@ Acceptance:
 - Response passthrough can set status codes, headers, and cookies through
   `ResponsePassthrough` and Nest-style `#[res]` arguments without exposing
   adapter-native response objects. (Covered)
+- Request cookies can be read through typed `BootRequest` helpers and bound
+  through Nest-style `#[cookie]` and `#[cookies]` arguments. (Covered)
 - Testing utilities can compile Nest-style testing modules, override providers
   before controllers are built, resolve providers, and dispatch in-process
   requests. (Covered)

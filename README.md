@@ -310,6 +310,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@Query("kind", ParseEnumPipe)` | `#[query("kind", pipe = ParseEnumPipe)]` on an enum argument that implements `FromStr` |
 | `@Body()` | `#[body]` on a JSON body DTO argument |
 | `@Headers("x-request-id")` | `#[header("x-request-id")]` on a method argument |
+| `@Cookie("sid")` / `@Cookies()` | `#[cookie("sid")]` for one cookie or `#[cookies]` for the request cookie map |
 | `@Ip()` | `#[ip]` on a method argument |
 | `@Req()` | `#[request]` on a `BootRequest` argument |
 | `@Res({ passthrough: true })` | `#[res]` on a `ResponsePassthrough` argument |
@@ -533,20 +534,23 @@ should usually be listed in `providers` as injectables. GET, POST, PUT, PATCH,
 and DELETE route attributes default to JSON.
 Use extractor attributes on method arguments for Nest-style request binding:
 `#[param("id")]`, `#[params]`, `#[query]`, `#[query("name")]`, `#[body]`,
-`#[header("name")]`, `#[headers]`, `#[host_param("account")]`, `#[ip]`, and
-`#[request]`. `#[res]` injects a `ResponsePassthrough` handle for Nest-style
-response passthrough metadata: set status codes, headers, and cookies while
-still returning a DTO or `BootResponse` through the normal Boot pipeline. With
-the `session` feature enabled, `#[session]` mirrors Nest's `@Session()`
-parameter decorator. Single-value extractors parse into the argument type with
-`FromStr`, so `#[param("id")] id: u64` and `#[query("active")] active: bool`
-work without a separate parse pipe. For custom Nest-style parameter pipes, add
-`pipe = <expr>` to `#[param]`, `#[query("name")]`, `#[header]`,
-`#[host_param]`, or `#[ip]`; the pipe receives the raw `String` and returns
-`Result<T>`. Boot also includes `ParseIntPipe`, `ParseBoolPipe`,
+`#[header("name")]`, `#[headers]`, `#[cookie("name")]`, `#[cookies]`,
+`#[host_param("account")]`, `#[ip]`, and `#[request]`. `#[res]` injects a
+`ResponsePassthrough` handle for Nest-style response passthrough metadata: set
+status codes, headers, and cookies while still returning a DTO or
+`BootResponse` through the normal Boot pipeline. With the `session` feature
+enabled, `#[session]` mirrors Nest's `@Session()` parameter decorator.
+Single-value extractors parse into the argument type with `FromStr`, so
+`#[param("id")] id: u64`, `#[query("active")] active: bool`, and
+`#[cookie("page")] page: u16` work without a separate parse pipe. For custom
+Nest-style parameter pipes, add `pipe = <expr>` to `#[param]`,
+`#[query("name")]`, `#[header]`, `#[cookie]`, `#[host_param]`, or `#[ip]`; the
+pipe receives the raw `String` and returns `Result<T>`. Boot also includes
+`ParseIntPipe`, `ParseBoolPipe`,
 `ParseFloatPipe`, `ParseArrayPipe`, `ParseEnumPipe`, and `ParseUuidPipe` for
 common request value parsing, plus `default = <expr>` for
-DefaultValuePipe-style fallbacks on missing query, header, host, or path values:
+DefaultValuePipe-style fallbacks on missing query, header, cookie, host, or
+path values:
 
 ```rust
 #[derive(Debug)]
@@ -589,6 +593,23 @@ async fn find(
     #[query("kind", pipe = ParseEnumPipe)] kind: CatKind,
 ) -> Result<CatDto> {
     self.cats.find(id, legacy_id, page, active, ids, kind).await
+}
+```
+
+Cookies can be bound as one typed value or as the whole request cookie map:
+
+```rust
+use std::collections::BTreeMap;
+
+#[get("/profile")]
+async fn profile(
+    &self,
+    #[cookie("sid")] session_id: String,
+    #[cookie("theme")] theme: Option<String>,
+    #[cookie("page", default = 1, pipe = ParseIntPipe)] page: u16,
+    #[cookies] cookies: BTreeMap<String, String>,
+) -> Result<ProfileDto> {
+    self.profiles.find(session_id, theme, page, cookies).await
 }
 ```
 
@@ -4842,6 +4863,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | File response | Streamable file and download helpers through `StreamableFile` and `BootResponse` |
 | Static assets | Optional provider-backed static file module for assets and SPA fallback |
 | Security | Optional CORS, security headers, CSRF, and rate limiting helpers |
+| Request cookies | Typed `BootRequest` cookie helpers plus `#[cookie]` and `#[cookies]` argument binding |
 | Session | Optional provider-backed session store, middleware, and cookie persistence |
 | Response cookies | Typed `Set-Cookie` and delete-cookie helpers on `BootResponse` |
 | Response passthrough | Nest-style `#[res]` metadata handle for status, headers, and cookies |

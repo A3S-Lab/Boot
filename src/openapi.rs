@@ -252,6 +252,10 @@ impl OpenApiParameter {
         Self::new(OpenApiParameterLocation::Header, name, required, schema)
     }
 
+    pub fn cookie(name: impl Into<String>, required: bool, schema: OpenApiSchema) -> Self {
+        Self::new(OpenApiParameterLocation::Cookie, name, required, schema)
+    }
+
     pub fn with_description(mut self, description: impl Into<String>) -> Self {
         self.description = Some(description.into());
         self

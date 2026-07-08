@@ -96,9 +96,17 @@ fn extractor_openapi_tokens(
                 spec.default.as_ref(),
                 SingleValueOpenApiKind::Header,
             )),
+            Extractor::Cookie(spec) => tokens.push(single_value_extractor_openapi_tokens(
+                &spec.name,
+                &arg.ty,
+                spec.pipe.as_ref(),
+                spec.default.as_ref(),
+                SingleValueOpenApiKind::Cookie,
+            )),
             Extractor::Request
             | Extractor::Params
             | Extractor::Headers
+            | Extractor::Cookies
             | Extractor::HostParam(_)
             | Extractor::Ip(_)
             | Extractor::Response
@@ -166,6 +174,12 @@ fn single_value_extractor_openapi_tokens(
                 with_header_parameter(#name, #required, #schema)
             }
         }
+        SingleValueOpenApiKind::Cookie => {
+            let (required, schema) = single_value_extractor_required_schema(ty, pipe, default);
+            quote! {
+                with_cookie_parameter(#name, #required, #schema)
+            }
+        }
     }
 }
 
@@ -173,6 +187,7 @@ enum SingleValueOpenApiKind {
     Path,
     Query,
     Header,
+    Cookie,
 }
 
 fn uploaded_files_openapi_token(input: &RouteMethodInput) -> Option<proc_macro2::TokenStream> {

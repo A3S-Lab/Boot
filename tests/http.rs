@@ -422,7 +422,7 @@ fn request_cookie_helpers_parse_cookie_headers() {
     let request = BootRequest::new(HttpMethod::Get, "/private")
         .with_header(
             "Cookie",
-            r#"session=abc; theme=dark; quoted="hello world"; empty="#,
+            r#"session=abc; theme=dark; page=42; quoted="hello world"; empty="#,
         )
         .append_header("Cookie", "session=override; flag=true");
 
@@ -431,6 +431,7 @@ fn request_cookie_helpers_parse_cookie_headers() {
         [
             ("session".to_string(), "abc".to_string()),
             ("theme".to_string(), "dark".to_string()),
+            ("page".to_string(), "42".to_string()),
             ("quoted".to_string(), "hello world".to_string()),
             ("empty".to_string(), "".to_string()),
             ("session".to_string(), "override".to_string()),
@@ -439,8 +440,17 @@ fn request_cookie_helpers_parse_cookie_headers() {
     );
     assert_eq!(request.cookie("session").unwrap().as_deref(), Some("abc"));
     assert_eq!(request.require_cookie("session").unwrap(), "abc");
+    assert_eq!(request.cookie_as::<u16>("page").unwrap(), 42);
+    assert_eq!(
+        request.optional_cookie_as::<String>("missing").unwrap(),
+        None
+    );
     assert_eq!(
         request.cookie_values("session").unwrap(),
+        ["abc".to_string(), "override".to_string()]
+    );
+    assert_eq!(
+        request.cookie_values_as::<String>("session").unwrap(),
         ["abc".to_string(), "override".to_string()]
     );
     assert_eq!(request.cookie("missing").unwrap(), None);

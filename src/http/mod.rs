@@ -4,6 +4,7 @@ mod header;
 mod method;
 mod query;
 mod request;
+mod request_cookie;
 mod response;
 mod response_passthrough;
 mod sse;

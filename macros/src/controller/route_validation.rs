@@ -109,6 +109,8 @@ fn extractor_validation_tokens(
             | Extractor::Param(_)
             | Extractor::Header(_)
             | Extractor::Headers
+            | Extractor::Cookie(_)
+            | Extractor::Cookies
             | Extractor::HostParam(_)
             | Extractor::Ip(_)
             | Extractor::Response

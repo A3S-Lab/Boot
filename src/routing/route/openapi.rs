@@ -73,6 +73,15 @@ impl RouteDefinition {
         self.with_parameter(OpenApiParameter::header(name, required, schema))
     }
 
+    pub fn with_cookie_parameter(
+        self,
+        name: impl Into<String>,
+        required: bool,
+        schema: OpenApiSchema,
+    ) -> Self {
+        self.with_parameter(OpenApiParameter::cookie(name, required, schema))
+    }
+
     pub fn with_request_body(mut self, request_body: OpenApiRequestBody) -> Self {
         self.openapi.request_body = Some(request_body);
         self

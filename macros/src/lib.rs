@@ -322,6 +322,16 @@ pub fn headers(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
+pub fn cookie(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    extractor_attribute_outside_controller("cookie", item)
+}
+
+#[proc_macro_attribute]
+pub fn cookies(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    extractor_attribute_outside_controller("cookies", item)
+}
+
+#[proc_macro_attribute]
 pub fn host_param(_attr: TokenStream, item: TokenStream) -> TokenStream {
     extractor_attribute_outside_controller("host_param", item)
 }

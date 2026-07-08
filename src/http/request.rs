@@ -1,8 +1,7 @@
 use super::header::{
     accepts_event_stream_response, accepts_json_response, get_header, is_json_media_type,
     matches_media_type, normalize_header_name, normalize_headers, parse_content_length,
-    parse_cookie_header_values, strict_content_length_values, validate_header_name,
-    validate_header_value,
+    strict_content_length_values, validate_header_name, validate_header_value,
 };
 use super::method::HttpMethod;
 use super::query::{parse_query, parse_query_pairs, split_path_query};
@@ -558,38 +557,6 @@ impl BootRequest {
             .ok_or_else(|| BootError::Unauthorized("missing bearer token".to_string()))
     }
 
-    pub fn cookie_pairs(&self) -> Result<Vec<(String, String)>> {
-        parse_cookie_header_values(&self.header_values("cookie"))
-    }
-
-    pub fn cookie(&self, name: &str) -> Result<Option<String>> {
-        Ok(self
-            .cookie_pairs()?
-            .into_iter()
-            .find_map(|(key, value)| (key == name).then_some(value)))
-    }
-
-    pub fn require_cookie(&self, name: &str) -> Result<String> {
-        self.cookie(name)?
-            .ok_or_else(|| BootError::Unauthorized(format!("missing cookie: {name}")))
-    }
-
-    pub fn cookie_values(&self, name: &str) -> Result<Vec<String>> {
-        Ok(self
-            .cookie_pairs()?
-            .into_iter()
-            .filter_map(|(key, value)| (key == name).then_some(value))
-            .collect())
-    }
-
-    pub fn cookies(&self) -> Result<BTreeMap<String, String>> {
-        let mut cookies = BTreeMap::new();
-        for (name, value) in self.cookie_pairs()? {
-            cookies.entry(name).or_insert(value);
-        }
-        Ok(cookies)
-    }
-
     pub fn content_type(&self) -> Option<&str> {
         self.header_values("content-type").into_iter().next()
     }
@@ -763,7 +730,7 @@ impl BootRequest {
     }
 }
 
-fn parse_required_value<T>(value: Option<String>, label: &str, name: &str) -> Result<T>
+pub(super) fn parse_required_value<T>(value: Option<String>, label: &str, name: &str) -> Result<T>
 where
     T: FromStr,
     T::Err: fmt::Display,
@@ -774,7 +741,11 @@ where
     parse_value(value, label, name)
 }
 
-fn parse_optional_value<T>(value: Option<String>, label: &str, name: &str) -> Result<Option<T>>
+pub(super) fn parse_optional_value<T>(
+    value: Option<String>,
+    label: &str,
+    name: &str,
+) -> Result<Option<T>>
 where
     T: FromStr,
     T::Err: fmt::Display,
@@ -784,7 +755,7 @@ where
         .transpose()
 }
 
-fn parse_value<T>(value: String, label: &str, name: &str) -> Result<T>
+pub(super) fn parse_value<T>(value: String, label: &str, name: &str) -> Result<T>
 where
     T: FromStr,
     T::Err: fmt::Display,

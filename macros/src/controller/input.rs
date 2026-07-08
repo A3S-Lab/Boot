@@ -104,6 +104,8 @@ pub(crate) enum Extractor {
     Query(QueryExtractor),
     Header(SingleValueExtractor),
     Headers,
+    Cookie(SingleValueExtractor),
+    Cookies,
     HostParam(SingleValueExtractor),
     Ip(Option<Expr>),
     Response,
@@ -151,6 +153,11 @@ impl Extractor {
         } else if ident == "headers" {
             expect_no_extractor_args(attr, "headers")?;
             Self::Headers
+        } else if ident == "cookie" {
+            Self::Cookie(parse_single_value_extractor(attr, "cookie")?)
+        } else if ident == "cookies" {
+            expect_no_extractor_args(attr, "cookies")?;
+            Self::Cookies
         } else if ident == "host_param" {
             Self::HostParam(parse_single_value_extractor(attr, "host_param")?)
         } else if ident == "ip" {

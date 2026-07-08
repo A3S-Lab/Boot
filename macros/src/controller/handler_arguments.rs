@@ -156,6 +156,24 @@ fn extractor_tokens(arg: MethodArg, extractor: Extractor) -> proc_macro2::TokenS
         Extractor::Headers => quote! {
             let #ident: #ty = __a3s_boot_request.headers.clone();
         },
+        Extractor::Cookie(spec) => {
+            let SingleValueExtractor {
+                name,
+                pipe,
+                default,
+            } = spec;
+            single_value_extractor_tokens(
+                ident,
+                ty,
+                pipe,
+                default,
+                |value_ty| quote!(__a3s_boot_request.cookie_as::<#value_ty>(#name)),
+                |value_ty| quote!(__a3s_boot_request.optional_cookie_as::<#value_ty>(#name)),
+            )
+        }
+        Extractor::Cookies => quote! {
+            let #ident: #ty = __a3s_boot_request.cookies()?;
+        },
         Extractor::HostParam(spec) => {
             let SingleValueExtractor {
                 name,
