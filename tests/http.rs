@@ -3,6 +3,7 @@ use a3s_boot::{
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
+use std::net::IpAddr;
 use std::time::Duration;
 
 #[test]
@@ -79,6 +80,40 @@ fn request_and_response_accessors_expose_common_adapter_fields() {
     assert_eq!(response.status(), 201);
     assert_eq!(response.body(), b"created");
     assert_eq!(response.into_body(), b"created");
+}
+
+#[test]
+fn request_typed_single_value_helpers_parse_params_query_headers_and_ip() {
+    let request = BootRequest::new(HttpMethod::Get, "/items?limit=10&tag=1&tag=2&dry_run=true")
+        .with_param("id", "42")
+        .with_host_param("tenant", "7")
+        .with_header("x-page", "3")
+        .with_header("x-forwarded-for", "127.0.0.1");
+
+    assert_eq!(request.param_as::<u64>("id").unwrap(), 42);
+    assert_eq!(request.optional_param_as::<u64>("missing").unwrap(), None);
+    assert_eq!(request.host_param_as::<u16>("tenant").unwrap(), 7);
+    assert_eq!(request.query_value_as::<usize>("limit").unwrap(), 10);
+    assert!(request.query_value_as::<bool>("dry_run").unwrap());
+    assert_eq!(request.query_values_as::<u8>("tag").unwrap(), [1, 2]);
+    assert_eq!(request.header_as::<u8>("x-page").unwrap(), 3);
+    assert_eq!(
+        request.ip_as::<IpAddr>().unwrap(),
+        "127.0.0.1".parse::<IpAddr>().unwrap()
+    );
+
+    let missing = request.query_value_as::<u64>("page").unwrap_err();
+    let invalid = BootRequest::new(HttpMethod::Get, "/items")
+        .with_param("id", "abc")
+        .param_as::<u64>("id")
+        .unwrap_err();
+
+    assert!(
+        matches!(missing, BootError::BadRequest(message) if message == "missing query parameter: page")
+    );
+    assert!(
+        matches!(invalid, BootError::BadRequest(message) if message.starts_with("invalid path parameter id:"))
+    );
 }
 
 #[test]

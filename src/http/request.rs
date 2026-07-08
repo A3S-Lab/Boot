@@ -11,6 +11,8 @@ use crate::routing::host::normalize_host_header;
 use crate::{validate_value, BootError, ModuleRef, ProviderToken, Result, Validate};
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::BTreeMap;
+use std::fmt;
+use std::str::FromStr;
 use std::sync::Arc;
 
 /// Framework-neutral HTTP request passed to Boot route handlers.
@@ -240,8 +242,56 @@ impl BootRequest {
         self.params.get(name).map(String::as_str)
     }
 
+    pub fn param_as<T>(&self, name: &str) -> Result<T>
+    where
+        T: FromStr,
+        T::Err: fmt::Display,
+    {
+        parse_required_value(
+            self.param(name).map(ToString::to_string),
+            "path parameter",
+            name,
+        )
+    }
+
+    pub fn optional_param_as<T>(&self, name: &str) -> Result<Option<T>>
+    where
+        T: FromStr,
+        T::Err: fmt::Display,
+    {
+        parse_optional_value(
+            self.param(name).map(ToString::to_string),
+            "path parameter",
+            name,
+        )
+    }
+
     pub fn host_param(&self, name: &str) -> Option<&str> {
         self.host_params.get(name).map(String::as_str)
+    }
+
+    pub fn host_param_as<T>(&self, name: &str) -> Result<T>
+    where
+        T: FromStr,
+        T::Err: fmt::Display,
+    {
+        parse_required_value(
+            self.host_param(name).map(ToString::to_string),
+            "host parameter",
+            name,
+        )
+    }
+
+    pub fn optional_host_param_as<T>(&self, name: &str) -> Result<Option<T>>
+    where
+        T: FromStr,
+        T::Err: fmt::Display,
+    {
+        parse_optional_value(
+            self.host_param(name).map(ToString::to_string),
+            "host parameter",
+            name,
+        )
     }
 
     pub fn params<T>(&self) -> Result<T>
@@ -289,12 +339,39 @@ impl BootRequest {
             .find_map(|(key, value)| (key == name).then_some(value)))
     }
 
+    pub fn query_value_as<T>(&self, name: &str) -> Result<T>
+    where
+        T: FromStr,
+        T::Err: fmt::Display,
+    {
+        parse_required_value(self.query_value(name)?, "query parameter", name)
+    }
+
+    pub fn optional_query_value_as<T>(&self, name: &str) -> Result<Option<T>>
+    where
+        T: FromStr,
+        T::Err: fmt::Display,
+    {
+        parse_optional_value(self.query_value(name)?, "query parameter", name)
+    }
+
     pub fn query_values(&self, name: &str) -> Result<Vec<String>> {
         Ok(self
             .query_pairs()?
             .into_iter()
             .filter_map(|(key, value)| (key == name).then_some(value))
             .collect())
+    }
+
+    pub fn query_values_as<T>(&self, name: &str) -> Result<Vec<T>>
+    where
+        T: FromStr,
+        T::Err: fmt::Display,
+    {
+        self.query_values(name)?
+            .into_iter()
+            .map(|value| parse_value(value, "query parameter", name))
+            .collect()
     }
 
     pub fn query_pairs(&self) -> Result<Vec<(String, String)>> {
@@ -312,6 +389,22 @@ impl BootRequest {
         get_header(&self.headers, name)
     }
 
+    pub fn header_as<T>(&self, name: &str) -> Result<T>
+    where
+        T: FromStr,
+        T::Err: fmt::Display,
+    {
+        parse_required_value(self.header(name).map(ToString::to_string), "header", name)
+    }
+
+    pub fn optional_header_as<T>(&self, name: &str) -> Result<Option<T>>
+    where
+        T: FromStr,
+        T::Err: fmt::Display,
+    {
+        parse_optional_value(self.header(name).map(ToString::to_string), "header", name)
+    }
+
     pub fn host(&self) -> Option<&str> {
         self.header("host").and_then(normalize_host_header)
     }
@@ -320,6 +413,22 @@ impl BootRequest {
         self.forwarded_for_ip()
             .or_else(|| self.forwarded_header_ip("x-forwarded-for"))
             .or_else(|| self.forwarded_header_ip("x-real-ip"))
+    }
+
+    pub fn ip_as<T>(&self) -> Result<T>
+    where
+        T: FromStr,
+        T::Err: fmt::Display,
+    {
+        parse_required_value(self.ip(), "IP address", "ip")
+    }
+
+    pub fn optional_ip_as<T>(&self) -> Result<Option<T>>
+    where
+        T: FromStr,
+        T::Err: fmt::Display,
+    {
+        parse_optional_value(self.ip(), "IP address", "ip")
     }
 
     pub fn header_values(&self, name: &str) -> Vec<&str> {
@@ -585,6 +694,37 @@ impl BootRequest {
         let value = self.query()?;
         validate_value(value)
     }
+}
+
+fn parse_required_value<T>(value: Option<String>, label: &str, name: &str) -> Result<T>
+where
+    T: FromStr,
+    T::Err: fmt::Display,
+{
+    let Some(value) = value else {
+        return Err(BootError::BadRequest(format!("missing {label}: {name}")));
+    };
+    parse_value(value, label, name)
+}
+
+fn parse_optional_value<T>(value: Option<String>, label: &str, name: &str) -> Result<Option<T>>
+where
+    T: FromStr,
+    T::Err: fmt::Display,
+{
+    value
+        .map(|value| parse_value(value, label, name))
+        .transpose()
+}
+
+fn parse_value<T>(value: String, label: &str, name: &str) -> Result<T>
+where
+    T: FromStr,
+    T::Err: fmt::Display,
+{
+    value
+        .parse::<T>()
+        .map_err(|error| BootError::BadRequest(format!("invalid {label} {name}: {error}")))
 }
 
 fn validate_request_header(name: &str, value: &str) -> Result<()> {

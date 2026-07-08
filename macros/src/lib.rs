@@ -262,6 +262,11 @@ pub fn ip(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
+pub fn extract(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    extractor_attribute_outside_controller("extract", item)
+}
+
+#[proc_macro_attribute]
 pub fn host(_attr: TokenStream, item: TokenStream) -> TokenStream {
     host_attribute_outside_controller("host", item)
 }
@@ -1730,7 +1735,8 @@ fn extractor_validation_tokens(
             | Extractor::Header(_)
             | Extractor::Headers
             | Extractor::HostParam(_)
-            | Extractor::Ip => {}
+            | Extractor::Ip
+            | Extractor::Custom(_) => {}
         }
     }
 
@@ -1892,9 +1898,8 @@ fn extractor_tokens(arg: MethodArg, extractor: Extractor) -> proc_macro2::TokenS
         Extractor::Param(name) => single_value_extractor_tokens(
             ident,
             ty,
-            &name,
-            "path parameter",
-            quote!(__a3s_boot_request.param(#name).map(::std::string::ToString::to_string)),
+            |value_ty| quote!(__a3s_boot_request.param_as::<#value_ty>(#name)),
+            |value_ty| quote!(__a3s_boot_request.optional_param_as::<#value_ty>(#name)),
         ),
         Extractor::Query(None) => quote! {
             let #ident: #ty = __a3s_boot_request.query::<#ty>()?;
@@ -1902,16 +1907,14 @@ fn extractor_tokens(arg: MethodArg, extractor: Extractor) -> proc_macro2::TokenS
         Extractor::Query(Some(name)) => single_value_extractor_tokens(
             ident,
             ty,
-            &name,
-            "query parameter",
-            quote!(__a3s_boot_request.query_value(#name)?),
+            |value_ty| quote!(__a3s_boot_request.query_value_as::<#value_ty>(#name)),
+            |value_ty| quote!(__a3s_boot_request.optional_query_value_as::<#value_ty>(#name)),
         ),
         Extractor::Header(name) => single_value_extractor_tokens(
             ident,
             ty,
-            &name,
-            "header",
-            quote!(__a3s_boot_request.header(#name).map(::std::string::ToString::to_string)),
+            |value_ty| quote!(__a3s_boot_request.header_as::<#value_ty>(#name)),
+            |value_ty| quote!(__a3s_boot_request.optional_header_as::<#value_ty>(#name)),
         ),
         Extractor::Headers => quote! {
             let #ident: #ty = __a3s_boot_request.headers.clone();
@@ -1919,57 +1922,40 @@ fn extractor_tokens(arg: MethodArg, extractor: Extractor) -> proc_macro2::TokenS
         Extractor::HostParam(name) => single_value_extractor_tokens(
             ident,
             ty,
-            &name,
-            "host parameter",
-            quote!(__a3s_boot_request.host_param(#name).map(::std::string::ToString::to_string)),
+            |value_ty| quote!(__a3s_boot_request.host_param_as::<#value_ty>(#name)),
+            |value_ty| quote!(__a3s_boot_request.optional_host_param_as::<#value_ty>(#name)),
         ),
-        Extractor::Ip => single_value_extractor_tokens_by_name(
+        Extractor::Ip => single_value_extractor_tokens(
             ident,
             ty,
-            "ip",
-            "IP address",
-            quote!(__a3s_boot_request.ip()),
+            |value_ty| quote!(__a3s_boot_request.ip_as::<#value_ty>()),
+            |value_ty| quote!(__a3s_boot_request.optional_ip_as::<#value_ty>()),
         ),
+        Extractor::Custom(extractor) => quote! {
+            let #ident: #ty = ::a3s_boot::extract_request_value::<#ty, _>(&__a3s_boot_request, #extractor)?;
+        },
     }
 }
 
-fn single_value_extractor_tokens(
+fn single_value_extractor_tokens<Required, Optional>(
     ident: Ident,
     ty: Box<Type>,
-    name: &LitStr,
-    label: &'static str,
-    value: proc_macro2::TokenStream,
-) -> proc_macro2::TokenStream {
-    single_value_extractor_tokens_by_name(ident, ty, &name.value(), label, value)
-}
-
-fn single_value_extractor_tokens_by_name(
-    ident: Ident,
-    ty: Box<Type>,
-    name: &str,
-    label: &'static str,
-    value: proc_macro2::TokenStream,
-) -> proc_macro2::TokenStream {
-    let missing = format!("missing {label}: {name}");
-    let invalid = format!("invalid {label} {name}: {{}}");
-
+    required: Required,
+    optional: Optional,
+) -> proc_macro2::TokenStream
+where
+    Required: FnOnce(&Type) -> proc_macro2::TokenStream,
+    Optional: FnOnce(&Type) -> proc_macro2::TokenStream,
+{
     if let Some(inner) = option_inner_type(&ty) {
+        let value = optional(&inner);
         quote! {
-            let #ident: #ty = match #value {
-                Some(__a3s_boot_value) => {
-                    Some(__a3s_boot_value.parse::<#inner>().map_err(|error| {
-                        ::a3s_boot::BootError::BadRequest(format!(#invalid, error))
-                    })?)
-                }
-                None => None,
-            };
+            let #ident: #ty = #value?;
         }
     } else {
+        let value = required(&ty);
         quote! {
-            let #ident: #ty = #value
-                .ok_or_else(|| ::a3s_boot::BootError::BadRequest(#missing.to_string()))?
-                .parse::<#ty>()
-                .map_err(|error| ::a3s_boot::BootError::BadRequest(format!(#invalid, error)))?;
+            let #ident: #ty = #value?;
         }
     }
 }
@@ -2059,7 +2045,8 @@ fn extractor_openapi_tokens(
             | Extractor::Query(None)
             | Extractor::Headers
             | Extractor::HostParam(_)
-            | Extractor::Ip => {}
+            | Extractor::Ip
+            | Extractor::Custom(_) => {}
         }
     }
 
@@ -4105,6 +4092,7 @@ enum Extractor {
     Headers,
     HostParam(LitStr),
     Ip,
+    Custom(Expr),
 }
 
 impl Extractor {
@@ -4136,6 +4124,8 @@ impl Extractor {
         } else if ident == "ip" {
             expect_no_extractor_args(attr, "ip")?;
             Self::Ip
+        } else if ident == "extract" {
+            Self::Custom(parse_extractor_expr(attr)?)
         } else {
             return Ok(None);
         };
@@ -4191,6 +4181,12 @@ fn parse_optional_extractor_name(attr: &Attribute, name: &str) -> Result<Option<
         syn::Meta::Path(_) => Ok(None),
         _ => parse_extractor_name(attr, name).map(Some),
     }
+}
+
+fn parse_extractor_expr(attr: &Attribute) -> Result<Expr> {
+    attr.parse_args::<Expr>().map_err(|_| {
+        syn::Error::new_spanned(attr, "#[extract] requires one request extractor expression")
+    })
 }
 
 fn option_inner_type(ty: &Type) -> Option<Type> {

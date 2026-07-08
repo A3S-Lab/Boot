@@ -36,8 +36,9 @@ Implemented today:
   `#[post]`, `#[put]`, `#[patch]`, `#[delete]`, `#[sse]`, raw route mode, and
   method argument extractors including `#[body]`, `#[request]`,
   `#[param("name")]`, `#[params]`, `#[query]`, `#[query("name")]`,
-  `#[header("name")]`, `#[headers]`, `#[host_param("name")]`, and `#[ip]`,
-  plus `#[host]` for host-scoped controllers and routes, `#[metadata]` for
+  `#[header("name")]`, `#[headers]`, `#[host_param("name")]`, `#[ip]`, and
+  custom `#[extract(...)]` request value binding, plus `#[host]` for
+  host-scoped controllers and routes, `#[metadata]` for
   Nest-style custom route/controller metadata and `#[http_code]` for Nest-style
   response status metadata, `#[header]` for response headers, and `#[redirect]`
   for redirect responses.
@@ -56,8 +57,9 @@ Implemented today:
 - Global, module, controller-level, and route-level middleware plus global and
   controller-level `Pipe`, `Guard`, `Interceptor`, and `ExceptionFilter`
   support.
-- Adapter-neutral request/response types, typed params/query helpers, header
-  helpers, route matching, global prefixes, lifecycle hooks, and an Axum adapter.
+- Adapter-neutral request/response types, typed params/query helpers, typed
+  single-value parsing helpers, header helpers, route matching, global prefixes,
+  lifecycle hooks, and an Axum adapter.
 - OpenAPI route metadata, schema-crate-neutral document generation from resolved
   routes, automatic path-parameter documentation, and optional
   `serve_openapi(...)` JSON route registration.

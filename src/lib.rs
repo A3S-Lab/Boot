@@ -51,12 +51,12 @@ mod websocket;
 
 #[cfg(feature = "macros")]
 pub use a3s_boot_macros::{
-    bearer_auth, body, controller, delete, delete_json, event_pattern, get, get_json, head, header,
-    headers, hide_from_openapi, host, host_param, http_code, injectable, ip, message_controller,
-    message_pattern, metadata, operation, options, param, params, patch, patch_json, post,
-    post_json, put, put_json, query, redirect, request, request_body, response, serialize,
-    skip_validation, sse, subscribe_message, tag, use_filter, use_guard, use_interceptor, use_pipe,
-    validate, version, version_neutral, versions, websocket_gateway,
+    bearer_auth, body, controller, delete, delete_json, event_pattern, extract, get, get_json,
+    head, header, headers, hide_from_openapi, host, host_param, http_code, injectable, ip,
+    message_controller, message_pattern, metadata, operation, options, param, params, patch,
+    patch_json, post, post_json, put, put_json, query, redirect, request, request_body, response,
+    serialize, skip_validation, sse, subscribe_message, tag, use_filter, use_guard,
+    use_interceptor, use_pipe, validate, version, version_neutral, versions, websocket_gateway,
 };
 #[cfg(all(feature = "macros", feature = "schedule"))]
 pub use a3s_boot_macros::{cron, interval, schedule, timeout};
@@ -90,7 +90,8 @@ pub use health::{
     HealthStatus,
 };
 pub use http::{
-    BootRequest, BootResponse, CookieOptions, CookieSameSite, HttpMethod, SseEvent, SseStream,
+    extract_request_value, BootRequest, BootResponse, CookieOptions, CookieSameSite, HttpMethod,
+    RequestExtractor, SseEvent, SseStream,
 };
 #[cfg(feature = "logging")]
 pub use logging::{

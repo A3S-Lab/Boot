@@ -49,6 +49,10 @@ struct MacroCatsMessages {
     cats: Arc<MacroCatsService>,
 }
 
+fn current_tenant(request: &BootRequest) -> Result<String> {
+    Ok(request.header("x-tenant").unwrap_or("public").to_string())
+}
+
 #[a3s_boot::websocket_gateway("/macro-cats/ws")]
 impl MacroCatsGateway {
     #[a3s_boot::subscribe_message("cat.find")]
@@ -123,6 +127,7 @@ impl MacroCatsController {
         #[query("page")] page: u16,
         #[query("tag")] tag: Option<String>,
         #[header("x-request-id")] request_id: Option<String>,
+        #[extract(current_tenant)] tenant: String,
     ) -> Result<MacroCatDetailsDto> {
         Ok(MacroCatDetailsDto {
             id,
@@ -130,6 +135,7 @@ impl MacroCatsController {
             page,
             tag,
             request_id,
+            tenant,
         })
     }
 
@@ -256,6 +262,7 @@ struct MacroCatDetailsDto {
     page: u16,
     tag: Option<String>,
     request_id: Option<String>,
+    tenant: String,
 }
 
 #[derive(Debug)]
@@ -644,7 +651,8 @@ async fn macros_register_injectable_services_and_controller_routes() {
                 a3s_boot::HttpMethod::Get,
                 "/macro-cats/42/details?include_toys=true&page=3&tag=quiet",
             )
-            .with_header("x-request-id", "req-1"),
+            .with_header("x-request-id", "req-1")
+            .with_header("x-tenant", "acme"),
         )
         .await
         .unwrap();
@@ -656,6 +664,7 @@ async fn macros_register_injectable_services_and_controller_routes() {
             page: 3,
             tag: Some("quiet".to_string()),
             request_id: Some("req-1".to_string()),
+            tenant: "acme".to_string(),
         }
     );
 

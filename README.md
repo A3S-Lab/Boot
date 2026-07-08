@@ -176,6 +176,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@Headers("x-request-id")` | `#[header("x-request-id")]` on a method argument |
 | `@Ip()` | `#[ip]` on a method argument |
 | `@Req()` | `#[request]` on a `BootRequest` argument |
+| `createParamDecorator(...)` | `#[extract(current_user)]` with a `RequestExtractor<T>` or function |
 | `@Sse("events")` | `#[sse("/events")]` on an async method returning an SSE event stream |
 | `@WebSocketGateway()` | `#[websocket_gateway("/ws")]` on an inherent `impl` block |
 | `@SubscribeMessage("cat.find")` | `#[subscribe_message("cat.find")]` on an async gateway method |
@@ -352,13 +353,43 @@ impl block. GET, POST, PUT, PATCH, and DELETE route attributes default to JSON.
 Use extractor attributes on method arguments for Nest-style request binding:
 `#[param("id")]`, `#[params]`, `#[query]`, `#[query("name")]`, `#[body]`,
 `#[header("name")]`, `#[headers]`, `#[host_param("account")]`, `#[ip]`, and
-`#[request]`. Add `raw` only when the method should return
+`#[request]`. Single-value extractors parse into the argument type with
+`FromStr`, so `#[param("id")] id: u64` and `#[query("active")] active: bool`
+work without a separate parse pipe. Add `raw` only when the method should return
 `Result<BootResponse>` directly, for example `#[get("/health", raw)]`. The
 explicit `*_json` route attributes remain available as compatibility aliases,
 but typical code should use `#[get]` and `#[post]` directly.
 `#[sse("/events")]` registers a GET endpoint that returns a
 `text/event-stream` response and accepts any stream whose items are
 `Result<SseEvent>`.
+
+Custom parameter decorators use `#[extract(...)]`, where the expression
+implements `RequestExtractor<T>` or is a function that takes `&BootRequest` and
+returns `Result<T>`:
+
+```rust
+use a3s_boot::{controller, extract, get, BootRequest, Result};
+
+fn current_user(request: &BootRequest) -> Result<String> {
+    Ok(request.header("x-user").unwrap_or("anonymous").to_string())
+}
+
+#[derive(Debug)]
+struct CatsController;
+
+#[controller("/cats")]
+impl CatsController {
+    #[get("/me")]
+    async fn me(&self, #[extract(current_user)] user: String) -> Result<String> {
+        Ok(user)
+    }
+}
+```
+
+Manual handlers can use the same parsing rules through
+`BootRequest::param_as::<T>()`, `query_value_as::<T>()`,
+`query_values_as::<T>()`, `header_as::<T>()`, `host_param_as::<T>()`, and
+`ip_as::<T>()`.
 
 Host-scoped controllers mirror Nest's host-based controller option. Put
 `#[host("{account}.example.com")]` below `#[controller]` to constrain every
