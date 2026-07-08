@@ -4,6 +4,8 @@ use a3s_boot::{
     MessageTransport, Module, ModuleRef, ProviderDefinition, Result, TransportContext,
     TransportInterceptor, TransportMessage, TransportReply, Validate,
 };
+#[cfg(feature = "grpc-transport")]
+use a3s_boot::{GrpcTransport, GrpcTransportClient, GrpcTransportOptions};
 #[cfg(feature = "kafka-transport")]
 use a3s_boot::{KafkaTransport, KafkaTransportClient, KafkaTransportOptions};
 #[cfg(feature = "mqtt-transport")]
@@ -20,6 +22,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 #[cfg(any(
+    feature = "grpc-transport",
     feature = "kafka-transport",
     feature = "mqtt-transport",
     feature = "nats-transport",
@@ -36,9 +39,10 @@ use std::time::Duration;
     feature = "redis-transport"
 ))]
 use std::time::{SystemTime, UNIX_EPOCH};
-#[cfg(feature = "tcp-transport")]
+#[cfg(any(feature = "grpc-transport", feature = "tcp-transport"))]
 use tokio::net::TcpListener;
 #[cfg(any(
+    feature = "grpc-transport",
     feature = "kafka-transport",
     feature = "mqtt-transport",
     feature = "nats-transport",
@@ -1037,6 +1041,138 @@ async fn tcp_transport_maps_handler_errors_to_client_errors() {
     server.abort();
 }
 
+#[cfg(feature = "grpc-transport")]
+#[test]
+fn grpc_transport_builds_a_message_client_with_custom_options() {
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 4001));
+    let options = GrpcTransportOptions::new()
+        .with_request_timeout(Duration::from_secs(2))
+        .with_connect_timeout(Duration::from_secs(2))
+        .with_max_message_size(2 * 1024 * 1024);
+    let app = BootApplication::builder().build().unwrap();
+    let client = GrpcTransport::with_options(addr, options)
+        .build(app)
+        .unwrap();
+
+    assert_eq!(client.endpoint(), "http://127.0.0.1:4001");
+    assert_eq!(client.options(), options);
+    assert_eq!(client.options().request_timeout(), Duration::from_secs(2));
+    assert_eq!(client.options().connect_timeout(), Duration::from_secs(2));
+    assert_eq!(
+        client.options().max_decoding_message_size(),
+        2 * 1024 * 1024
+    );
+    assert_eq!(
+        client.options().max_encoding_message_size(),
+        2 * 1024 * 1024
+    );
+}
+
+#[cfg(feature = "grpc-transport")]
+#[tokio::test]
+async fn grpc_transport_round_trips_request_response_messages() {
+    let app = BootApplication::builder()
+        .message_pattern(
+            MessagePatternDefinition::request_json(
+                "math.double",
+                |payload: NumberPayload| async move {
+                    Ok(NumberPayload {
+                        value: payload.value * 2,
+                    })
+                },
+            )
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+    let addr = unused_tcp_addr().await;
+    let transport = GrpcTransport::new(addr);
+    let server = tokio::spawn({
+        let app = app.clone();
+        async move { transport.serve(app).await }
+    });
+    let client = GrpcTransportClient::for_addr(addr);
+
+    let reply = send_grpc_with_retry(
+        &client,
+        TransportMessage::json("math.double", &NumberPayload { value: 12 }).unwrap(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(reply.data_as::<NumberPayload>().unwrap().value, 24);
+    server.abort();
+}
+
+#[cfg(feature = "grpc-transport")]
+#[tokio::test]
+async fn grpc_transport_emits_event_messages() {
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let event_log = Arc::clone(&observed);
+    let app = BootApplication::builder()
+        .message_pattern(
+            MessagePatternDefinition::event_json("math.observed", move |payload: NumberPayload| {
+                let event_log = Arc::clone(&event_log);
+                async move {
+                    event_log.lock().unwrap().push(payload.value);
+                    Ok(())
+                }
+            })
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+    let addr = unused_tcp_addr().await;
+    let transport = GrpcTransport::new(addr);
+    let server = tokio::spawn({
+        let app = app.clone();
+        async move { transport.serve(app).await }
+    });
+    let client = GrpcTransportClient::for_addr(addr);
+
+    emit_grpc_with_retry(
+        &client,
+        TransportMessage::json("math.observed", &NumberPayload { value: 7 }).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(observed.lock().unwrap().as_slice(), [7]);
+    server.abort();
+}
+
+#[cfg(feature = "grpc-transport")]
+#[tokio::test]
+async fn grpc_transport_maps_handler_errors_to_client_errors() {
+    let app = BootApplication::builder()
+        .message_pattern(
+            MessagePatternDefinition::request("math.fail", |_message: TransportMessage| async {
+                Err::<TransportReply, BootError>(BootError::BadRequest("invalid math".to_string()))
+            })
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+    let addr = unused_tcp_addr().await;
+    let transport = GrpcTransport::new(addr);
+    let server = tokio::spawn({
+        let app = app.clone();
+        async move { transport.serve(app).await }
+    });
+    let client = GrpcTransportClient::for_addr(addr);
+
+    let error = send_grpc_with_retry(
+        &client,
+        TransportMessage::new("math.fail", json!({ "value": 1 })),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(error, BootError::BadRequest(message) if message == "invalid math"));
+    server.abort();
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct NumberPayload {
     value: i32,
@@ -1142,7 +1278,7 @@ impl TransportInterceptor for TraceTransportInterceptor {
     }
 }
 
-#[cfg(feature = "tcp-transport")]
+#[cfg(any(feature = "grpc-transport", feature = "tcp-transport"))]
 async fn unused_tcp_addr() -> std::net::SocketAddr {
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
         .await
@@ -1173,6 +1309,58 @@ async fn send_tcp_with_retry(
         || BootError::Adapter("tcp transport did not start".to_string()),
         BootError::Io,
     ))
+}
+
+#[cfg(feature = "grpc-transport")]
+async fn send_grpc_with_retry(
+    client: &GrpcTransportClient,
+    message: TransportMessage,
+) -> Result<Option<TransportReply>> {
+    let mut last_error = None;
+    for _ in 0..50 {
+        match client.send(message.clone()).await {
+            Ok(reply) => return Ok(reply),
+            Err(BootError::Adapter(message)) if should_retry_grpc_error(&message) => {
+                last_error = Some(BootError::Adapter(message));
+                sleep(Duration::from_millis(10)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_error
+        .unwrap_or_else(|| BootError::Adapter("grpc transport did not start".to_string())))
+}
+
+#[cfg(feature = "grpc-transport")]
+async fn emit_grpc_with_retry(
+    client: &GrpcTransportClient,
+    message: TransportMessage,
+) -> Result<()> {
+    let mut last_error = None;
+    for _ in 0..50 {
+        match client.emit(message.clone()).await {
+            Ok(()) => return Ok(()),
+            Err(BootError::Adapter(message)) if should_retry_grpc_error(&message) => {
+                last_error = Some(BootError::Adapter(message));
+                sleep(Duration::from_millis(10)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_error
+        .unwrap_or_else(|| BootError::Adapter("grpc transport did not start".to_string())))
+}
+
+#[cfg(feature = "grpc-transport")]
+fn should_retry_grpc_error(message: &str) -> bool {
+    message.contains("transport error")
+        || message.contains("error trying to connect")
+        || message.contains("Connection refused")
+        || message.contains("connection refused")
+        || message.contains("tcp connect error")
+        || message.contains("timed out")
 }
 
 #[cfg(feature = "kafka-transport")]

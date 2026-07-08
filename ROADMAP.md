@@ -112,7 +112,7 @@ Implemented today:
   optional Redis Pub/Sub transport and optional NATS request/reply and event
   subjects plus optional MQTT request/reply and event topics plus optional
   RabbitMQ request/reply and event queues plus optional Kafka request/reply and
-  event topics.
+  event topics plus optional gRPC unary request/reply and event calls.
 - ACL-backed typed configuration modules with `ConfigModule`, named/global
   provider exports, environment/default function support, and validation hooks.
 - Typed cache modules with `CacheModule`, `Cache`, in-memory storage,
@@ -483,8 +483,7 @@ Tasks:
 - Add one production transport only after the core contract is stable.
   (Implemented first with optional `TcpTransport`, followed by optional
   `RedisTransport`, `NatsTransport`, `MqttTransport`, and
-  `RabbitMqTransport`, and `KafkaTransport`; gRPC remains a future companion
-  feature.)
+  `RabbitMqTransport`, `KafkaTransport`, and `GrpcTransport`.)
 
 Acceptance:
 
@@ -580,9 +579,8 @@ framework capability. Keep GraphQL out of scope.
 
 Suggested implementation sequence:
 
-1. Add the next production message transport, gRPC, now that the async
-   provider, TCP, Redis, NATS, MQTT, RabbitMQ, and Kafka transport contracts are
-   stable.
+1. Add Nest-style module and provider diagnostics for circular dependencies,
+   lazy module loading, and clearer dependency graph errors.
 2. Continue defining integrations through providers, middleware, guards,
    interceptors, or adapters instead of adding one-off framework hooks.
 3. Add crate-local tests and README examples for each chosen framework module.

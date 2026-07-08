@@ -142,6 +142,8 @@ pub use session::{
     SessionMiddleware, SessionModule, SessionOptions, SessionStore,
 };
 pub use testing::{TestingModule, TestingModuleBuilder};
+#[cfg(feature = "grpc-transport")]
+pub use transport::{GrpcTransport, GrpcTransportClient, GrpcTransportOptions};
 pub use transport::{
     InProcessTransport, InProcessTransportClient, IntoTransportReply, MessagePatternDefinition,
     MessagePatternKind, MessageTransport, TransportContext, TransportGuard, TransportInterceptor,

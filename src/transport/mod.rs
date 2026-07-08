@@ -9,6 +9,8 @@ use std::future::Future;
 use std::ops::Deref;
 use std::sync::Arc;
 
+#[cfg(feature = "grpc-transport")]
+mod grpc;
 #[cfg(feature = "kafka-transport")]
 mod kafka;
 #[cfg(feature = "mqtt-transport")]
@@ -22,6 +24,8 @@ mod redis;
 #[cfg(feature = "tcp-transport")]
 mod tcp;
 
+#[cfg(feature = "grpc-transport")]
+pub use self::grpc::{GrpcTransport, GrpcTransportClient, GrpcTransportOptions};
 #[cfg(feature = "kafka-transport")]
 pub use self::kafka::{KafkaTransport, KafkaTransportClient, KafkaTransportOptions};
 #[cfg(feature = "mqtt-transport")]
