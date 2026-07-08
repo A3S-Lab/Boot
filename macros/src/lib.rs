@@ -76,10 +76,10 @@ pub fn controller(attr: TokenStream, item: TokenStream) -> TokenStream {
 
 #[proc_macro_attribute]
 pub fn websocket_gateway(attr: TokenStream, item: TokenStream) -> TokenStream {
-    let path = parse_macro_input!(attr as LitStr);
+    let args = parse_macro_input!(attr as WebSocketGatewayArgs);
     let item_impl = parse_macro_input!(item as ItemImpl);
 
-    expand_websocket_gateway(path, item_impl)
+    expand_websocket_gateway(args, item_impl)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }
@@ -1151,8 +1151,41 @@ fn expand_controller(prefix: LitStr, mut item_impl: ItemImpl) -> Result<proc_mac
     })
 }
 
-fn expand_websocket_gateway(
+struct WebSocketGatewayArgs {
     path: LitStr,
+    namespace: Option<LitStr>,
+}
+
+impl Parse for WebSocketGatewayArgs {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let path = input.parse::<LitStr>()?;
+        let mut namespace = None;
+
+        while input.peek(Token![,]) {
+            input.parse::<Token![,]>()?;
+            if input.is_empty() {
+                break;
+            }
+
+            let name = input.parse::<Ident>()?;
+            input.parse::<Token![=]>()?;
+            match name.to_string().as_str() {
+                "namespace" => set_once(&mut namespace, input.parse::<LitStr>()?, name)?,
+                _ => {
+                    return Err(syn::Error::new_spanned(
+                        name,
+                        "unsupported websocket_gateway option",
+                    ));
+                }
+            }
+        }
+
+        Ok(Self { path, namespace })
+    }
+}
+
+fn expand_websocket_gateway(
+    args: WebSocketGatewayArgs,
     mut item_impl: ItemImpl,
 ) -> Result<proc_macro2::TokenStream> {
     if item_impl.trait_.is_some() {
@@ -1163,6 +1196,10 @@ fn expand_websocket_gateway(
     }
 
     let self_ty = item_impl.self_ty.clone();
+    let path = args.path;
+    let namespace = args.namespace.as_ref().map(
+        |namespace| quote!(__a3s_boot_gateway = __a3s_boot_gateway.with_namespace(#namespace)?;),
+    );
     let mut subscriptions = Vec::new();
     let mut lifecycle_hooks = Vec::new();
     let mut errors: Option<syn::Error> = None;
@@ -1232,6 +1269,7 @@ fn expand_websocket_gateway(
             ) -> ::a3s_boot::Result<::a3s_boot::WebSocketGatewayDefinition> {
                 let mut __a3s_boot_gateway =
                     ::a3s_boot::WebSocketGatewayDefinition::new(#path)?;
+                #namespace
                 #(
                     __a3s_boot_gateway = #subscriptions;
                 )*

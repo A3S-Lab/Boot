@@ -179,7 +179,7 @@ impl FromStr for MacroCatKind {
     }
 }
 
-#[a3s_boot::websocket_gateway("/macro-cats/ws")]
+#[a3s_boot::websocket_gateway("/macro-cats/ws", namespace = "/macro-cats")]
 impl MacroCatsGateway {
     #[a3s_boot::on_gateway_init]
     async fn after_init(&self, context: WebSocketGatewayInitContext) -> Result<()> {
@@ -899,6 +899,7 @@ async fn macros_register_injectable_services_and_controller_routes() {
 
     assert_eq!(app.routes().len(), 19);
     assert_eq!(app.gateways().len(), 1);
+    assert_eq!(app.gateways()[0].namespace(), Some("/macro-cats"));
     assert_eq!(app.message_patterns().len(), 3);
     let exports = MacroCatsModule.exports().unwrap();
     assert!(exports.contains(&ProviderToken::of::<MacroCatsService>()));
@@ -1449,6 +1450,7 @@ async fn macros_register_injectable_services_and_controller_routes() {
         ))
         .await
         .unwrap();
+    assert_eq!(ws_connection.namespace(), Some("/macro-cats"));
     let ws_reply = ws_connection
         .dispatch(WebSocketMessage::new("cat.find", json!({ "id": "42" })))
         .await

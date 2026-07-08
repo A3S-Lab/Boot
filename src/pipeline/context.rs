@@ -42,6 +42,7 @@ impl ExecutionTransportKind {
 pub struct WebSocketExecutionContext {
     pub gateway_path: String,
     pub event: String,
+    pub namespace: Option<String>,
 }
 
 /// Transport-specific execution details.
@@ -95,6 +96,7 @@ impl ExecutionContext {
         request: BootRequest,
         gateway_path: String,
         event: String,
+        namespace: Option<String>,
         module_name: Option<String>,
     ) -> Self {
         Self {
@@ -110,6 +112,7 @@ impl ExecutionContext {
             websocket: Some(WebSocketExecutionContext {
                 gateway_path,
                 event,
+                namespace,
             }),
             transport: None,
         }

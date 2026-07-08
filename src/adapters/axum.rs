@@ -13,7 +13,7 @@ use axum::http::{
 use axum::response::Response;
 use axum::routing::{on, MethodFilter, MethodRouter};
 use axum::Router;
-use futures_util::StreamExt;
+use futures_util::{Sink, SinkExt, StreamExt};
 use std::error::Error;
 use std::net::SocketAddr;
 
@@ -295,7 +295,19 @@ async fn handle_websocket(
             return;
         }
     };
-    let connection = match gateway.connect_async(request).await {
+
+    let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::unbounded_channel::<WebSocketMessage>();
+    let connection = match gateway
+        .connect_async_with_outbound(request, move |message: WebSocketMessage| {
+            let outbound_tx = outbound_tx.clone();
+            async move {
+                outbound_tx
+                    .send(message)
+                    .map_err(|_| BootError::Adapter("websocket connection is closed".to_string()))
+            }
+        })
+        .await
+    {
         Ok(connection) => connection,
         Err(error) => {
             let _ = send_websocket_error(&mut socket, error).await;
@@ -303,13 +315,24 @@ async fn handle_websocket(
         }
     };
 
-    while let Some(message) = socket.next().await {
+    let (mut socket_sender, mut socket_receiver) = socket.split();
+    let writer = tokio::spawn(async move {
+        while let Some(message) = outbound_rx.recv().await {
+            if send_websocket_message(&mut socket_sender, message)
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+
+    while let Some(message) = socket_receiver.next().await {
         let message = match message {
             Ok(message) => message,
-            Err(error) => {
-                let _ =
-                    send_websocket_error(&mut socket, BootError::Adapter(error.to_string())).await;
+            Err(_) => {
                 let _ = connection.close().await;
+                writer.abort();
                 return;
             }
         };
@@ -320,8 +343,16 @@ async fn handle_websocket(
         let message = match message {
             Ok(message) => message,
             Err(error) => {
-                if send_websocket_error(&mut socket, error).await.is_err() {
+                if connection
+                    .emit(WebSocketMessage::text(
+                        "error",
+                        error.http_response_message(),
+                    ))
+                    .await
+                    .is_err()
+                {
                     let _ = connection.close().await;
+                    writer.abort();
                     return;
                 }
                 continue;
@@ -330,15 +361,26 @@ async fn handle_websocket(
 
         match connection.dispatch(message).await {
             Ok(Some(reply)) => {
-                if send_websocket_message(&mut socket, reply).await.is_err() {
+                if connection.emit(reply).await.unwrap_or(false) {
+                    continue;
+                } else {
                     let _ = connection.close().await;
+                    writer.abort();
                     return;
                 }
             }
             Ok(None) => {}
             Err(error) => {
-                if send_websocket_error(&mut socket, error).await.is_err() {
+                if connection
+                    .emit(WebSocketMessage::text(
+                        "error",
+                        error.http_response_message(),
+                    ))
+                    .await
+                    .is_err()
+                {
                     let _ = connection.close().await;
+                    writer.abort();
                     return;
                 }
             }
@@ -346,6 +388,7 @@ async fn handle_websocket(
     }
 
     let _ = connection.close().await;
+    writer.abort();
 }
 
 fn decode_websocket_message(message: AxumWebSocketMessage) -> Option<Result<WebSocketMessage>> {
@@ -362,10 +405,13 @@ fn decode_websocket_message(message: AxumWebSocketMessage) -> Option<Result<WebS
     }
 }
 
-async fn send_websocket_message(
-    socket: &mut WebSocket,
+async fn send_websocket_message<S>(
+    socket: &mut S,
     message: WebSocketMessage,
-) -> std::result::Result<(), axum::Error> {
+) -> std::result::Result<(), axum::Error>
+where
+    S: Sink<AxumWebSocketMessage, Error = axum::Error> + Unpin,
+{
     let text = serde_json::to_string(&message)
         .unwrap_or_else(|error| format!(r#"{{"event":"error","data":"{error}"}}"#));
     socket.send(AxumWebSocketMessage::Text(text.into())).await

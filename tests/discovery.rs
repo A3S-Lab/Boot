@@ -84,6 +84,7 @@ impl Module for DiscoveryModuleFixture {
 
     fn gateways(&self, _module_ref: &ModuleRef) -> Result<Vec<WebSocketGatewayDefinition>> {
         Ok(vec![WebSocketGatewayDefinition::new("/ws")?
+            .with_namespace("cats")?
             .subscribe("cat.created", |_| async {
                 Ok(WebSocketMessage::text("ack", "ok"))
             })?
@@ -171,6 +172,7 @@ fn discovery_service_snapshots_modules_routes_gateways_and_message_patterns() {
     let gateways = discovery.gateways_for_module("discovery");
     assert_eq!(gateways.len(), 1);
     assert_eq!(gateways[0].path, "/api/ws");
+    assert_eq!(gateways[0].namespace.as_deref(), Some("/cats"));
     assert_eq!(gateways[0].events, ["cat.created", "cat.deleted"]);
 
     let patterns = discovery.message_patterns_for_module("discovery");

@@ -343,3 +343,111 @@ async fn websocket_gateway_guards_can_reject_messages() {
         matches!(error, BootError::Forbidden(message) if message == "websocket event /events ping")
     );
 }
+
+#[tokio::test]
+async fn websocket_gateways_track_namespaces_rooms_and_broadcasts() {
+    let sender_messages = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let receiver_messages = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let outside_messages = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let room_message = WebSocketMessage::text("cat.created", "Milo");
+    let all_message = WebSocketMessage::text("system", "all");
+    let direct_message = WebSocketMessage::text("direct", "sender");
+
+    let gateway = WebSocketGatewayDefinition::new("/events")
+        .unwrap()
+        .with_namespace("cats")
+        .unwrap()
+        .subscribe("ping", |message: WebSocketMessage| async move {
+            Ok(WebSocketMessage::new("pong", message.data))
+        })
+        .unwrap();
+
+    let sender = gateway
+        .connect_async_with_outbound(
+            BootRequest::new(HttpMethod::Get, "/events"),
+            capture_outbound(Arc::clone(&sender_messages)),
+        )
+        .await
+        .unwrap();
+    let receiver = gateway
+        .connect_async_with_outbound(
+            BootRequest::new(HttpMethod::Get, "/events"),
+            capture_outbound(Arc::clone(&receiver_messages)),
+        )
+        .await
+        .unwrap();
+    let outside = gateway
+        .connect_async_with_outbound(
+            BootRequest::new(HttpMethod::Get, "/events"),
+            capture_outbound(Arc::clone(&outside_messages)),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(gateway.namespace(), Some("/cats"));
+    assert_eq!(sender.namespace(), Some("/cats"));
+    assert_eq!(gateway.active_connection_count().unwrap(), 3);
+    assert_eq!(
+        gateway.active_connection_ids().unwrap(),
+        [sender.id(), receiver.id(), outside.id()]
+    );
+
+    sender.join("room:cats").unwrap();
+    receiver.join("room:cats").unwrap();
+    outside.join("room:dogs").unwrap();
+    assert_eq!(sender.rooms().unwrap(), ["room:cats"]);
+    assert_eq!(gateway.rooms().unwrap(), ["room:cats", "room:dogs"]);
+    assert_eq!(
+        gateway.room_members("room:cats").unwrap(),
+        [sender.id(), receiver.id()]
+    );
+
+    let delivered_to_room = sender
+        .broadcast_to_room("room:cats", room_message.clone())
+        .await
+        .unwrap();
+    assert_eq!(delivered_to_room, 1);
+    assert!(sender_messages.lock().unwrap().is_empty());
+    assert_eq!(
+        receiver_messages.lock().unwrap().as_slice(),
+        std::slice::from_ref(&room_message)
+    );
+    assert!(outside_messages.lock().unwrap().is_empty());
+
+    let delivered_to_all = gateway.broadcast(all_message.clone()).await.unwrap();
+    assert_eq!(delivered_to_all, 3);
+    assert_eq!(
+        sender_messages.lock().unwrap().as_slice(),
+        std::slice::from_ref(&all_message)
+    );
+    assert_eq!(
+        receiver_messages.lock().unwrap().as_slice(),
+        [room_message.clone(), all_message.clone()]
+    );
+    assert_eq!(
+        outside_messages.lock().unwrap().as_slice(),
+        std::slice::from_ref(&all_message)
+    );
+
+    assert!(sender.emit(direct_message.clone()).await.unwrap());
+    assert_eq!(
+        sender_messages.lock().unwrap().as_slice(),
+        [all_message, direct_message]
+    );
+
+    receiver.close().await.unwrap();
+    assert_eq!(gateway.active_connection_count().unwrap(), 2);
+    assert_eq!(gateway.room_members("room:cats").unwrap(), [sender.id()]);
+    sender.close().await.unwrap();
+    outside.close().await.unwrap();
+    assert_eq!(gateway.active_connection_count().unwrap(), 0);
+}
+
+fn capture_outbound(
+    messages: Arc<std::sync::Mutex<Vec<WebSocketMessage>>>,
+) -> impl Fn(WebSocketMessage) -> std::future::Ready<Result<()>> + Send + Sync + 'static {
+    move |message| {
+        messages.lock().unwrap().push(message);
+        std::future::ready(Ok(()))
+    }
+}

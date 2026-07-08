@@ -34,6 +34,7 @@ pub struct DiscoveredRoute {
 pub struct DiscoveredGateway {
     pub path: String,
     pub path_shape: String,
+    pub namespace: Option<String>,
     pub module_name: Option<String>,
     pub events: Vec<String>,
 }
@@ -356,6 +357,7 @@ fn discover_gateways(app: &BootApplication) -> Vec<DiscoveredGateway> {
         .map(|gateway| DiscoveredGateway {
             path: gateway.path().to_string(),
             path_shape: gateway.path_shape(),
+            namespace: gateway.namespace().map(str::to_string),
             module_name: gateway.module_name().map(str::to_string),
             events: gateway.events().into_iter().map(str::to_string).collect(),
         })

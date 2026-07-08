@@ -315,7 +315,9 @@ write Rust attributes that feel close to Nest.js decorators:
 | `createParamDecorator(...)` | `#[extract(current_user)]` with a `RequestExtractor<T>` or function |
 | `@Sse("events")` | `#[sse("/events")]` on an async method returning an SSE event stream |
 | `@WebSocketGateway()` | `#[websocket_gateway("/ws")]` on an inherent `impl` block |
+| `@WebSocketGateway({ namespace: "/cats" })` | `#[websocket_gateway("/ws", namespace = "/cats")]` |
 | `@SubscribeMessage("cat.find")` | `#[subscribe_message("cat.find")]` on an async gateway method |
+| `client.join("room")` / `server.to("room").emit(...)` | `connection.join("room")?` / `connection.broadcast_to_room("room", message).await?` |
 | `OnGatewayInit` / `OnGatewayConnection` / `OnGatewayDisconnect` | `#[on_gateway_init]`, `#[on_gateway_connection]`, and `#[on_gateway_disconnect]` |
 | Microservice controller | `#[message_controller]` on an inherent `impl` block |
 | `@MessagePattern("cat.find")` | `#[message_pattern("cat.find")]` on an async message method |
@@ -1148,6 +1150,55 @@ async fn dispatch() -> Result<()> {
         .unwrap();
 
     assert_eq!(reply.event(), "pong");
+    Ok(())
+}
+```
+
+Gateways can carry a logical namespace and track active connections in rooms.
+Adapter-backed connections can receive direct emits, room broadcasts, and
+gateway-wide broadcasts through the same outbound writer:
+
+```rust
+use std::sync::{Arc, Mutex};
+
+use a3s_boot::{
+    BootRequest, HttpMethod, Result, WebSocketGatewayDefinition, WebSocketMessage,
+};
+
+async fn rooms() -> Result<()> {
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let outbound = {
+        let sent = Arc::clone(&sent);
+        move |message: WebSocketMessage| {
+            let sent = Arc::clone(&sent);
+            async move {
+                sent.lock().unwrap().push(message);
+                Ok(())
+            }
+        }
+    };
+
+    let gateway = WebSocketGatewayDefinition::new("/events")?
+        .with_namespace("/cats")?
+        .subscribe("ping", |_| async {
+            Ok(WebSocketMessage::text("pong", "ok"))
+        })?;
+
+    let connection = gateway
+        .connect_async_with_outbound(
+            BootRequest::new(HttpMethod::Get, "/events"),
+            outbound,
+        )
+        .await?;
+
+    connection.join("room:cats")?;
+    connection
+        .broadcast_to_room("room:cats", WebSocketMessage::text("cat.created", "Milo"))
+        .await?;
+    gateway
+        .broadcast(WebSocketMessage::text("system", "refresh"))
+        .await?;
+    connection.close().await?;
     Ok(())
 }
 ```

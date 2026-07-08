@@ -147,8 +147,9 @@ Implemented today:
   before middleware execution.
 - WebSocket gateways with adapter-neutral messages and connections, gateway
   init/connection/disconnect lifecycle hooks, pipes/guards/interceptors,
-  provider-backed handlers, Nest-style gateway macros, and Axum WebSocket route
-  registration.
+  provider-backed handlers, logical namespaces, connection rooms, direct emits,
+  room or gateway-wide broadcasts, Nest-style gateway macros, and Axum
+  WebSocket route registration.
 - Microservice transports with adapter-neutral `TransportMessage` /
   `TransportReply`, request-response and event-only message patterns,
   provider-backed handlers, validation helpers, transport pipes/guards/
@@ -564,6 +565,8 @@ Acceptance:
 Nest equivalent:
 
 - `@WebSocketGateway()`
+- gateway namespaces
+- rooms and broadcasts
 - `@SubscribeMessage()`
 - gateway lifecycle hooks
 - gateway guards/pipes/interceptors
@@ -578,6 +581,9 @@ Tasks:
   `OnGatewayConnection`, and `OnGatewayDisconnect`. (Implemented with
   `#[on_gateway_init]`, `#[on_gateway_connection]`,
   `#[on_gateway_disconnect]`, and explicit hook builders)
+- Add logical gateway namespaces plus room membership, direct emits, and
+  broadcast helpers comparable to the high-value Socket.IO-backed Nest gateway
+  workflow. (Implemented)
 - Implement Axum WebSocket adapter support behind the `axum` feature.
   (Implemented)
 - Reuse DI and pipeline concepts where possible. (Implemented with provider-backed
@@ -591,6 +597,9 @@ Acceptance:
   provider-backed macros, and application bootstrap. (Covered)
 - Gateway handlers can use providers. (Covered)
 - Gateway guards/interceptors/pipes run in Nest-style deterministic order.
+  (Covered)
+- Gateways can track active connection ids, join/leave rooms, and deliver
+  direct, room-scoped, or gateway-wide messages to adapter-backed connections.
   (Covered)
 - Tests cover in-process adapter behavior and Axum integration. (Covered)
 

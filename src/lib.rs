@@ -219,7 +219,7 @@ pub use websocket::{
     IntoWebSocketReply, WebSocketConnection, WebSocketContext, WebSocketGatewayConnection,
     WebSocketGatewayConnectionHook, WebSocketGatewayDefinition, WebSocketGatewayDisconnectHook,
     WebSocketGatewayInitContext, WebSocketGatewayInitHook, WebSocketGuard, WebSocketInterceptor,
-    WebSocketMessage, WebSocketPipe,
+    WebSocketMessage, WebSocketOutbound, WebSocketPipe,
 };
 
 /// Result type used by A3S Boot.

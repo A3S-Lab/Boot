@@ -7,10 +7,11 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::future::Future;
 use std::ops::Deref;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 /// Adapter-neutral WebSocket message used by gateways and adapters.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -74,12 +75,195 @@ impl IntoWebSocketReply for () {
     }
 }
 
+/// Outbound writer for adapter-backed WebSocket connections.
+pub trait WebSocketOutbound: Send + Sync + 'static {
+    fn send(&self, message: WebSocketMessage) -> BoxFuture<'static, Result<()>>;
+}
+
+impl<F, Fut> WebSocketOutbound for F
+where
+    F: Fn(WebSocketMessage) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<()>> + Send + 'static,
+{
+    fn send(&self, message: WebSocketMessage) -> BoxFuture<'static, Result<()>> {
+        Box::pin(self(message))
+    }
+}
+
+impl WebSocketOutbound for Arc<dyn WebSocketOutbound> {
+    fn send(&self, message: WebSocketMessage) -> BoxFuture<'static, Result<()>> {
+        self.as_ref().send(message)
+    }
+}
+
+#[derive(Default)]
+struct WebSocketGatewayState {
+    next_connection_id: AtomicU64,
+    connections: Mutex<BTreeMap<u64, WebSocketConnectionState>>,
+}
+
+struct WebSocketConnectionState {
+    rooms: BTreeSet<String>,
+    outbound: Option<Arc<dyn WebSocketOutbound>>,
+}
+
+impl WebSocketGatewayState {
+    fn next_connection_id(&self) -> u64 {
+        self.next_connection_id.fetch_add(1, Ordering::Relaxed) + 1
+    }
+
+    fn register(&self, id: u64, outbound: Option<Arc<dyn WebSocketOutbound>>) -> Result<()> {
+        self.connections()?.insert(
+            id,
+            WebSocketConnectionState {
+                rooms: BTreeSet::new(),
+                outbound,
+            },
+        );
+        Ok(())
+    }
+
+    fn unregister(&self, id: u64) -> Result<()> {
+        self.connections()?.remove(&id);
+        Ok(())
+    }
+
+    fn join(&self, id: u64, room: impl Into<String>) -> Result<()> {
+        let room = normalize_room(room)?;
+        let mut connections = self.connections()?;
+        let connection = connections.get_mut(&id).ok_or_else(|| {
+            BootError::BadRequest(format!("websocket connection {id} is not open"))
+        })?;
+        connection.rooms.insert(room);
+        Ok(())
+    }
+
+    fn leave(&self, id: u64, room: impl Into<String>) -> Result<()> {
+        let room = normalize_room(room)?;
+        let mut connections = self.connections()?;
+        let Some(connection) = connections.get_mut(&id) else {
+            return Ok(());
+        };
+        connection.rooms.remove(&room);
+        Ok(())
+    }
+
+    fn connection_count(&self) -> Result<usize> {
+        Ok(self.connections()?.len())
+    }
+
+    fn connection_ids(&self) -> Result<Vec<u64>> {
+        Ok(self.connections()?.keys().copied().collect())
+    }
+
+    fn rooms(&self) -> Result<Vec<String>> {
+        let mut rooms = BTreeSet::new();
+        for connection in self.connections()?.values() {
+            rooms.extend(connection.rooms.iter().cloned());
+        }
+        Ok(rooms.into_iter().collect())
+    }
+
+    fn rooms_for_connection(&self, id: u64) -> Result<Vec<String>> {
+        Ok(self
+            .connections()?
+            .get(&id)
+            .map(|connection| connection.rooms.iter().cloned().collect())
+            .unwrap_or_default())
+    }
+
+    fn room_members(&self, room: impl Into<String>) -> Result<Vec<u64>> {
+        let room = normalize_room(room)?;
+        Ok(self
+            .connections()?
+            .iter()
+            .filter_map(|(id, connection)| connection.rooms.contains(&room).then_some(*id))
+            .collect())
+    }
+
+    fn outbound_for_connection(&self, id: u64) -> Result<Option<Arc<dyn WebSocketOutbound>>> {
+        Ok(self
+            .connections()?
+            .get(&id)
+            .and_then(|connection| connection.outbound.clone()))
+    }
+
+    fn broadcast_targets(
+        &self,
+        room: Option<&str>,
+        exclude_connection_id: Option<u64>,
+    ) -> Result<Vec<Arc<dyn WebSocketOutbound>>> {
+        let connections = self.connections()?;
+        Ok(connections
+            .iter()
+            .filter(|(id, _)| Some(**id) != exclude_connection_id)
+            .filter(|(_, connection)| match room {
+                Some(room) => connection.rooms.contains(room),
+                None => true,
+            })
+            .filter_map(|(_, connection)| connection.outbound.clone())
+            .collect())
+    }
+
+    fn connections(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, BTreeMap<u64, WebSocketConnectionState>>> {
+        self.connections.lock().map_err(|_| {
+            BootError::Internal("websocket gateway state lock is poisoned".to_string())
+        })
+    }
+}
+
+fn normalize_room(room: impl Into<String>) -> Result<String> {
+    let room = room.into();
+    let room = room.trim();
+    if room.is_empty() {
+        return Err(BootError::BadRequest(
+            "websocket room cannot be empty".to_string(),
+        ));
+    }
+    Ok(room.to_string())
+}
+
+fn normalize_namespace(namespace: impl Into<String>) -> Result<String> {
+    let namespace = namespace.into();
+    let namespace = namespace.trim();
+    if namespace.is_empty() {
+        return Err(BootError::BadRequest(
+            "websocket namespace cannot be empty".to_string(),
+        ));
+    }
+    if namespace.contains('?') || namespace.contains('#') {
+        return Err(BootError::BadRequest(format!(
+            "websocket namespace cannot contain query or fragment markers: {namespace}"
+        )));
+    }
+    if namespace.starts_with('/') {
+        Ok(namespace.to_string())
+    } else {
+        Ok(format!("/{namespace}"))
+    }
+}
+
+async fn send_to_outbounds(
+    outbounds: Vec<Arc<dyn WebSocketOutbound>>,
+    message: WebSocketMessage,
+) -> Result<usize> {
+    let mut sent = 0;
+    for outbound in outbounds {
+        outbound.send(message.clone()).await?;
+        sent += 1;
+    }
+    Ok(sent)
+}
+
 /// Context available to WebSocket guards and interceptors.
 #[derive(Debug, Clone)]
 pub struct WebSocketContext {
     pub request: BootRequest,
     pub gateway_path: String,
     pub event: String,
+    pub namespace: Option<String>,
     pub module_name: Option<String>,
     execution_context: ExecutionContext,
 }
@@ -88,17 +272,20 @@ impl WebSocketContext {
     fn new(gateway: &WebSocketGatewayDefinition, request: BootRequest, event: &str) -> Self {
         let gateway_path = gateway.path.clone();
         let event = event.to_string();
+        let namespace = gateway.namespace.clone();
         let module_name = gateway.module_name.clone();
         let execution_context = ExecutionContext::websocket(
             request.clone(),
             gateway_path.clone(),
             event.clone(),
+            namespace.clone(),
             module_name.clone(),
         );
         Self {
             request,
             gateway_path,
             event,
+            namespace,
             module_name,
             execution_context,
         }
@@ -125,6 +312,7 @@ impl Deref for WebSocketContext {
 #[derive(Debug, Clone)]
 pub struct WebSocketGatewayInitContext {
     pub gateway_path: String,
+    pub namespace: Option<String>,
     pub module_name: Option<String>,
     pub events: Vec<String>,
 }
@@ -133,6 +321,7 @@ impl WebSocketGatewayInitContext {
     fn new(gateway: &WebSocketGatewayDefinition) -> Self {
         Self {
             gateway_path: gateway.path.clone(),
+            namespace: gateway.namespace.clone(),
             module_name: gateway.module_name.clone(),
             events: gateway.handlers.keys().cloned().collect(),
         }
@@ -305,6 +494,7 @@ where
 #[derive(Clone)]
 pub struct WebSocketGatewayDefinition {
     path: String,
+    namespace: Option<String>,
     handlers: BTreeMap<String, Arc<dyn WebSocketMessageHandler>>,
     init_hooks: Vec<Arc<dyn WebSocketGatewayInitHook>>,
     connection_hooks: Vec<Arc<dyn WebSocketGatewayConnectionHook>>,
@@ -313,6 +503,7 @@ pub struct WebSocketGatewayDefinition {
     guards: Vec<Arc<dyn WebSocketGuard>>,
     interceptors: Vec<Arc<dyn WebSocketInterceptor>>,
     module_name: Option<String>,
+    state: Arc<WebSocketGatewayState>,
 }
 
 impl WebSocketGatewayDefinition {
@@ -321,6 +512,7 @@ impl WebSocketGatewayDefinition {
         validate_route_path(&path)?;
         Ok(Self {
             path,
+            namespace: None,
             handlers: BTreeMap::new(),
             init_hooks: Vec::new(),
             connection_hooks: Vec::new(),
@@ -329,6 +521,7 @@ impl WebSocketGatewayDefinition {
             guards: Vec::new(),
             interceptors: Vec::new(),
             module_name: None,
+            state: Arc::new(WebSocketGatewayState::default()),
         })
     }
 
@@ -344,8 +537,48 @@ impl WebSocketGatewayDefinition {
         self.module_name.as_deref()
     }
 
+    pub fn namespace(&self) -> Option<&str> {
+        self.namespace.as_deref()
+    }
+
+    pub fn with_namespace(mut self, namespace: impl Into<String>) -> Result<Self> {
+        self.namespace = Some(normalize_namespace(namespace)?);
+        Ok(self)
+    }
+
     pub fn events(&self) -> Vec<&str> {
         self.handlers.keys().map(String::as_str).collect()
+    }
+
+    pub fn active_connection_count(&self) -> Result<usize> {
+        self.state.connection_count()
+    }
+
+    pub fn active_connection_ids(&self) -> Result<Vec<u64>> {
+        self.state.connection_ids()
+    }
+
+    pub fn rooms(&self) -> Result<Vec<String>> {
+        self.state.rooms()
+    }
+
+    pub fn room_members(&self, room: impl Into<String>) -> Result<Vec<u64>> {
+        self.state.room_members(room)
+    }
+
+    pub async fn broadcast(&self, message: WebSocketMessage) -> Result<usize> {
+        let outbounds = self.state.broadcast_targets(None, None)?;
+        send_to_outbounds(outbounds, message).await
+    }
+
+    pub async fn broadcast_to_room(
+        &self,
+        room: impl Into<String>,
+        message: WebSocketMessage,
+    ) -> Result<usize> {
+        let room = normalize_room(room)?;
+        let outbounds = self.state.broadcast_targets(Some(&room), None)?;
+        send_to_outbounds(outbounds, message).await
     }
 
     /// Run gateway initialization hooks.
@@ -483,14 +716,56 @@ impl WebSocketGatewayDefinition {
         };
         Ok(WebSocketGatewayConnection {
             gateway: self.clone(),
+            id: self.state.next_connection_id(),
             request: request.with_path_params(params),
+            outbound: None,
+            opened: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    pub fn connect_with_outbound<O>(
+        &self,
+        request: BootRequest,
+        outbound: O,
+    ) -> Result<WebSocketGatewayConnection>
+    where
+        O: WebSocketOutbound,
+    {
+        let mut connection = self.connect(request)?;
+        connection.outbound = Some(Arc::new(outbound));
+        Ok(connection)
     }
 
     pub async fn connect_async(&self, request: BootRequest) -> Result<WebSocketGatewayConnection> {
         let connection = self.connect(request)?;
         connection.open().await?;
         Ok(connection)
+    }
+
+    pub async fn connect_async_with_outbound<O>(
+        &self,
+        request: BootRequest,
+        outbound: O,
+    ) -> Result<WebSocketGatewayConnection>
+    where
+        O: WebSocketOutbound,
+    {
+        let connection = self.connect_with_outbound(request, outbound)?;
+        connection.open().await?;
+        Ok(connection)
+    }
+
+    pub async fn emit_to_connection(
+        &self,
+        connection_id: u64,
+        message: WebSocketMessage,
+    ) -> Result<bool> {
+        let outbounds = self
+            .state
+            .outbound_for_connection(connection_id)?
+            .into_iter()
+            .collect();
+        Ok(send_to_outbounds(outbounds, message).await? > 0)
     }
 
     pub async fn dispatch(
@@ -555,26 +830,94 @@ pub trait WebSocketConnection: Send + Sync {
 #[derive(Clone)]
 pub struct WebSocketGatewayConnection {
     gateway: WebSocketGatewayDefinition,
+    id: u64,
     request: BootRequest,
+    outbound: Option<Arc<dyn WebSocketOutbound>>,
+    opened: Arc<AtomicBool>,
 }
 
 impl WebSocketGatewayConnection {
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
     pub fn request(&self) -> &BootRequest {
         &self.request
     }
 
+    pub fn namespace(&self) -> Option<&str> {
+        self.gateway.namespace()
+    }
+
+    pub fn rooms(&self) -> Result<Vec<String>> {
+        self.gateway.state.rooms_for_connection(self.id)
+    }
+
+    pub fn join(&self, room: impl Into<String>) -> Result<()> {
+        self.gateway.state.join(self.id, room)
+    }
+
+    pub fn leave(&self, room: impl Into<String>) -> Result<()> {
+        self.gateway.state.leave(self.id, room)
+    }
+
+    pub async fn emit(&self, message: WebSocketMessage) -> Result<bool> {
+        self.gateway.emit_to_connection(self.id, message).await
+    }
+
+    pub async fn broadcast(&self, message: WebSocketMessage) -> Result<usize> {
+        let outbounds = self.gateway.state.broadcast_targets(None, Some(self.id))?;
+        send_to_outbounds(outbounds, message).await
+    }
+
+    pub async fn broadcast_to_room(
+        &self,
+        room: impl Into<String>,
+        message: WebSocketMessage,
+    ) -> Result<usize> {
+        let room = normalize_room(room)?;
+        let outbounds = self
+            .gateway
+            .state
+            .broadcast_targets(Some(&room), Some(self.id))?;
+        send_to_outbounds(outbounds, message).await
+    }
+
     pub async fn open(&self) -> Result<()> {
-        for hook in &self.gateway.connection_hooks {
-            hook.handle_connection(self.clone()).await?;
+        if self.opened.swap(true, Ordering::AcqRel) {
+            return Ok(());
         }
-        Ok(())
+        self.gateway
+            .state
+            .register(self.id, self.outbound.clone())?;
+        let mut hook_result = Ok(());
+        for hook in &self.gateway.connection_hooks {
+            if let Err(error) = hook.handle_connection(self.clone()).await {
+                hook_result = Err(error);
+                break;
+            }
+        }
+        if hook_result.is_err() {
+            self.opened.store(false, Ordering::Release);
+            self.gateway.state.unregister(self.id)?;
+        }
+        hook_result
     }
 
     pub async fn close(&self) -> Result<()> {
-        for hook in self.gateway.disconnect_hooks.iter().rev() {
-            hook.handle_disconnect(self.clone()).await?;
+        if !self.opened.swap(false, Ordering::AcqRel) {
+            return Ok(());
         }
-        Ok(())
+        let mut hook_result = Ok(());
+        for hook in self.gateway.disconnect_hooks.iter().rev() {
+            if let Err(error) = hook.handle_disconnect(self.clone()).await {
+                hook_result = Err(error);
+                break;
+            }
+        }
+        let unregister_result = self.gateway.state.unregister(self.id);
+        hook_result?;
+        unregister_result
     }
 
     pub async fn dispatch(
