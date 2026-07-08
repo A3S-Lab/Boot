@@ -62,6 +62,8 @@ mod versioning;
 mod view;
 mod websocket;
 
+#[cfg(all(feature = "macros", feature = "session"))]
+pub use a3s_boot_macros::session;
 #[cfg(feature = "macros")]
 pub use a3s_boot_macros::{
     all, api_header, api_param, api_query, bearer_auth, body, catch, controller, delete,
@@ -187,7 +189,7 @@ pub use security::{
 pub use serialization::{SerializationInterceptor, SerializationOptions};
 #[cfg(feature = "session")]
 pub use session::{
-    InMemorySessionStore, SessionCookieInterceptor, SessionCookieSameSite, SessionManager,
+    InMemorySessionStore, Session, SessionCookieInterceptor, SessionCookieSameSite, SessionManager,
     SessionMiddleware, SessionModule, SessionOptions, SessionStore,
 };
 #[cfg(feature = "static")]

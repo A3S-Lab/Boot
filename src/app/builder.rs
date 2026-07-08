@@ -262,7 +262,7 @@ impl BootApplicationBuilder {
     pub fn use_global_session_module(mut self, module: SessionModule) -> Self {
         let manager = module.manager();
         self = self.use_global_sessions(manager);
-        self.modules.push(Arc::new(module));
+        self.modules.push(Arc::new(module.global()));
         self
     }
 

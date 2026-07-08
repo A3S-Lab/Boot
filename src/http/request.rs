@@ -185,6 +185,24 @@ impl BootRequest {
             .ok_or_else(|| BootError::Unauthorized("missing authenticated principal".to_string()))
     }
 
+    #[cfg(feature = "session")]
+    pub fn session(&self) -> Result<crate::Session> {
+        let manager = self.get::<crate::SessionManager>()?;
+        let session_id = manager.require_session_id(self)?;
+        crate::Session::from_manager_arc(manager, session_id)
+    }
+
+    #[cfg(feature = "session")]
+    pub fn optional_session(&self) -> Result<Option<crate::Session>> {
+        let Some(manager) = self.get_optional::<crate::SessionManager>()? else {
+            return Ok(None);
+        };
+        let Some(session_id) = manager.session_id(self)? else {
+            return Ok(None);
+        };
+        crate::Session::from_manager_arc(manager, session_id).map(Some)
+    }
+
     pub fn with_path_params(mut self, params: BTreeMap<String, String>) -> Self {
         self.params = params;
         self

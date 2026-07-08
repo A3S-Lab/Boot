@@ -772,9 +772,11 @@ Acceptance:
 - Security helpers can handle CORS preflight and actual response headers, add
   helmet-like response headers, reject invalid CSRF tokens on unsafe methods,
   and enforce in-memory fixed-window rate limits. (Covered)
-- Sessions can register a provider-backed `SessionManager`, bind session ids
-  before handlers, persist session cookies after handlers, and support
-  in-memory or custom stores. (Covered)
+- Sessions can register a provider-backed `SessionManager`, expose
+  request-bound `Session` handles through `BootRequest::session()` and
+  Nest-style `#[session]` arguments, bind session ids before handlers, persist
+  session cookies after handlers, and support in-memory or custom stores.
+  (Covered)
 - Response cookies can be written and expired through typed `BootResponse`
   helpers instead of hand-built `Set-Cookie` strings. (Covered)
 - Testing utilities can compile Nest-style testing modules, override providers

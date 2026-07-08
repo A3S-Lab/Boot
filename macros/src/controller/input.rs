@@ -106,6 +106,7 @@ pub(crate) enum Extractor {
     Headers,
     HostParam(SingleValueExtractor),
     Ip(Option<Expr>),
+    Session,
     UploadedFile(file_upload::UploadedFileExtractor),
     UploadedFiles(file_upload::UploadedFileExtractor),
     Custom(Expr),
@@ -153,6 +154,9 @@ impl Extractor {
             Self::HostParam(parse_single_value_extractor(attr, "host_param")?)
         } else if ident == "ip" {
             Self::Ip(parse_optional_pipe_only_extractor(attr, "ip")?)
+        } else if ident == "session" {
+            expect_no_extractor_args(attr, "session")?;
+            Self::Session
         } else if ident == "uploaded_file" {
             Self::UploadedFile(file_upload::parse_uploaded_file_extractor(
                 attr,

@@ -312,6 +312,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@Headers("x-request-id")` | `#[header("x-request-id")]` on a method argument |
 | `@Ip()` | `#[ip]` on a method argument |
 | `@Req()` | `#[request]` on a `BootRequest` argument |
+| `@Session()` | `#[session]` on a `Session` or `Option<Session>` argument |
 | `createParamDecorator(...)` | `#[extract(current_user)]` with a `RequestExtractor<T>` or function |
 | `@Sse("events")` | `#[sse("/events")]` on an async method returning an SSE event stream |
 | `@WebSocketGateway()` | `#[websocket_gateway("/ws")]` on an inherent `impl` block |
@@ -532,7 +533,9 @@ and DELETE route attributes default to JSON.
 Use extractor attributes on method arguments for Nest-style request binding:
 `#[param("id")]`, `#[params]`, `#[query]`, `#[query("name")]`, `#[body]`,
 `#[header("name")]`, `#[headers]`, `#[host_param("account")]`, `#[ip]`, and
-`#[request]`. Single-value extractors parse into the argument type with
+`#[request]`. With the `session` feature enabled, `#[session]` mirrors Nest's
+`@Session()` parameter decorator. Single-value extractors parse into the
+argument type with
 `FromStr`, so `#[param("id")] id: u64` and `#[query("active")] active: bool`
 work without a separate parse pipe. For custom Nest-style parameter pipes, add
 `pipe = <expr>` to `#[param]`, `#[query("name")]`, `#[header]`,
@@ -4413,29 +4416,57 @@ when session data exists.
 
 ```rust
 use a3s_boot::{
-    BootApplication, BootRequest, BootResponse, Result, RouteDefinition,
-    SessionManager, SessionModule, SessionOptions,
+    controller, get, injectable, module, post, session, BootApplication, Result, Session,
+    SessionModule, SessionOptions,
 };
 use std::time::Duration;
 
-fn app() -> Result<BootApplication> {
-    let sessions = SessionManager::in_memory(
-        SessionOptions::new()
-            .with_cookie_name("sid")
-            .with_ttl(Duration::from_secs(60 * 60)),
-    );
-    let login_sessions = sessions.clone();
+#[injectable]
+#[derive(Debug)]
+struct AuthController;
 
+#[controller("/auth")]
+impl AuthController {
+    #[post("/login")]
+    async fn login(&self, #[session] session: Session) -> Result<String> {
+        session.set("user_id", &"u1")?;
+        Ok("logged in".to_string())
+    }
+
+    #[get("/me")]
+    async fn me(&self, #[session] session: Option<Session>) -> Result<String> {
+        let Some(session) = session else {
+            return Ok("anonymous".to_string());
+        };
+        Ok(session
+            .get::<String>("user_id")?
+            .unwrap_or_else(|| "anonymous".to_string()))
+    }
+
+    #[post("/logout")]
+    async fn logout(&self, #[session] session: Session) -> Result<String> {
+        session.destroy()?;
+        Ok("logged out".to_string())
+    }
+}
+
+#[module(
+    name = "auth",
+    providers = [AuthController],
+    controllers = [AuthController],
+)]
+#[derive(Debug)]
+struct AuthModule;
+
+fn app() -> Result<BootApplication> {
     BootApplication::builder()
-        .use_global_session_module(SessionModule::from_manager("sessions", sessions))
-        .route(RouteDefinition::post("/login", move |request: BootRequest| {
-            let sessions = login_sessions.clone();
-            async move {
-                let session_id = sessions.require_session_id(&request)?;
-                sessions.set(&session_id, "user_id", &"u1")?;
-                Ok(BootResponse::text("logged in"))
-            }
-        })?)
+        .use_global_session_module(SessionModule::in_memory_with_options(
+            "sessions",
+            SessionOptions::new()
+                .with_cookie_name("sid")
+                .with_ttl(Duration::from_secs(60 * 60)),
+        ))
+        .import(AuthModule)
         .build()
 }
 ```
@@ -4443,7 +4474,9 @@ fn app() -> Result<BootApplication> {
 `SessionOptions` controls the cookie name, TTL, path, domain, `HttpOnly`,
 `Secure`, `SameSite`, and rolling-cookie behavior. The default store is
 in-memory for tests and single-process services; production adapters can provide
-a custom `SessionStore`.
+a custom `SessionStore`. Lower-level handlers can call `BootRequest::session()`
+or `BootRequest::optional_session()` directly when they are not using
+controller parameter macros.
 
 ## Params And Query
 

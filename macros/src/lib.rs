@@ -332,6 +332,11 @@ pub fn ip(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
+pub fn session(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    extractor_attribute_outside_controller("session", item)
+}
+
+#[proc_macro_attribute]
 pub fn uploaded_file(_attr: TokenStream, item: TokenStream) -> TokenStream {
     extractor_attribute_outside_controller("uploaded_file", item)
 }
