@@ -107,7 +107,8 @@ Implemented today:
 - Microservice transports with adapter-neutral `TransportMessage` /
   `TransportReply`, request-response and event-only message patterns,
   provider-backed handlers, validation helpers, transport pipes/guards/
-  interceptors, Nest-style message macros, and an in-process transport.
+  interceptors, Nest-style message macros, an in-process transport, and an
+  optional TCP transport for newline-delimited JSON message frames.
 - ACL-backed typed configuration modules with `ConfigModule`, named/global
   provider exports, environment/default function support, and validation hooks.
 - Typed cache modules with `CacheModule`, `Cache`, in-memory storage,
@@ -473,7 +474,7 @@ Status: implemented.
 
 Nest equivalent:
 
-- Redis, NATS, MQTT, RabbitMQ, Kafka, gRPC, and custom transports.
+- TCP, Redis, NATS, MQTT, RabbitMQ, Kafka, gRPC, and custom transports.
 - message pattern handlers.
 
 Tasks:
@@ -490,6 +491,8 @@ Tasks:
 - Start with an in-process test transport before external brokers.
   (Implemented with `InProcessTransport`)
 - Add one production transport only after the core contract is stable.
+  (Implemented first with optional `TcpTransport`; broker transports remain
+  future companion features.)
 
 Acceptance:
 
@@ -585,8 +588,8 @@ framework capability. Keep GraphQL out of scope.
 
 Suggested implementation sequence:
 
-1. Add the first production message transport now that the async provider
-   contract is stable.
+1. Add the next production message transport, such as Redis or NATS, now that
+   the async provider contract and TCP transport contract are stable.
 2. Continue defining integrations through providers, middleware, guards,
    interceptors, or adapters instead of adding one-off framework hooks.
 3. Add crate-local tests and README examples for each chosen framework module.

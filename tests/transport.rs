@@ -4,9 +4,15 @@ use a3s_boot::{
     MessageTransport, Module, ModuleRef, ProviderDefinition, Result, TransportContext,
     TransportInterceptor, TransportMessage, TransportReply, Validate,
 };
+#[cfg(feature = "tcp-transport")]
+use a3s_boot::{TcpTransport, TcpTransportClient};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
+#[cfg(feature = "tcp-transport")]
+use tokio::net::TcpListener;
+#[cfg(feature = "tcp-transport")]
+use tokio::time::{sleep, Duration};
 
 #[derive(Debug)]
 struct TransportCatsService;
@@ -318,6 +324,111 @@ async fn in_process_transport_builds_a_message_client() {
     assert_eq!(reply.data_as::<NumberPayload>().unwrap().value, 14);
 }
 
+#[cfg(feature = "tcp-transport")]
+#[tokio::test]
+async fn tcp_transport_round_trips_request_response_messages() {
+    let app = BootApplication::builder()
+        .message_pattern(
+            MessagePatternDefinition::request_json(
+                "math.double",
+                |payload: NumberPayload| async move {
+                    Ok(NumberPayload {
+                        value: payload.value * 2,
+                    })
+                },
+            )
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+    let addr = unused_tcp_addr().await;
+    let transport = TcpTransport::new(addr);
+    let server = tokio::spawn({
+        let app = app.clone();
+        async move { transport.serve(app).await }
+    });
+    let client = TcpTransport::new(addr).build(app).unwrap();
+
+    let reply = send_tcp_with_retry(
+        &client,
+        TransportMessage::json("math.double", &NumberPayload { value: 12 }).unwrap(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(reply.data_as::<NumberPayload>().unwrap().value, 24);
+    server.abort();
+}
+
+#[cfg(feature = "tcp-transport")]
+#[tokio::test]
+async fn tcp_transport_emits_event_messages() {
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let event_log = Arc::clone(&observed);
+    let app = BootApplication::builder()
+        .message_pattern(
+            MessagePatternDefinition::event_json("math.observed", move |payload: NumberPayload| {
+                let event_log = Arc::clone(&event_log);
+                async move {
+                    event_log.lock().unwrap().push(payload.value);
+                    Ok(())
+                }
+            })
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+    let addr = unused_tcp_addr().await;
+    let transport = TcpTransport::new(addr);
+    let server = tokio::spawn({
+        let app = app.clone();
+        async move { transport.serve(app).await }
+    });
+    let client = TcpTransport::new(addr).build(app).unwrap();
+
+    send_tcp_with_retry(
+        &client,
+        TransportMessage::json("math.observed", &NumberPayload { value: 7 }).unwrap(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(observed.lock().unwrap().as_slice(), [7]);
+    server.abort();
+}
+
+#[cfg(feature = "tcp-transport")]
+#[tokio::test]
+async fn tcp_transport_maps_handler_errors_to_client_errors() {
+    let app = BootApplication::builder()
+        .message_pattern(
+            MessagePatternDefinition::request("math.fail", |_message: TransportMessage| async {
+                Err::<TransportReply, BootError>(BootError::BadRequest("invalid math".to_string()))
+            })
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+    let addr = unused_tcp_addr().await;
+    let transport = TcpTransport::new(addr);
+    let server = tokio::spawn({
+        let app = app.clone();
+        async move { transport.serve(app).await }
+    });
+    let client = TcpTransport::new(addr).build(app).unwrap();
+
+    let error = send_tcp_with_retry(
+        &client,
+        TransportMessage::new("math.fail", json!({ "value": 1 })),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(error, BootError::BadRequest(message) if message == "invalid math"));
+    server.abort();
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 struct NumberPayload {
     value: i32,
@@ -421,4 +532,37 @@ impl TransportInterceptor for TraceTransportInterceptor {
             Ok(reply)
         })
     }
+}
+
+#[cfg(feature = "tcp-transport")]
+async fn unused_tcp_addr() -> std::net::SocketAddr {
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    addr
+}
+
+#[cfg(feature = "tcp-transport")]
+async fn send_tcp_with_retry(
+    client: &TcpTransportClient,
+    message: TransportMessage,
+) -> Result<Option<TransportReply>> {
+    let mut last_refused = None;
+    for _ in 0..50 {
+        match client.send(message.clone()).await {
+            Ok(reply) => return Ok(reply),
+            Err(BootError::Io(error)) if error.kind() == std::io::ErrorKind::ConnectionRefused => {
+                last_refused = Some(error);
+                sleep(Duration::from_millis(10)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_refused.map_or_else(
+        || BootError::Adapter("tcp transport did not start".to_string()),
+        BootError::Io,
+    ))
 }

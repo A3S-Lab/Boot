@@ -83,6 +83,16 @@ serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
+Enable the optional TCP microservice transport when services need
+newline-delimited JSON message patterns over a network socket:
+
+```toml
+[dependencies]
+a3s-boot = { version = "0.1", features = ["tcp-transport"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
 Enable the optional structured logger module when the application needs
 provider-backed logging without forcing a concrete backend:
 
@@ -928,7 +938,8 @@ Microservice message patterns mirror Nest's `@MessagePattern()` and
 `@EventPattern()` style. The core is adapter-neutral: messages are JSON-like
 `TransportMessage` values with a `pattern` and `data`, and external brokers can
 implement `MessageTransport`. `InProcessTransport` is included for tests,
-workers, and single-process dispatch.
+workers, and single-process dispatch. Enable the `tcp-transport` feature to use
+`TcpTransport` for newline-delimited JSON messages over TCP.
 
 ```rust
 use std::sync::Arc;
@@ -939,12 +950,12 @@ use a3s_boot::{
 };
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct FindCatMessage {
     id: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct CatDto {
     id: String,
     name: String,
@@ -1058,6 +1069,44 @@ async fn dispatch() -> Result<()> {
 Transport-specific `TransportPipe`, `TransportGuard`, and
 `TransportInterceptor` hooks run in deterministic order: guards, interceptor
 `before`, pipes, validation, handler, then interceptor `after` in reverse order.
+
+With `tcp-transport`, the same message patterns can be served over a network
+socket:
+
+```rust
+use std::net::SocketAddr;
+
+use a3s_boot::{BootFactory, Result, TcpTransport, TcpTransportClient, TransportMessage};
+
+async fn run_tcp_microservice() -> Result<()> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], 4001));
+    let transport = TcpTransport::new(addr);
+    let mut service = BootFactory::create_microservice(CatsModule, transport)?;
+    service.listen().await
+}
+
+async fn call_tcp_microservice() -> Result<()> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], 4001));
+    let client = TcpTransportClient::new(addr);
+    let reply = client
+        .send(TransportMessage::json(
+            "cat.find",
+            &FindCatMessage {
+                id: "milo".to_string(),
+            },
+        )?)
+        .await?
+        .unwrap();
+
+    assert_eq!(reply.data_as::<CatDto>()?.name, "Milo");
+    Ok(())
+}
+```
+
+The wire format is one UTF-8 JSON frame per line. Clients send a
+`TransportMessage` such as `{"pattern":"cat.find","data":{"id":"1"}}`; servers
+reply with a `reply`, `no_reply`, or `error` envelope. Handler errors are mapped
+back into the closest `BootError` variant on the client.
 
 ## Application Events
 

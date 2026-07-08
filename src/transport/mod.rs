@@ -9,6 +9,12 @@ use std::future::Future;
 use std::ops::Deref;
 use std::sync::Arc;
 
+#[cfg(feature = "tcp-transport")]
+mod tcp;
+
+#[cfg(feature = "tcp-transport")]
+pub use tcp::{TcpTransport, TcpTransportClient, TcpTransportOptions};
+
 /// Adapter-neutral microservice transport message.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TransportMessage {

@@ -147,6 +147,8 @@ pub use transport::{
     MessagePatternKind, MessageTransport, TransportContext, TransportGuard, TransportInterceptor,
     TransportMessage, TransportPipe, TransportReply,
 };
+#[cfg(feature = "tcp-transport")]
+pub use transport::{TcpTransport, TcpTransportClient, TcpTransportOptions};
 pub use validation::Validate;
 pub(crate) use validation::{
     body_validator, params_validator, query_validator, validate_value, RequestValidator,
