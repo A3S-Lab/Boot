@@ -319,7 +319,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@UseGuards(AuthGuard)` | `#[use_guard(AuthGuard)]` on a controller impl or route method |
 | `@UseInterceptors(TraceInterceptor)` | `#[use_interceptor(TraceInterceptor)]` on a controller impl or route method |
 | `@UseFilters(HttpErrorFilter)` | `#[use_filter(HttpErrorFilter)]` on a controller impl or route method |
-| `@Catch(BadRequestException)` | `catch_errors([BootErrorKind::BadRequest], BadRequestFilter)` inside `#[use_filter(...)]` or `with_catch_filter(...)` |
+| `@Catch(BadRequestException)` | `#[catch(BadRequest)]` on a filter struct, used through `BadRequestFilter::catch_filter()` |
 | `@UsePipes(ParsePipe)` | `#[use_pipe(ParsePipe)]` on a controller impl or route method |
 | `@UsePipes(new ValidationPipe())` | `#[validate]` on a controller impl or route method for DTO validation |
 | `@SetMetadata("roles", ["admin"])` | `#[metadata("roles", ["admin"])]` below `#[controller]` or on a route method |
@@ -536,6 +536,40 @@ async fn find(
     #[query("page", pipe = parse_page)] page: Option<u16>,
 ) -> Result<CatDto> {
     self.cats.find(id, page).await
+}
+```
+
+For Nest-style exception filters, put `#[catch(...)]` on the filter struct. The
+macro accepts `BootErrorKind` variants, either fully qualified or by variant
+name, and generates `catch_filter()` for `Default` filters plus
+`catch_filter_with(...)` for configured filter values:
+
+```rust
+#[a3s_boot::catch(BadRequest)]
+#[derive(Default)]
+struct BadRequestFilter;
+
+impl a3s_boot::ExceptionFilter for BadRequestFilter {
+    fn catch(
+        &self,
+        _context: a3s_boot::ExecutionContext,
+        error: a3s_boot::BootError,
+    ) -> a3s_boot::BoxFuture<'static, a3s_boot::Result<Option<a3s_boot::BootResponse>>> {
+        Box::pin(async move {
+            Ok(Some(
+                a3s_boot::BootResponse::text(error.to_string()).with_status(400),
+            ))
+        })
+    }
+}
+
+#[a3s_boot::controller("/cats")]
+impl CatsController {
+    #[a3s_boot::get("/filtered")]
+    #[a3s_boot::use_filter(BadRequestFilter::catch_filter())]
+    async fn filtered(&self) -> Result<CatDto> {
+        Err(a3s_boot::BootError::BadRequest("invalid cat".to_string()))
+    }
 }
 ```
 
@@ -3355,10 +3389,11 @@ with `body_text()` and `body_json()`, or check status classes with helpers like
 header name/value checks in adapter order; the individual `validate_status()`,
 `validate_content_length()`, `validate_body_allowed()`, and `validate_headers()`
 helpers remain available for focused checks. Error responses can reuse the
-framework's standard HTTP error mapping. `BootErrorKind` and
-`catch_errors(...)` provide Nest-style catch filters for selected error kinds;
-use `with_catch_filter(...)` or `#[use_filter(catch_errors(...))]` when a filter
-should only handle errors such as `BootErrorKind::BadRequest`. Routes can also
+framework's standard HTTP error mapping. `BootErrorKind`, `catch_errors(...)`,
+and `#[catch(...)]` provide Nest-style catch filters for selected error kinds;
+use `with_catch_filter(...)` for builder-style routes or
+`#[use_filter(BadRequestFilter::catch_filter())]` for decorator-style
+controllers. Routes can also
 attach static response headers or redirect successful handler results
 declaratively, mirroring Nest's `@Header()` and `@Redirect()` decorators while
 keeping the behavior adapter-neutral:

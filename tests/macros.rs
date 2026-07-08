@@ -4,9 +4,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use a3s_boot::{
-    controller, injectable, ApiVersioning, BootApplication, BootError, BootRequest, BootResponse,
-    BoxFuture, ControllerDefinition, ExceptionFilter, ExecutionContext, Guard, Interceptor, Module,
-    ModuleRef, OpenApiInfo, Pipe, ProviderToken, Result, SseEvent, SseStream,
+    controller, injectable, ApiVersioning, BootApplication, BootError, BootErrorKind, BootRequest,
+    BootResponse, BoxFuture, ControllerDefinition, ExceptionFilter, ExecutionContext, Guard,
+    Interceptor, Module, ModuleRef, OpenApiInfo, Pipe, ProviderToken, Result, SseEvent, SseStream,
     StringTemplateViewEngine, TransportMessage, TransportReply, Validate, ViewModule,
     WebSocketMessage,
 };
@@ -520,6 +520,8 @@ impl Pipe for MacroRequestPipe {
     }
 }
 
+#[a3s_boot::catch(BadRequest)]
+#[derive(Default)]
 struct MacroBadRequestFilter;
 
 impl ExceptionFilter for MacroBadRequestFilter {
@@ -558,9 +560,15 @@ impl MacroPipelineController {
     }
 
     #[get("/filtered")]
-    #[use_filter(MacroBadRequestFilter)]
+    #[use_filter(MacroBadRequestFilter::catch_filter())]
     async fn filtered(&self) -> Result<String> {
         Err(BootError::BadRequest("macro filter".to_string()))
+    }
+
+    #[get("/unfiltered")]
+    #[use_filter(MacroBadRequestFilter::catch_filter())]
+    async fn unfiltered(&self) -> Result<String> {
+        Err(BootError::Unauthorized("macro private".to_string()))
     }
 }
 
@@ -1246,6 +1254,19 @@ async fn macro_pipeline_decorators_register_controller_and_route_hooks() {
         filtered.body_text().unwrap(),
         "/macro-pipeline/filtered: bad request: macro filter"
     );
+    assert_eq!(
+        MacroBadRequestFilter::caught_kinds(),
+        [BootErrorKind::BadRequest]
+    );
+
+    let unfiltered = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-pipeline/unfiltered",
+        ))
+        .await
+        .unwrap_err();
+    assert!(matches!(unfiltered, BootError::Unauthorized(message) if message == "macro private"));
 }
 
 #[tokio::test]

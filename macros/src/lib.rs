@@ -50,6 +50,21 @@ pub fn module(attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
+pub fn catch(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let args = parse_macro_input!(attr as CatchArgs);
+    let item = parse_macro_input!(item as Item);
+
+    match item {
+        Item::Struct(item_struct) => expand_catch(args, item_struct)
+            .unwrap_or_else(syn::Error::into_compile_error)
+            .into(),
+        item => syn::Error::new_spanned(item, "#[catch] can only be used on structs")
+            .to_compile_error()
+            .into(),
+    }
+}
+
+#[proc_macro_attribute]
 pub fn controller(attr: TokenStream, item: TokenStream) -> TokenStream {
     let prefix = parse_macro_input!(attr as LitStr);
     let item_impl = parse_macro_input!(item as ItemImpl);
@@ -600,6 +615,85 @@ fn expand_module(
             }
         }
     })
+}
+
+fn expand_catch(args: CatchArgs, item_struct: syn::ItemStruct) -> Result<proc_macro2::TokenStream> {
+    let ident = &item_struct.ident;
+    let catch_kinds = catch_kinds_token(&args.kinds);
+    let catch_kinds_for_default = catch_kinds_token(&args.kinds);
+    let caught_kinds = args.kinds.iter().map(catch_kind_token);
+    let (impl_generics, ty_generics, where_clause) = item_struct.generics.split_for_impl();
+
+    Ok(quote! {
+        #item_struct
+
+        impl #impl_generics #ident #ty_generics #where_clause {
+            pub fn catch_filter() -> ::a3s_boot::CatchFilter<Self>
+            where
+                Self: ::std::default::Default + ::a3s_boot::ExceptionFilter,
+            {
+                ::a3s_boot::catch_errors(#catch_kinds_for_default, Self::default())
+            }
+
+            pub fn catch_filter_with(filter: Self) -> ::a3s_boot::CatchFilter<Self>
+            where
+                Self: ::a3s_boot::ExceptionFilter,
+            {
+                ::a3s_boot::catch_errors(#catch_kinds, filter)
+            }
+
+            pub fn caught_kinds() -> ::std::vec::Vec<::a3s_boot::BootErrorKind> {
+                ::std::vec![#(#caught_kinds),*]
+            }
+        }
+    })
+}
+
+fn catch_kinds_token(kinds: &[Expr]) -> proc_macro2::TokenStream {
+    if kinds.is_empty() {
+        return quote!(::std::iter::empty::<::a3s_boot::BootErrorKind>());
+    }
+
+    let kinds = kinds.iter().map(catch_kind_token);
+    quote!([#(#kinds),*])
+}
+
+fn catch_kind_token(expr: &Expr) -> proc_macro2::TokenStream {
+    if let Expr::Path(path) = expr {
+        if path.qself.is_none() && path.path.segments.len() == 1 {
+            let ident = &path.path.segments[0].ident;
+            if is_boot_error_kind_ident(ident) {
+                return quote!(::a3s_boot::BootErrorKind::#ident);
+            }
+        }
+    }
+
+    quote!(#expr)
+}
+
+fn is_boot_error_kind_ident(ident: &Ident) -> bool {
+    matches!(
+        ident.to_string().as_str(),
+        "EmptyModuleName"
+            | "InvalidRoutePath"
+            | "InvalidHostPattern"
+            | "DuplicateRoute"
+            | "NotFound"
+            | "MethodNotAllowed"
+            | "DuplicateProvider"
+            | "MissingProvider"
+            | "ProviderTypeMismatch"
+            | "Forbidden"
+            | "Unauthorized"
+            | "BadRequest"
+            | "PayloadTooLarge"
+            | "UnsupportedMediaType"
+            | "NotAcceptable"
+            | "TooManyRequests"
+            | "Adapter"
+            | "Internal"
+            | "Io"
+    )
 }
 
 fn provider_registration_token(expr: &Expr) -> proc_macro2::TokenStream {
@@ -3269,6 +3363,20 @@ fn parse_module_export_array(input: ParseStream<'_>) -> Result<Vec<ModuleExportS
             .into_iter()
             .collect(),
     )
+}
+
+struct CatchArgs {
+    kinds: Vec<Expr>,
+}
+
+impl Parse for CatchArgs {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        Ok(Self {
+            kinds: Punctuated::<Expr, Token![,]>::parse_terminated(input)?
+                .into_iter()
+                .collect(),
+        })
+    }
 }
 
 #[derive(Default)]
