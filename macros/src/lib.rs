@@ -2428,11 +2428,16 @@ fn extractor_tokens(arg: MethodArg, extractor: Extractor) -> proc_macro2::TokenS
             let #ident: #ty = __a3s_boot_request.params::<#ty>()?;
         },
         Extractor::Param(spec) => {
-            let SingleValueExtractor { name, pipe } = spec;
+            let SingleValueExtractor {
+                name,
+                pipe,
+                default,
+            } = spec;
             single_value_extractor_tokens(
                 ident,
                 ty,
                 pipe,
+                default,
                 |value_ty| quote!(__a3s_boot_request.param_as::<#value_ty>(#name)),
                 |value_ty| quote!(__a3s_boot_request.optional_param_as::<#value_ty>(#name)),
             )
@@ -2443,6 +2448,7 @@ fn extractor_tokens(arg: MethodArg, extractor: Extractor) -> proc_macro2::TokenS
                     ident,
                     ty,
                     spec.pipe,
+                    spec.default,
                     |value_ty| quote!(__a3s_boot_request.query_value_as::<#value_ty>(#name)),
                     |value_ty| quote!(__a3s_boot_request.optional_query_value_as::<#value_ty>(#name)),
                 )
@@ -2453,11 +2459,16 @@ fn extractor_tokens(arg: MethodArg, extractor: Extractor) -> proc_macro2::TokenS
             }
         }
         Extractor::Header(spec) => {
-            let SingleValueExtractor { name, pipe } = spec;
+            let SingleValueExtractor {
+                name,
+                pipe,
+                default,
+            } = spec;
             single_value_extractor_tokens(
                 ident,
                 ty,
                 pipe,
+                default,
                 |value_ty| quote!(__a3s_boot_request.header_as::<#value_ty>(#name)),
                 |value_ty| quote!(__a3s_boot_request.optional_header_as::<#value_ty>(#name)),
             )
@@ -2466,11 +2477,16 @@ fn extractor_tokens(arg: MethodArg, extractor: Extractor) -> proc_macro2::TokenS
             let #ident: #ty = __a3s_boot_request.headers.clone();
         },
         Extractor::HostParam(spec) => {
-            let SingleValueExtractor { name, pipe } = spec;
+            let SingleValueExtractor {
+                name,
+                pipe,
+                default,
+            } = spec;
             single_value_extractor_tokens(
                 ident,
                 ty,
                 pipe,
+                default,
                 |value_ty| quote!(__a3s_boot_request.host_param_as::<#value_ty>(#name)),
                 |value_ty| quote!(__a3s_boot_request.optional_host_param_as::<#value_ty>(#name)),
             )
@@ -2479,6 +2495,7 @@ fn extractor_tokens(arg: MethodArg, extractor: Extractor) -> proc_macro2::TokenS
             ident,
             ty,
             pipe,
+            None,
             |value_ty| quote!(__a3s_boot_request.ip_as::<#value_ty>()),
             |value_ty| quote!(__a3s_boot_request.optional_ip_as::<#value_ty>()),
         ),
@@ -2492,6 +2509,7 @@ fn single_value_extractor_tokens<Required, Optional>(
     ident: Ident,
     ty: Box<Type>,
     pipe: Option<Expr>,
+    default: Option<Expr>,
     required: Required,
     optional: Optional,
 ) -> proc_macro2::TokenStream
@@ -2502,16 +2520,49 @@ where
     if let Some(pipe) = pipe {
         if let Some(inner) = option_inner_type(&ty) {
             let value = optional(&parse_string_type());
+            if let Some(default) = default {
+                quote! {
+                    let #ident: #ty = match #value? {
+                        Some(__a3s_boot_value) => {
+                            Some(::a3s_boot::transform_request_value::<String, #inner, _>(
+                                __a3s_boot_value,
+                                #pipe,
+                            )?)
+                        }
+                        None => {
+                            Some(::a3s_boot::transform_request_value::<String, #inner, _>(
+                                ::std::string::ToString::to_string(&(#default)),
+                                #pipe,
+                            )?)
+                        }
+                    };
+                }
+            } else {
+                quote! {
+                    let #ident: #ty = match #value? {
+                        Some(__a3s_boot_value) => {
+                            Some(::a3s_boot::transform_request_value::<String, #inner, _>(
+                                __a3s_boot_value,
+                                #pipe,
+                            )?)
+                        }
+                        None => None,
+                    };
+                }
+            }
+        } else if let Some(default) = default {
+            let value = optional(&parse_string_type());
             quote! {
-                let #ident: #ty = match #value? {
+                let __a3s_boot_value = match #value? {
                     Some(__a3s_boot_value) => {
-                        Some(::a3s_boot::transform_request_value::<String, #inner, _>(
-                            __a3s_boot_value,
-                            #pipe,
-                        )?)
+                        __a3s_boot_value
                     }
-                    None => None,
+                    None => ::std::string::ToString::to_string(&(#default)),
                 };
+                let #ident: #ty = ::a3s_boot::transform_request_value::<String, #ty, _>(
+                    __a3s_boot_value,
+                    #pipe,
+                )?;
             }
         } else {
             let value = required(&parse_string_type());
@@ -2524,8 +2575,25 @@ where
         }
     } else if let Some(inner) = option_inner_type(&ty) {
         let value = optional(&inner);
+        if let Some(default) = default {
+            quote! {
+                let #ident: #ty = match #value? {
+                    Some(__a3s_boot_value) => Some(__a3s_boot_value),
+                    None => Some(#default),
+                };
+            }
+        } else {
+            quote! {
+                let #ident: #ty = #value?;
+            }
+        }
+    } else if let Some(default) = default {
+        let value = optional(&ty);
         quote! {
-            let #ident: #ty = #value?;
+            let #ident: #ty = match #value? {
+                Some(__a3s_boot_value) => __a3s_boot_value,
+                None => #default,
+            };
         }
     } else {
         let value = required(&ty);
@@ -2559,9 +2627,10 @@ fn single_value_extractor_schema(ty: &Type, pipe: Option<&Expr>) -> proc_macro2:
 fn single_value_extractor_required_schema(
     ty: &Type,
     pipe: Option<&Expr>,
+    default: Option<&Expr>,
 ) -> (bool, proc_macro2::TokenStream) {
     (
-        single_value_extractor_required(ty),
+        default.is_none() && single_value_extractor_required(ty),
         single_value_extractor_schema(ty, pipe),
     )
 }
@@ -2570,6 +2639,7 @@ fn single_value_extractor_openapi_tokens(
     name: &LitStr,
     ty: &Type,
     pipe: Option<&Expr>,
+    default: Option<&Expr>,
     kind: SingleValueOpenApiKind,
 ) -> proc_macro2::TokenStream {
     match kind {
@@ -2580,13 +2650,13 @@ fn single_value_extractor_openapi_tokens(
             }
         }
         SingleValueOpenApiKind::Query => {
-            let (required, schema) = single_value_extractor_required_schema(ty, pipe);
+            let (required, schema) = single_value_extractor_required_schema(ty, pipe, default);
             quote! {
                 with_query_parameter(#name, #required, #schema)
             }
         }
         SingleValueOpenApiKind::Header => {
-            let (required, schema) = single_value_extractor_required_schema(ty, pipe);
+            let (required, schema) = single_value_extractor_required_schema(ty, pipe, default);
             quote! {
                 with_header_parameter(#name, #required, #schema)
             }
@@ -2664,6 +2734,7 @@ fn extractor_openapi_tokens(
                 &spec.name,
                 &arg.ty,
                 spec.pipe.as_ref(),
+                spec.default.as_ref(),
                 SingleValueOpenApiKind::Path,
             )),
             Extractor::Query(spec) => {
@@ -2672,6 +2743,7 @@ fn extractor_openapi_tokens(
                         name,
                         &arg.ty,
                         spec.pipe.as_ref(),
+                        spec.default.as_ref(),
                         SingleValueOpenApiKind::Query,
                     ));
                 }
@@ -2680,6 +2752,7 @@ fn extractor_openapi_tokens(
                 &spec.name,
                 &arg.ty,
                 spec.pipe.as_ref(),
+                spec.default.as_ref(),
                 SingleValueOpenApiKind::Header,
             )),
             Extractor::Request
@@ -4920,12 +4993,14 @@ enum Extractor {
 struct SingleValueExtractor {
     name: LitStr,
     pipe: Option<Expr>,
+    default: Option<Expr>,
 }
 
 #[derive(Clone)]
 struct QueryExtractor {
     name: Option<LitStr>,
     pipe: Option<Expr>,
+    default: Option<Expr>,
 }
 
 impl Extractor {
@@ -5010,11 +5085,12 @@ fn parse_single_value_extractor(attr: &Attribute, name: &str) -> Result<SingleVa
         .map(|args| SingleValueExtractor {
             name: args.name,
             pipe: args.pipe,
+            default: args.default,
         })
         .map_err(|_| {
             syn::Error::new_spanned(
                 attr,
-                format!("#[{name}] requires a string literal and optional `pipe = <expr>`"),
+                format!("#[{name}] requires a string literal and optional `pipe = <expr>` or `default = <expr>`"),
             )
         })
 }
@@ -5024,17 +5100,19 @@ fn parse_query_extractor(attr: &Attribute) -> Result<QueryExtractor> {
         syn::Meta::Path(_) => Ok(QueryExtractor {
             name: None,
             pipe: None,
+            default: None,
         }),
         _ => attr
             .parse_args::<SingleValueExtractorArgs>()
             .map(|args| QueryExtractor {
                 name: Some(args.name),
                 pipe: args.pipe,
+                default: args.default,
             })
             .map_err(|_| {
                 syn::Error::new_spanned(
                     attr,
-                    "#[query] accepts no arguments for a DTO or a string literal and optional `pipe = <expr>` for one value",
+                    "#[query] accepts no arguments for a DTO or a string literal and optional `pipe = <expr>` or `default = <expr>` for one value",
                 )
             }),
     }
@@ -5058,13 +5136,18 @@ fn parse_optional_pipe_only_extractor(attr: &Attribute, name: &str) -> Result<Op
 struct SingleValueExtractorArgs {
     name: LitStr,
     pipe: Option<Expr>,
+    default: Option<Expr>,
 }
 
 impl Parse for SingleValueExtractorArgs {
     fn parse(input: ParseStream<'_>) -> Result<Self> {
         let name = input.parse::<LitStr>()?;
-        let pipe = parse_optional_pipe_arg(input)?;
-        Ok(Self { name, pipe })
+        let (pipe, default) = parse_optional_value_options(input)?;
+        Ok(Self {
+            name,
+            pipe,
+            default,
+        })
     }
 }
 
@@ -5079,8 +5162,9 @@ impl Parse for PipeOnlyExtractorArgs {
     }
 }
 
-fn parse_optional_pipe_arg(input: ParseStream<'_>) -> Result<Option<Expr>> {
+fn parse_optional_value_options(input: ParseStream<'_>) -> Result<(Option<Expr>, Option<Expr>)> {
     let mut pipe = None;
+    let mut default = None;
 
     while !input.is_empty() {
         input.parse::<Token![,]>()?;
@@ -5088,17 +5172,27 @@ fn parse_optional_pipe_arg(input: ParseStream<'_>) -> Result<Option<Expr>> {
             break;
         }
         let ident = input.parse::<Ident>()?;
-        if ident != "pipe" {
-            return Err(syn::Error::new_spanned(ident, "expected `pipe`"));
+        if ident == "pipe" {
+            if pipe.is_some() {
+                return Err(syn::Error::new_spanned(ident, "duplicate `pipe` option"));
+            }
+            input.parse::<Token![=]>()?;
+            pipe = Some(input.parse::<Expr>()?);
+        } else if ident == "default" {
+            if default.is_some() {
+                return Err(syn::Error::new_spanned(ident, "duplicate `default` option"));
+            }
+            input.parse::<Token![=]>()?;
+            default = Some(input.parse::<Expr>()?);
+        } else {
+            return Err(syn::Error::new_spanned(
+                ident,
+                "expected `pipe` or `default`",
+            ));
         }
-        if pipe.is_some() {
-            return Err(syn::Error::new_spanned(ident, "duplicate `pipe` option"));
-        }
-        input.parse::<Token![=]>()?;
-        pipe = Some(input.parse::<Expr>()?);
     }
 
-    Ok(pipe)
+    Ok((pipe, default))
 }
 
 fn parse_required_pipe_arg(input: ParseStream<'_>) -> Result<Expr> {

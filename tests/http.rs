@@ -1,11 +1,40 @@
 use a3s_boot::{
-    BootError, BootErrorKind, BootRequest, BootResponse, CookieOptions, CookieSameSite, HttpMethod,
-    SseEvent, StreamableFile, StreamableFileOptions,
+    BootError, BootErrorKind, BootRequest, BootResponse, CookieOptions, CookieSameSite,
+    DefaultValuePipe, HttpMethod, ParseBoolPipe, ParseFloatPipe, ParseIntPipe, SseEvent,
+    StreamableFile, StreamableFileOptions,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::time::Duration;
+
+#[test]
+fn built_in_request_value_pipes_parse_and_default_values() {
+    assert_eq!(
+        a3s_boot::transform_request_value::<String, u16, _>("42".to_string(), ParseIntPipe)
+            .unwrap(),
+        42
+    );
+    assert!(
+        a3s_boot::transform_request_value::<String, u16, _>("cat".to_string(), ParseIntPipe)
+            .is_err()
+    );
+    assert!(a3s_boot::transform_request_value::<String, bool, _>(
+        "true".to_string(),
+        ParseBoolPipe
+    )
+    .unwrap());
+    assert_eq!(
+        a3s_boot::transform_request_value::<String, f64, _>("1.25".to_string(), ParseFloatPipe)
+            .unwrap(),
+        1.25
+    );
+    assert_eq!(
+        a3s_boot::transform_request_value::<Option<u8>, u8, _>(None, DefaultValuePipe::new(3))
+            .unwrap(),
+        3
+    );
+}
 
 #[test]
 fn http_methods_display_and_parse_canonical_names() {

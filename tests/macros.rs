@@ -6,9 +6,9 @@ use std::sync::Arc;
 use a3s_boot::{
     controller, injectable, ApiVersioning, BootApplication, BootError, BootErrorKind, BootRequest,
     BootResponse, BoxFuture, ControllerDefinition, ExceptionFilter, ExecutionContext, Guard,
-    Interceptor, Module, ModuleRef, OpenApiInfo, Pipe, ProviderToken, Result, SseEvent, SseStream,
-    StringTemplateViewEngine, TransportMessage, TransportReply, Validate, ViewModule,
-    WebSocketMessage,
+    Interceptor, Module, ModuleRef, OpenApiInfo, ParseBoolPipe, ParseFloatPipe, ParseIntPipe, Pipe,
+    ProviderToken, Result, SseEvent, SseStream, StringTemplateViewEngine, TransportMessage,
+    TransportReply, Validate, ViewModule, WebSocketMessage,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -229,6 +229,29 @@ impl MacroCatsController {
         Ok(MacroCatDto {
             id: id.0,
             name: format!("{kind}:{page}"),
+        })
+    }
+
+    #[get("/builtin-pipes/{id}")]
+    async fn builtin_pipes(
+        &self,
+        #[param("id", pipe = ParseIntPipe)] id: u64,
+        #[query("active", pipe = ParseBoolPipe)] active: bool,
+        #[query("ratio", pipe = ParseFloatPipe)] ratio: Option<f64>,
+        #[query("page", default = 1, pipe = ParseIntPipe)] page: u16,
+        #[header("x-retry", default = 3, pipe = ParseIntPipe)] retry: u8,
+    ) -> Result<MacroCatDto> {
+        Ok(MacroCatDto {
+            id: id.to_string(),
+            name: format!(
+                "{}:{}:{}:{}",
+                active,
+                ratio
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "none".to_string()),
+                page,
+                retry
+            ),
         })
     }
 
@@ -717,7 +740,7 @@ async fn macros_register_injectable_services_and_controller_routes() {
         .build()
         .unwrap();
 
-    assert_eq!(app.routes().len(), 16);
+    assert_eq!(app.routes().len(), 17);
     assert_eq!(app.gateways().len(), 1);
     assert_eq!(app.message_patterns().len(), 3);
     let exports = MacroCatsModule.exports().unwrap();
@@ -851,6 +874,52 @@ async fn macros_register_injectable_services_and_controller_routes() {
         .unwrap_err();
     assert!(
         matches!(invalid_piped_page, BootError::BadRequest(message) if message == "page must be greater than zero")
+    );
+
+    let builtin_pipes = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-cats/builtin-pipes/42?active=true",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        builtin_pipes.body_json::<MacroCatDto>().unwrap(),
+        MacroCatDto {
+            id: "42".to_string(),
+            name: "true:none:1:3".to_string(),
+        }
+    );
+
+    let builtin_pipes_with_values = app
+        .call(
+            BootRequest::new(
+                a3s_boot::HttpMethod::Get,
+                "/macro-cats/builtin-pipes/99?active=0&ratio=1.5&page=7",
+            )
+            .with_header("x-retry", "2"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        builtin_pipes_with_values
+            .body_json::<MacroCatDto>()
+            .unwrap(),
+        MacroCatDto {
+            id: "99".to_string(),
+            name: "false:1.5:7:2".to_string(),
+        }
+    );
+
+    let invalid_builtin_pipe = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-cats/builtin-pipes/not-int?active=true",
+        ))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(invalid_builtin_pipe, BootError::BadRequest(message) if message.contains("numeric string is expected"))
     );
 
     let params = app

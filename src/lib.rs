@@ -126,7 +126,8 @@ pub use health::{
 };
 pub use http::{
     extract_request_value, transform_request_value, BootRequest, BootResponse, CookieOptions,
-    CookieSameSite, HttpMethod, RequestExtractor, RequestValuePipe, SseEvent, SseStream,
+    CookieSameSite, DefaultValuePipe, HttpMethod, ParseBoolPipe, ParseFloatPipe, ParseFloatTarget,
+    ParseIntPipe, ParseIntTarget, RequestExtractor, RequestValuePipe, SseEvent, SseStream,
     StreamableFile, StreamableFileOptions, StreamableFileStream,
 };
 #[cfg(feature = "http-client")]
