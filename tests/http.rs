@@ -1,6 +1,6 @@
 use a3s_boot::{
     BootError, BootErrorKind, BootRequest, BootResponse, CookieOptions, CookieSameSite, HttpMethod,
-    SseEvent,
+    SseEvent, StreamableFile, StreamableFileOptions,
 };
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -876,6 +876,72 @@ fn sse_response_sets_event_stream_headers_and_keeps_body_streaming() {
     assert_eq!(response.header("connection"), Some("keep-alive"));
     response.validate().unwrap();
     assert!(response.into_sse_stream().is_some());
+}
+
+#[test]
+fn streamable_file_bytes_set_content_headers_and_body() {
+    let response = BootResponse::streamable_file(
+        StreamableFile::bytes("id,name\n1,Milo\n")
+            .with_content_type("text/csv; charset=utf-8")
+            .with_inline("cats.csv")
+            .unwrap(),
+    );
+
+    assert_eq!(response.status(), 200);
+    assert!(!response.is_streaming());
+    assert_eq!(response.body(), b"id,name\n1,Milo\n");
+    assert_eq!(response.content_length().unwrap(), Some(15));
+    assert_eq!(response.content_type(), Some("text/csv; charset=utf-8"));
+    assert_eq!(
+        response.header("content-disposition"),
+        Some(r#"inline; filename="cats.csv""#)
+    );
+    response.validate().unwrap();
+}
+
+#[test]
+fn download_response_sets_attachment_disposition() {
+    let response = BootResponse::download("猫 report.csv", "name\nMilo\n").unwrap();
+
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.body(), b"name\nMilo\n");
+    assert_eq!(response.content_type(), Some("application/octet-stream"));
+    assert_eq!(response.content_length().unwrap(), Some(10));
+    assert_eq!(
+        response.header("content-disposition"),
+        Some(r#"attachment; filename="report.csv"; filename*=UTF-8''%E7%8C%AB%20report.csv"#)
+    );
+    response.validate().unwrap();
+}
+
+#[test]
+fn streamable_file_streams_can_advertise_content_length() {
+    let response = BootResponse::streamable_file(
+        StreamableFile::stream(futures_util::stream::iter([
+            Ok(Vec::from("hello ")),
+            Ok(Vec::from("stream")),
+        ]))
+        .with_options(
+            StreamableFileOptions::new()
+                .with_content_type("text/plain; charset=utf-8")
+                .with_content_length(12)
+                .with_attachment("stream.txt")
+                .unwrap(),
+        ),
+    );
+
+    assert!(response.is_streaming());
+    assert!(response.is_file_stream());
+    assert!(!response.is_event_stream());
+    assert_eq!(response.content_length().unwrap(), Some(12));
+    assert_eq!(response.content_type(), Some("text/plain; charset=utf-8"));
+    assert_eq!(
+        response.header("content-disposition"),
+        Some(r#"attachment; filename="stream.txt""#)
+    );
+    response.validate().unwrap();
+    assert!(response.body_text().is_err());
+    assert!(response.into_body_stream().is_some());
 }
 
 #[test]

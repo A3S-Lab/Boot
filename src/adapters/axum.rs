@@ -405,7 +405,15 @@ fn to_axum_response(response: BootResponse) -> Response {
         Err(message) => return error_response(StatusCode::INTERNAL_SERVER_ERROR, message),
     };
 
-    let body = if is_streaming {
+    let body = if is_streaming && response.is_file_stream() {
+        let Some(stream) = response.into_body_stream() else {
+            return error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "streaming response body has already been consumed".to_string(),
+            );
+        };
+        Body::from_stream(stream)
+    } else if is_streaming {
         let Some(stream) = response.into_sse_stream() else {
             return error_response(
                 StatusCode::INTERNAL_SERVER_ERROR,

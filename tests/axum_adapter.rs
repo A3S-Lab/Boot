@@ -2,7 +2,7 @@
 
 use a3s_boot::{
     ApiVersioning, AxumAdapter, BootApplication, BootError, BootRequest, BootResponse,
-    ExecutionContext, HttpMethod, MiddlewareOutcome, RouteDefinition, SseEvent,
+    ExecutionContext, HttpMethod, MiddlewareOutcome, RouteDefinition, SseEvent, StreamableFile,
     WebSocketGatewayDefinition, WebSocketMessage,
 };
 use std::sync::Arc;
@@ -1651,6 +1651,59 @@ async fn axum_adapter_rejects_bodies_on_no_body_response_statuses() {
         assert_eq!(response_status, StatusCode::INTERNAL_SERVER_ERROR);
         assert!(body.contains(&format!("response status {status} must not include a body")));
     }
+}
+
+#[tokio::test]
+async fn axum_adapter_streams_file_responses() {
+    use axum::body::{to_bytes, Body};
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    let app = BootApplication::builder()
+        .route(
+            RouteDefinition::get("/download", |_| async {
+                Ok(BootResponse::streamable_file(
+                    StreamableFile::stream(futures_util::stream::iter([
+                        Ok(Vec::from("hello ")),
+                        Ok(Vec::from("file")),
+                    ]))
+                    .with_content_type("text/plain; charset=utf-8")
+                    .with_content_length(10)
+                    .with_attachment("hello.txt")
+                    .unwrap(),
+                ))
+            })
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+    let router = app.into_adapter(&AxumAdapter::new()).unwrap();
+
+    let response = router
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/download")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "text/plain; charset=utf-8"
+    );
+    assert_eq!(response.headers().get("content-length").unwrap(), "10");
+    assert_eq!(
+        response.headers().get("content-disposition").unwrap(),
+        r#"attachment; filename="hello.txt""#
+    );
+    assert_eq!(
+        to_bytes(response.into_body(), 1024).await.unwrap(),
+        "hello file"
+    );
 }
 
 #[tokio::test]

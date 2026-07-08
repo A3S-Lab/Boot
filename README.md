@@ -3418,6 +3418,52 @@ fn from_error(error: &a3s_boot::BootError) -> BootResponse {
 }
 ```
 
+## Streamable Files And Downloads
+
+Boot includes Nest-style streamable file responses for controller methods that
+need to return binary data, generated reports, or adapter-backed byte streams.
+`StreamableFile` accepts either in-memory bytes or a `Stream<Item =
+Result<Vec<u8>>>`; `BootResponse::streamable_file(...)` applies the file
+headers while still allowing interceptors and filters to see an ordinary
+`BootResponse`.
+
+```rust
+use a3s_boot::{BootResponse, Result, RouteDefinition, StreamableFile};
+
+fn report_route() -> Result<RouteDefinition> {
+    RouteDefinition::get("/reports/cats.csv", |_| async {
+        Ok(BootResponse::streamable_file(
+            StreamableFile::bytes("id,name\n1,Milo\n")
+                .with_content_type("text/csv; charset=utf-8")
+                .with_inline("cats.csv")?,
+        ))
+    })
+}
+
+fn download_route() -> Result<RouteDefinition> {
+    RouteDefinition::get("/exports/cats", |_| async {
+        BootResponse::download("cats.csv", "id,name\n1,Milo\n")
+    })
+}
+
+fn streamed_download_route() -> Result<RouteDefinition> {
+    RouteDefinition::get("/exports/live", |_| async {
+        let stream = futures_util::stream::iter([
+            Ok(Vec::from("id,name\n")),
+            Ok(Vec::from("1,Milo\n")),
+        ]);
+
+        BootResponse::download_stream("live-cats.csv", stream)
+    })
+}
+```
+
+File responses default to `application/octet-stream`. In-memory files receive a
+matching `Content-Length` automatically; streamed files can opt in with
+`StreamableFile::with_content_length(...)`. `with_attachment(...)` and
+`with_inline(...)` set safe `Content-Disposition` values, including
+`filename*` for non-ASCII names.
+
 The macro form is available on controller route methods:
 
 ```rust
@@ -4140,6 +4186,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | Logger | Optional provider-backed structured logging through `LoggingModule` |
 | Compression | Optional gzip response compression through `CompressionInterceptor` |
 | File upload | Optional multipart form parsing through `BootRequest` helpers |
+| File response | Streamable file and download helpers through `StreamableFile` and `BootResponse` |
 | Static assets | Optional provider-backed static file module for assets and SPA fallback |
 | Security | Optional CORS, security headers, CSRF, and rate limiting helpers |
 | Session | Optional provider-backed session store, middleware, and cookie persistence |
@@ -4173,6 +4220,7 @@ src/
 ├── events.rs     # Optional in-process application event emitter module
 ├── health.rs     # Optional provider-backed health check module
 ├── http/         # Adapter-neutral request, response, methods, and query parsing
+│   └── streamable_file.rs # Nest-style file and download response helpers
 ├── http_client.rs # Optional provider-backed outbound HTTP client module
 ├── logging.rs    # Optional provider-backed structured logging module
 ├── module/       # Module trait, dynamic modules, exports, and lifecycle hooks

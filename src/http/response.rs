@@ -4,6 +4,7 @@ use super::header::{
     parse_content_length, strict_content_length_values, validate_header_name,
     validate_header_value,
 };
+use super::streamable_file::{StreamableFile, StreamableFileBody, StreamableFileStream};
 use crate::{BootError, Result, SseEvent, SseStream};
 use futures_core::Stream;
 use serde::de::DeserializeOwned;
@@ -19,39 +20,86 @@ pub struct BootResponse {
     pub headers: BTreeMap<String, String>,
     pub appended_headers: Vec<(String, String)>,
     pub body: Vec<u8>,
-    stream: Option<SharedSseStream>,
+    stream: Option<SharedResponseStream>,
 }
 
 #[derive(Clone)]
-struct SharedSseStream {
-    inner: Arc<Mutex<Option<SseStream>>>,
+struct SharedResponseStream {
+    kind: ResponseStreamKind,
+    inner: Arc<Mutex<Option<ResponseStream>>>,
 }
 
-impl SharedSseStream {
-    fn new(stream: SseStream) -> Self {
+impl SharedResponseStream {
+    fn new(stream: ResponseStream) -> Self {
+        let kind = stream.kind();
         Self {
+            kind,
             inner: Arc::new(Mutex::new(Some(stream))),
         }
     }
 
+    fn kind(&self) -> ResponseStreamKind {
+        self.kind
+    }
+
     fn take(&self) -> Option<SseStream> {
-        self.inner.lock().ok()?.take()
+        let mut guard = self.inner.lock().ok()?;
+        match guard.take()? {
+            ResponseStream::Sse(stream) => Some(stream),
+            ResponseStream::Body(stream) => {
+                *guard = Some(ResponseStream::Body(stream));
+                None
+            }
+        }
+    }
+
+    fn take_body(&self) -> Option<StreamableFileStream> {
+        let mut guard = self.inner.lock().ok()?;
+        match guard.take()? {
+            ResponseStream::Body(stream) => Some(stream),
+            ResponseStream::Sse(stream) => {
+                *guard = Some(ResponseStream::Sse(stream));
+                None
+            }
+        }
     }
 }
 
-impl fmt::Debug for SharedSseStream {
+impl fmt::Debug for SharedResponseStream {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SharedSseStream").finish_non_exhaustive()
+        f.debug_struct("SharedResponseStream")
+            .field("kind", &self.kind)
+            .finish_non_exhaustive()
     }
 }
 
-impl PartialEq for SharedSseStream {
+impl PartialEq for SharedResponseStream {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
 }
 
-impl Eq for SharedSseStream {}
+impl Eq for SharedResponseStream {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResponseStreamKind {
+    Sse,
+    Body,
+}
+
+enum ResponseStream {
+    Sse(SseStream),
+    Body(StreamableFileStream),
+}
+
+impl ResponseStream {
+    fn kind(&self) -> ResponseStreamKind {
+        match self {
+            Self::Sse(_) => ResponseStreamKind::Sse,
+            Self::Body(_) => ResponseStreamKind::Body,
+        }
+    }
+}
 
 impl Default for BootResponse {
     fn default() -> Self {
@@ -144,6 +192,50 @@ impl BootResponse {
             .with_sse_stream(stream)
     }
 
+    pub fn streamable_file(file: StreamableFile) -> Self {
+        let (body, options) = file.into_parts();
+        let mut response = match body {
+            StreamableFileBody::Bytes(body) => {
+                let content_length = options.content_length().unwrap_or(body.len() as u64);
+                Self::new(200, body).with_content_length(content_length)
+            }
+            StreamableFileBody::Stream(stream) => {
+                let response = Self::empty(200).with_body_stream(stream);
+                if let Some(content_length) = options.content_length() {
+                    response.with_content_length(content_length)
+                } else {
+                    response
+                }
+            }
+        }
+        .with_content_type(options.content_type().unwrap_or("application/octet-stream"));
+
+        if let Some(content_disposition) = options.content_disposition() {
+            response = response.with_header("content-disposition", content_disposition);
+        }
+
+        response
+    }
+
+    pub fn file(body: impl Into<Vec<u8>>) -> Self {
+        Self::streamable_file(StreamableFile::bytes(body))
+    }
+
+    pub fn download(file_name: impl AsRef<str>, body: impl Into<Vec<u8>>) -> Result<Self> {
+        Ok(Self::streamable_file(
+            StreamableFile::bytes(body).with_attachment(file_name)?,
+        ))
+    }
+
+    pub fn download_stream<S>(file_name: impl AsRef<str>, stream: S) -> Result<Self>
+    where
+        S: Stream<Item = Result<Vec<u8>>> + Send + 'static,
+    {
+        Ok(Self::streamable_file(
+            StreamableFile::stream(stream).with_attachment(file_name)?,
+        ))
+    }
+
     pub fn from_error(error: &BootError) -> Self {
         Self::text_with_status(error.http_status_code(), error.http_response_message())
     }
@@ -230,12 +322,22 @@ impl BootResponse {
         self.stream.is_some()
     }
 
+    pub fn is_file_stream(&self) -> bool {
+        self.stream
+            .as_ref()
+            .is_some_and(|stream| stream.kind() == ResponseStreamKind::Body)
+    }
+
     pub fn is_event_stream(&self) -> bool {
         self.is_content_type("text/event-stream")
     }
 
     pub fn into_sse_stream(self) -> Option<SseStream> {
         self.stream.and_then(|stream| stream.take())
+    }
+
+    pub fn into_body_stream(self) -> Option<StreamableFileStream> {
+        self.stream.and_then(|stream| stream.take_body())
     }
 
     pub fn header_entries(&self) -> impl Iterator<Item = (&str, &str)> {
@@ -321,6 +423,9 @@ impl BootResponse {
             return Ok(());
         };
         if self.is_streaming() {
+            if self.is_file_stream() {
+                return Ok(());
+            }
             return Err(BootError::Internal(
                 "streaming responses must not include a content-length header".to_string(),
             ));
@@ -414,7 +519,14 @@ impl BootResponse {
     where
         S: Stream<Item = Result<SseEvent>> + Send + 'static,
     {
-        self.stream = Some(SharedSseStream::new(Box::pin(stream)));
+        self.stream = Some(SharedResponseStream::new(ResponseStream::Sse(Box::pin(
+            stream,
+        ))));
+        self
+    }
+
+    fn with_body_stream(mut self, stream: StreamableFileStream) -> Self {
+        self.stream = Some(SharedResponseStream::new(ResponseStream::Body(stream)));
         self
     }
 }

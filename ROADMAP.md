@@ -72,6 +72,10 @@ Implemented today:
 - SSE responses with `SseEvent`, `SseStream`, `BootResponse::sse(...)`,
   `RouteDefinition::sse(...)`, `ControllerDefinition::sse(...)`, and Axum
   streaming support.
+- Nest-style streamable file and download responses with `StreamableFile`,
+  `StreamableFileOptions`, `BootResponse::streamable_file(...)`,
+  `BootResponse::download(...)`, byte-stream support, content disposition, and
+  Axum streaming support.
 - Global, module, controller-level, and route-level middleware plus global and
   controller-level `Pipe`, `Guard`, `Interceptor`, and `ExceptionFilter`
   support.
@@ -568,6 +572,7 @@ Nest equivalent areas:
 - API versioning (implemented)
 - serialization (implemented)
 - compression (implemented)
+- streamable file and download responses (implemented)
 - file upload (implemented)
 - static assets and SPA shells (implemented)
 - security helpers such as CORS, CSRF, helmet-like headers, and rate limiting
@@ -636,6 +641,9 @@ Acceptance:
 - Compression can gzip eligible responses when requested by `Accept-Encoding`,
   skip too-small, streaming, and already-encoded responses, set `Vary`, and keep
   content length valid after rewriting. (Covered)
+- Streamable file responses can wrap in-memory bytes or byte streams, set
+  content type, content length, inline or attachment content disposition, and
+  reach adapters as streamed bytes instead of SSE events. (Covered)
 - File upload can parse adapter-neutral multipart forms, expose repeated text
   fields and uploaded files, reject non-multipart or malformed requests, and
   enforce body, field, file, and count limits. (Covered)
