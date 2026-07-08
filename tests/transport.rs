@@ -8,6 +8,8 @@ use a3s_boot::{
 use a3s_boot::{MqttTransport, MqttTransportClient, MqttTransportOptions, MqttTransportQoS};
 #[cfg(feature = "nats-transport")]
 use a3s_boot::{NatsTransport, NatsTransportClient, NatsTransportOptions};
+#[cfg(feature = "rabbitmq-transport")]
+use a3s_boot::{RabbitMqTransport, RabbitMqTransportClient, RabbitMqTransportOptions};
 #[cfg(feature = "redis-transport")]
 use a3s_boot::{RedisTransport, RedisTransportClient, RedisTransportOptions};
 #[cfg(feature = "tcp-transport")]
@@ -18,6 +20,7 @@ use std::sync::{Arc, Mutex};
 #[cfg(any(
     feature = "mqtt-transport",
     feature = "nats-transport",
+    feature = "rabbitmq-transport",
     feature = "redis-transport",
     feature = "tcp-transport"
 ))]
@@ -25,6 +28,7 @@ use std::time::Duration;
 #[cfg(any(
     feature = "mqtt-transport",
     feature = "nats-transport",
+    feature = "rabbitmq-transport",
     feature = "redis-transport"
 ))]
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -33,6 +37,7 @@ use tokio::net::TcpListener;
 #[cfg(any(
     feature = "mqtt-transport",
     feature = "nats-transport",
+    feature = "rabbitmq-transport",
     feature = "redis-transport",
     feature = "tcp-transport"
 ))]
@@ -455,6 +460,122 @@ async fn mqtt_transport_emits_events_when_mqtt_endpoint_is_set() {
     let client = MqttTransportClient::with_options(host, port, options);
 
     emit_mqtt_until_observed(
+        &client,
+        TransportMessage::json("math.observed", &NumberPayload { value: 11 }).unwrap(),
+        Arc::clone(&observed),
+    )
+    .await
+    .unwrap();
+
+    assert!(observed.lock().unwrap().contains(&11));
+    server.abort();
+}
+
+#[cfg(feature = "rabbitmq-transport")]
+#[test]
+fn rabbitmq_transport_builds_a_message_client_with_custom_options() {
+    let options = RabbitMqTransportOptions::new()
+        .with_queue_prefix("a3s.boot.test")
+        .with_request_timeout(Duration::from_secs(2))
+        .with_durable(true)
+        .with_auto_delete(false);
+    let app = BootApplication::builder().build().unwrap();
+    let client = RabbitMqTransport::with_options("amqp://127.0.0.1:5672/%2f", options.clone())
+        .build(app)
+        .unwrap();
+
+    assert_eq!(client.uri(), "amqp://127.0.0.1:5672/%2f");
+    assert_eq!(client.options(), &options);
+    assert_eq!(client.options().request_queue(), "a3s.boot.test.requests");
+    assert_eq!(client.options().event_queue(), "a3s.boot.test.events");
+    assert_eq!(
+        client.options().reply_queue_prefix(),
+        "a3s.boot.test.replies"
+    );
+    assert_eq!(
+        client.options().consumer_tag_prefix(),
+        "a3s.boot.test.consumer"
+    );
+    assert!(client.options().durable());
+    assert!(!client.options().auto_delete());
+}
+
+#[cfg(feature = "rabbitmq-transport")]
+#[tokio::test]
+async fn rabbitmq_transport_round_trips_when_rabbitmq_uri_is_set() {
+    let Some(uri) = rabbitmq_test_uri() else {
+        return;
+    };
+    let options = RabbitMqTransportOptions::new()
+        .with_queue_prefix(unique_transport_prefix("rabbitmq-round-trip"))
+        .with_request_timeout(Duration::from_secs(2))
+        .with_auto_delete(true);
+    let app = BootApplication::builder()
+        .message_pattern(
+            MessagePatternDefinition::request_json(
+                "math.double",
+                |payload: NumberPayload| async move {
+                    Ok(NumberPayload {
+                        value: payload.value * 2,
+                    })
+                },
+            )
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+    let transport = RabbitMqTransport::with_options(uri.clone(), options.clone());
+    let server = tokio::spawn({
+        let app = app.clone();
+        async move { transport.serve(app).await }
+    });
+    let client = RabbitMqTransportClient::with_options(uri, options);
+
+    let reply = send_rabbitmq_with_retry(
+        &client,
+        TransportMessage::json("math.double", &NumberPayload { value: 9 }).unwrap(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(reply.data_as::<NumberPayload>().unwrap().value, 18);
+    server.abort();
+}
+
+#[cfg(feature = "rabbitmq-transport")]
+#[tokio::test]
+async fn rabbitmq_transport_emits_events_when_rabbitmq_uri_is_set() {
+    let Some(uri) = rabbitmq_test_uri() else {
+        return;
+    };
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let event_log = Arc::clone(&observed);
+    let options = RabbitMqTransportOptions::new()
+        .with_queue_prefix(unique_transport_prefix("rabbitmq-event"))
+        .with_request_timeout(Duration::from_secs(2))
+        .with_auto_delete(true);
+    let app = BootApplication::builder()
+        .message_pattern(
+            MessagePatternDefinition::event_json("math.observed", move |payload: NumberPayload| {
+                let event_log = Arc::clone(&event_log);
+                async move {
+                    event_log.lock().unwrap().push(payload.value);
+                    Ok(())
+                }
+            })
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+    let transport = RabbitMqTransport::with_options(uri.clone(), options.clone());
+    let server = tokio::spawn({
+        let app = app.clone();
+        async move { transport.serve(app).await }
+    });
+    let client = RabbitMqTransportClient::with_options(uri, options);
+
+    emit_rabbitmq_until_observed(
         &client,
         TransportMessage::json("math.observed", &NumberPayload { value: 11 }).unwrap(),
         Arc::clone(&observed),
@@ -1018,6 +1139,13 @@ fn nats_test_url() -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 
+#[cfg(feature = "rabbitmq-transport")]
+fn rabbitmq_test_uri() -> Option<String> {
+    std::env::var("A3S_BOOT_RABBITMQ_URI")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+}
+
 #[cfg(feature = "nats-transport")]
 async fn send_nats_with_retry(
     client: &NatsTransportClient,
@@ -1065,6 +1193,65 @@ async fn emit_nats_until_observed(
 
     Err(last_error
         .unwrap_or_else(|| BootError::Adapter("nats transport event was not observed".to_string())))
+}
+
+#[cfg(feature = "rabbitmq-transport")]
+async fn send_rabbitmq_with_retry(
+    client: &RabbitMqTransportClient,
+    message: TransportMessage,
+) -> Result<Option<TransportReply>> {
+    let mut last_error = None;
+    for _ in 0..50 {
+        match client.send(message.clone()).await {
+            Ok(reply) => return Ok(reply),
+            Err(BootError::Adapter(message)) if should_retry_rabbitmq_error(&message) => {
+                last_error = Some(BootError::Adapter(message));
+                sleep(Duration::from_millis(20)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_error
+        .unwrap_or_else(|| BootError::Adapter("rabbitmq transport did not start".to_string())))
+}
+
+#[cfg(feature = "rabbitmq-transport")]
+async fn emit_rabbitmq_until_observed(
+    client: &RabbitMqTransportClient,
+    message: TransportMessage,
+    observed: Arc<Mutex<Vec<i32>>>,
+) -> Result<()> {
+    let mut last_error = None;
+    for _ in 0..50 {
+        match client.emit(message.clone()).await {
+            Ok(()) => {
+                sleep(Duration::from_millis(20)).await;
+                if !observed.lock().unwrap().is_empty() {
+                    return Ok(());
+                }
+            }
+            Err(BootError::Adapter(message)) if should_retry_rabbitmq_error(&message) => {
+                last_error = Some(BootError::Adapter(message));
+                sleep(Duration::from_millis(20)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| {
+        BootError::Adapter("rabbitmq transport event was not observed".to_string())
+    }))
+}
+
+#[cfg(feature = "rabbitmq-transport")]
+fn should_retry_rabbitmq_error(message: &str) -> bool {
+    message.contains("refused")
+        || message.contains("Refused")
+        || message.contains("timed out")
+        || message.contains("reply queue closed")
+        || message.contains("connection")
+        || message.contains("Connection")
 }
 
 #[cfg(feature = "redis-transport")]
@@ -1127,6 +1314,7 @@ async fn emit_redis_until_observed(
 #[cfg(any(
     feature = "mqtt-transport",
     feature = "nats-transport",
+    feature = "rabbitmq-transport",
     feature = "redis-transport"
 ))]
 fn unique_transport_prefix(name: &str) -> String {

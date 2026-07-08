@@ -151,6 +151,8 @@ pub use transport::{
 pub use transport::{MqttTransport, MqttTransportClient, MqttTransportOptions, MqttTransportQoS};
 #[cfg(feature = "nats-transport")]
 pub use transport::{NatsTransport, NatsTransportClient, NatsTransportOptions};
+#[cfg(feature = "rabbitmq-transport")]
+pub use transport::{RabbitMqTransport, RabbitMqTransportClient, RabbitMqTransportOptions};
 #[cfg(feature = "redis-transport")]
 pub use transport::{RedisTransport, RedisTransportClient, RedisTransportOptions};
 #[cfg(feature = "tcp-transport")]

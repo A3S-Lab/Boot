@@ -13,6 +13,8 @@ use std::sync::Arc;
 mod mqtt;
 #[cfg(feature = "nats-transport")]
 mod nats;
+#[cfg(feature = "rabbitmq-transport")]
+mod rabbitmq;
 #[cfg(feature = "redis-transport")]
 mod redis;
 #[cfg(feature = "tcp-transport")]
@@ -22,6 +24,8 @@ mod tcp;
 pub use self::mqtt::{MqttTransport, MqttTransportClient, MqttTransportOptions, MqttTransportQoS};
 #[cfg(feature = "nats-transport")]
 pub use self::nats::{NatsTransport, NatsTransportClient, NatsTransportOptions};
+#[cfg(feature = "rabbitmq-transport")]
+pub use self::rabbitmq::{RabbitMqTransport, RabbitMqTransportClient, RabbitMqTransportOptions};
 #[cfg(feature = "redis-transport")]
 pub use self::redis::{RedisTransport, RedisTransportClient, RedisTransportOptions};
 #[cfg(feature = "tcp-transport")]

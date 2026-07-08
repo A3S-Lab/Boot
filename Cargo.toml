@@ -30,6 +30,7 @@ openapi-schemas = ["dep:schemars"]
 queue = ["dep:tokio"]
 mqtt-transport = ["dep:rumqttc", "dep:tokio"]
 nats-transport = ["dep:async-nats", "dep:tokio"]
+rabbitmq-transport = ["dep:lapin", "dep:tokio"]
 redis-transport = ["dep:redis", "dep:tokio"]
 schedule = ["dep:chrono", "dep:cron", "dep:tokio"]
 security = []
@@ -49,6 +50,7 @@ futures-core = "0.3"
 futures-util = "0.3"
 getrandom = { version = "0.2", optional = true }
 http-body-util = { version = "0.1", optional = true }
+lapin = { version = "4.10.0", default-features = false, features = ["tokio"], optional = true }
 multer = { version = "3", optional = true }
 percent-encoding = "2"
 redis = { version = "1.3.0", default-features = false, features = ["tokio-comp"], optional = true }

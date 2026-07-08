@@ -110,7 +110,8 @@ Implemented today:
   interceptors, Nest-style message macros, an in-process transport, and an
   optional TCP transport for newline-delimited JSON message frames plus an
   optional Redis Pub/Sub transport and optional NATS request/reply and event
-  subjects plus optional MQTT request/reply and event topics.
+  subjects plus optional MQTT request/reply and event topics plus optional
+  RabbitMQ request/reply and event queues.
 - ACL-backed typed configuration modules with `ConfigModule`, named/global
   provider exports, environment/default function support, and validation hooks.
 - Typed cache modules with `CacheModule`, `Cache`, in-memory storage,
@@ -160,8 +161,6 @@ and controller experience. If GraphQL is ever needed, it should be evaluated as
 a separate companion crate rather than part of the core parity plan.
 
 ## Milestone 1: Parameter Extraction Macros
-
-Status: implemented.
 
 Nest equivalent:
 
@@ -233,8 +232,6 @@ Acceptance:
 
 ## Milestone 2: OpenAPI Metadata And Generator
 
-Status: implemented.
-
 Nest equivalent:
 
 - `@nestjs/swagger`
@@ -293,8 +290,6 @@ Nest equivalent:
 - transform and whitelist options
 - DTO-level validation
 
-Status: implemented.
-
 Proposed A3S Boot shape:
 
 ```rust
@@ -350,8 +345,6 @@ Nest equivalent:
 - singleton provider lifecycle hooks
 - request-scoped controllers
 - provider aliases / `useExisting`
-
-Status: implemented.
 
 Current gap:
 
@@ -416,8 +409,6 @@ Nest equivalent:
 - `MiddlewareConsumer`
 - route-scoped middleware
 
-Status: implemented.
-
 Tasks:
 
 - Add middleware trait that can inspect/mutate `BootRequest` before guards,
@@ -448,8 +439,6 @@ Nest equivalent:
 - gateway lifecycle hooks
 - gateway guards/pipes/interceptors
 
-Status: implemented.
-
 Tasks:
 
 - Define adapter-neutral WebSocket connection and message traits. (Implemented)
@@ -472,8 +461,6 @@ Acceptance:
 
 ## Milestone 7: Microservice Transports
 
-Status: implemented.
-
 Nest equivalent:
 
 - TCP, Redis, NATS, MQTT, RabbitMQ, Kafka, gRPC, and custom transports.
@@ -494,8 +481,8 @@ Tasks:
   (Implemented with `InProcessTransport`)
 - Add one production transport only after the core contract is stable.
   (Implemented first with optional `TcpTransport`, followed by optional
-  `RedisTransport`, `NatsTransport`, and `MqttTransport`; RabbitMQ, Kafka, and
-  gRPC remain future companion features.)
+  `RedisTransport`, `NatsTransport`, `MqttTransport`, and
+  `RabbitMqTransport`; Kafka and gRPC remain future companion features.)
 
 Acceptance:
 
@@ -591,8 +578,8 @@ framework capability. Keep GraphQL out of scope.
 
 Suggested implementation sequence:
 
-1. Add the next production message transport, such as RabbitMQ, Kafka, or gRPC,
-   now that the async provider, TCP, Redis, NATS, and MQTT transport contracts
+1. Add the next production message transport, such as Kafka or gRPC, now that
+   the async provider, TCP, Redis, NATS, MQTT, and RabbitMQ transport contracts
    are stable.
 2. Continue defining integrations through providers, middleware, guards,
    interceptors, or adapters instead of adding one-off framework hooks.

@@ -123,6 +123,16 @@ serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
+Enable the optional RabbitMQ microservice transport when services need
+Nest-style request-response and event-only message patterns over AMQP queues:
+
+```toml
+[dependencies]
+a3s-boot = { version = "0.1", features = ["rabbitmq-transport"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
 Enable the optional structured logger module when the application needs
 provider-backed logging without forcing a concrete backend:
 
@@ -971,7 +981,8 @@ implement `MessageTransport`. `InProcessTransport` is included for tests,
 workers, and single-process dispatch. Enable the `tcp-transport` feature to use
 `TcpTransport` for newline-delimited JSON messages over TCP, or
 `redis-transport` to use Redis Pub/Sub channels, or `nats-transport` to use
-NATS subjects, or `mqtt-transport` to use MQTT topics.
+NATS subjects, `mqtt-transport` to use MQTT topics, or `rabbitmq-transport` to
+use RabbitMQ queues.
 
 ```rust
 use std::sync::Arc;
@@ -1265,6 +1276,54 @@ async fn call_mqtt_microservice() -> Result<()> {
         .with_topic_prefix("cats")
         .with_client_id_prefix("cats-client");
     let client = MqttTransportClient::with_options("127.0.0.1", 1883, options);
+    let reply = client
+        .send(TransportMessage::json(
+            "cat.find",
+            &FindCatMessage {
+                id: "milo".to_string(),
+            },
+        )?)
+        .await?
+        .unwrap();
+
+    client
+        .emit(TransportMessage::json(
+            "cat.created",
+            &FindCatMessage {
+                id: "luna".to_string(),
+            },
+        )?)
+        .await?;
+
+    assert_eq!(reply.data_as::<CatDto>()?.name, "Milo");
+    Ok(())
+}
+```
+
+With `rabbitmq-transport`, request-response messages are published to a
+configured request queue and receive replies on exclusive per-request reply
+queues. Event messages are published to a separate event queue:
+
+```rust
+use std::time::Duration;
+
+use a3s_boot::{
+    BootFactory, RabbitMqTransport, RabbitMqTransportClient, RabbitMqTransportOptions, Result,
+    TransportMessage,
+};
+
+async fn run_rabbitmq_microservice() -> Result<()> {
+    let options = RabbitMqTransportOptions::new()
+        .with_queue_prefix("cats")
+        .with_request_timeout(Duration::from_secs(5));
+    let transport = RabbitMqTransport::with_options("amqp://127.0.0.1:5672/%2f", options);
+    let mut service = BootFactory::create_microservice(CatsModule, transport)?;
+    service.listen().await
+}
+
+async fn call_rabbitmq_microservice() -> Result<()> {
+    let options = RabbitMqTransportOptions::new().with_queue_prefix("cats");
+    let client = RabbitMqTransportClient::with_options("amqp://127.0.0.1:5672/%2f", options);
     let reply = client
         .send(TransportMessage::json(
             "cat.find",
