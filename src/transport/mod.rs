@@ -9,6 +9,8 @@ use std::future::Future;
 use std::ops::Deref;
 use std::sync::Arc;
 
+#[cfg(feature = "mqtt-transport")]
+mod mqtt;
 #[cfg(feature = "nats-transport")]
 mod nats;
 #[cfg(feature = "redis-transport")]
@@ -16,6 +18,8 @@ mod redis;
 #[cfg(feature = "tcp-transport")]
 mod tcp;
 
+#[cfg(feature = "mqtt-transport")]
+pub use self::mqtt::{MqttTransport, MqttTransportClient, MqttTransportOptions, MqttTransportQoS};
 #[cfg(feature = "nats-transport")]
 pub use self::nats::{NatsTransport, NatsTransportClient, NatsTransportOptions};
 #[cfg(feature = "redis-transport")]

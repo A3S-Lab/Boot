@@ -113,6 +113,16 @@ serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
+Enable the optional MQTT microservice transport when services need Nest-style
+request-response and event-only message patterns over MQTT topics:
+
+```toml
+[dependencies]
+a3s-boot = { version = "0.1", features = ["mqtt-transport"] }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
 Enable the optional structured logger module when the application needs
 provider-backed logging without forcing a concrete backend:
 
@@ -961,7 +971,7 @@ implement `MessageTransport`. `InProcessTransport` is included for tests,
 workers, and single-process dispatch. Enable the `tcp-transport` feature to use
 `TcpTransport` for newline-delimited JSON messages over TCP, or
 `redis-transport` to use Redis Pub/Sub channels, or `nats-transport` to use
-NATS subjects.
+NATS subjects, or `mqtt-transport` to use MQTT topics.
 
 ```rust
 use std::sync::Arc;
@@ -1203,6 +1213,58 @@ async fn run_nats_microservice() -> Result<()> {
 async fn call_nats_microservice() -> Result<()> {
     let options = NatsTransportOptions::new().with_subject_prefix("cats");
     let client = NatsTransportClient::with_options("nats://127.0.0.1:4222", options);
+    let reply = client
+        .send(TransportMessage::json(
+            "cat.find",
+            &FindCatMessage {
+                id: "milo".to_string(),
+            },
+        )?)
+        .await?
+        .unwrap();
+
+    client
+        .emit(TransportMessage::json(
+            "cat.created",
+            &FindCatMessage {
+                id: "luna".to_string(),
+            },
+        )?)
+        .await?;
+
+    assert_eq!(reply.data_as::<CatDto>()?.name, "Milo");
+    Ok(())
+}
+```
+
+With `mqtt-transport`, request-response messages are published to a configured
+request topic and receive replies on per-request reply topics. Event messages
+are published to a separate event topic:
+
+```rust
+use std::time::Duration;
+
+use a3s_boot::{
+    BootFactory, MqttTransport, MqttTransportClient, MqttTransportOptions, MqttTransportQoS,
+    Result, TransportMessage,
+};
+
+async fn run_mqtt_microservice() -> Result<()> {
+    let options = MqttTransportOptions::new()
+        .with_topic_prefix("cats")
+        .with_client_id_prefix("cats-service")
+        .with_qos(MqttTransportQoS::AtLeastOnce)
+        .with_request_timeout(Duration::from_secs(5));
+    let transport = MqttTransport::with_options("127.0.0.1", 1883, options);
+    let mut service = BootFactory::create_microservice(CatsModule, transport)?;
+    service.listen().await
+}
+
+async fn call_mqtt_microservice() -> Result<()> {
+    let options = MqttTransportOptions::new()
+        .with_topic_prefix("cats")
+        .with_client_id_prefix("cats-client");
+    let client = MqttTransportClient::with_options("127.0.0.1", 1883, options);
     let reply = client
         .send(TransportMessage::json(
             "cat.find",

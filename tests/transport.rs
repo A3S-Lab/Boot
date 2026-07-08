@@ -4,6 +4,8 @@ use a3s_boot::{
     MessageTransport, Module, ModuleRef, ProviderDefinition, Result, TransportContext,
     TransportInterceptor, TransportMessage, TransportReply, Validate,
 };
+#[cfg(feature = "mqtt-transport")]
+use a3s_boot::{MqttTransport, MqttTransportClient, MqttTransportOptions, MqttTransportQoS};
 #[cfg(feature = "nats-transport")]
 use a3s_boot::{NatsTransport, NatsTransportClient, NatsTransportOptions};
 #[cfg(feature = "redis-transport")]
@@ -14,16 +16,22 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::{Arc, Mutex};
 #[cfg(any(
+    feature = "mqtt-transport",
     feature = "nats-transport",
     feature = "redis-transport",
     feature = "tcp-transport"
 ))]
 use std::time::Duration;
-#[cfg(any(feature = "nats-transport", feature = "redis-transport"))]
+#[cfg(any(
+    feature = "mqtt-transport",
+    feature = "nats-transport",
+    feature = "redis-transport"
+))]
 use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(feature = "tcp-transport")]
 use tokio::net::TcpListener;
 #[cfg(any(
+    feature = "mqtt-transport",
     feature = "nats-transport",
     feature = "redis-transport",
     feature = "tcp-transport"
@@ -338,6 +346,124 @@ async fn in_process_transport_builds_a_message_client() {
         .unwrap();
 
     assert_eq!(reply.data_as::<NumberPayload>().unwrap().value, 14);
+}
+
+#[cfg(feature = "mqtt-transport")]
+#[test]
+fn mqtt_transport_builds_a_message_client_with_custom_options() {
+    let options = MqttTransportOptions::new()
+        .with_topic_prefix("a3s/boot/test")
+        .with_client_id_prefix("a3s-boot-test")
+        .with_qos(MqttTransportQoS::AtLeastOnce)
+        .with_request_timeout(Duration::from_secs(2))
+        .with_keep_alive(Duration::from_secs(5))
+        .with_channel_capacity(16)
+        .with_max_packet_size(2 * 1024 * 1024)
+        .with_credentials("user", "password");
+    let app = BootApplication::builder().build().unwrap();
+    let client = MqttTransport::with_options("127.0.0.1", 1883, options.clone())
+        .build(app)
+        .unwrap();
+
+    assert_eq!(client.host(), "127.0.0.1");
+    assert_eq!(client.port(), 1883);
+    assert_eq!(client.options(), &options);
+    assert_eq!(client.options().request_topic(), "a3s/boot/test/requests");
+    assert_eq!(client.options().event_topic(), "a3s/boot/test/events");
+    assert_eq!(
+        client.options().reply_topic_prefix(),
+        "a3s/boot/test/replies"
+    );
+    assert_eq!(client.options().client_id_prefix(), "a3s-boot-test");
+    assert_eq!(client.options().qos(), MqttTransportQoS::AtLeastOnce);
+    assert_eq!(client.options().credentials(), Some(("user", "password")));
+}
+
+#[cfg(feature = "mqtt-transport")]
+#[tokio::test]
+async fn mqtt_transport_round_trips_when_mqtt_endpoint_is_set() {
+    let Some((host, port)) = mqtt_test_endpoint() else {
+        return;
+    };
+    let options = MqttTransportOptions::new()
+        .with_topic_prefix(unique_transport_prefix("mqtt-round-trip"))
+        .with_client_id_prefix("a3s-boot-test")
+        .with_request_timeout(Duration::from_secs(2));
+    let app = BootApplication::builder()
+        .message_pattern(
+            MessagePatternDefinition::request_json(
+                "math.double",
+                |payload: NumberPayload| async move {
+                    Ok(NumberPayload {
+                        value: payload.value * 2,
+                    })
+                },
+            )
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+    let transport = MqttTransport::with_options(host.clone(), port, options.clone());
+    let server = tokio::spawn({
+        let app = app.clone();
+        async move { transport.serve(app).await }
+    });
+    let client = MqttTransportClient::with_options(host, port, options);
+
+    let reply = send_mqtt_with_retry(
+        &client,
+        TransportMessage::json("math.double", &NumberPayload { value: 9 }).unwrap(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    assert_eq!(reply.data_as::<NumberPayload>().unwrap().value, 18);
+    server.abort();
+}
+
+#[cfg(feature = "mqtt-transport")]
+#[tokio::test]
+async fn mqtt_transport_emits_events_when_mqtt_endpoint_is_set() {
+    let Some((host, port)) = mqtt_test_endpoint() else {
+        return;
+    };
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let event_log = Arc::clone(&observed);
+    let options = MqttTransportOptions::new()
+        .with_topic_prefix(unique_transport_prefix("mqtt-event"))
+        .with_client_id_prefix("a3s-boot-test")
+        .with_request_timeout(Duration::from_secs(2));
+    let app = BootApplication::builder()
+        .message_pattern(
+            MessagePatternDefinition::event_json("math.observed", move |payload: NumberPayload| {
+                let event_log = Arc::clone(&event_log);
+                async move {
+                    event_log.lock().unwrap().push(payload.value);
+                    Ok(())
+                }
+            })
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+    let transport = MqttTransport::with_options(host.clone(), port, options.clone());
+    let server = tokio::spawn({
+        let app = app.clone();
+        async move { transport.serve(app).await }
+    });
+    let client = MqttTransportClient::with_options(host, port, options);
+
+    emit_mqtt_until_observed(
+        &client,
+        TransportMessage::json("math.observed", &NumberPayload { value: 11 }).unwrap(),
+        Arc::clone(&observed),
+    )
+    .await
+    .unwrap();
+
+    assert!(observed.lock().unwrap().contains(&11));
+    server.abort();
 }
 
 #[cfg(feature = "nats-transport")]
@@ -795,6 +921,96 @@ async fn send_tcp_with_retry(
     ))
 }
 
+#[cfg(feature = "mqtt-transport")]
+fn mqtt_test_endpoint() -> Option<(String, u16)> {
+    if let Ok(value) = std::env::var("A3S_BOOT_MQTT_URL") {
+        let value = value.trim();
+        if !value.is_empty() {
+            return parse_mqtt_endpoint(value);
+        }
+    }
+
+    let host = std::env::var("A3S_BOOT_MQTT_HOST")
+        .ok()
+        .filter(|value| !value.trim().is_empty())?;
+    let port = std::env::var("A3S_BOOT_MQTT_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .unwrap_or(1883);
+    Some((host, port))
+}
+
+#[cfg(feature = "mqtt-transport")]
+fn parse_mqtt_endpoint(value: &str) -> Option<(String, u16)> {
+    let without_scheme = value
+        .strip_prefix("mqtt://")
+        .or_else(|| value.strip_prefix("tcp://"))
+        .unwrap_or(value);
+    let authority = without_scheme.split('/').next().unwrap_or(without_scheme);
+    if authority.trim().is_empty() {
+        return None;
+    }
+
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) if !host.is_empty() => {
+            (host.to_string(), port.parse::<u16>().unwrap_or(1883))
+        }
+        _ => (authority.to_string(), 1883),
+    };
+    Some((host, port))
+}
+
+#[cfg(feature = "mqtt-transport")]
+async fn send_mqtt_with_retry(
+    client: &MqttTransportClient,
+    message: TransportMessage,
+) -> Result<Option<TransportReply>> {
+    let mut last_error = None;
+    for _ in 0..50 {
+        match client.send(message.clone()).await {
+            Ok(reply) => return Ok(reply),
+            Err(BootError::Adapter(message))
+                if message.contains("timed out")
+                    || message.contains("Connection refused")
+                    || message.contains("connection refused") =>
+            {
+                last_error = Some(BootError::Adapter(message));
+                sleep(Duration::from_millis(20)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Err(last_error
+        .unwrap_or_else(|| BootError::Adapter("mqtt transport did not start".to_string())))
+}
+
+#[cfg(feature = "mqtt-transport")]
+async fn emit_mqtt_until_observed(
+    client: &MqttTransportClient,
+    message: TransportMessage,
+    observed: Arc<Mutex<Vec<i32>>>,
+) -> Result<()> {
+    let mut last_error = None;
+    for _ in 0..50 {
+        match client.emit(message.clone()).await {
+            Ok(()) => {
+                sleep(Duration::from_millis(20)).await;
+                if !observed.lock().unwrap().is_empty() {
+                    return Ok(());
+                }
+            }
+            Err(error) => {
+                last_error = Some(error);
+                sleep(Duration::from_millis(20)).await;
+            }
+        }
+    }
+
+    Err(last_error
+        .unwrap_or_else(|| BootError::Adapter("mqtt transport event was not observed".to_string())))
+}
+
 #[cfg(feature = "nats-transport")]
 fn nats_test_url() -> Option<String> {
     std::env::var("A3S_BOOT_NATS_URL")
@@ -908,7 +1124,11 @@ async fn emit_redis_until_observed(
     }))
 }
 
-#[cfg(any(feature = "nats-transport", feature = "redis-transport"))]
+#[cfg(any(
+    feature = "mqtt-transport",
+    feature = "nats-transport",
+    feature = "redis-transport"
+))]
 fn unique_transport_prefix(name: &str) -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)

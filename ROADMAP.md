@@ -110,7 +110,7 @@ Implemented today:
   interceptors, Nest-style message macros, an in-process transport, and an
   optional TCP transport for newline-delimited JSON message frames plus an
   optional Redis Pub/Sub transport and optional NATS request/reply and event
-  subjects.
+  subjects plus optional MQTT request/reply and event topics.
 - ACL-backed typed configuration modules with `ConfigModule`, named/global
   provider exports, environment/default function support, and validation hooks.
 - Typed cache modules with `CacheModule`, `Cache`, in-memory storage,
@@ -494,8 +494,8 @@ Tasks:
   (Implemented with `InProcessTransport`)
 - Add one production transport only after the core contract is stable.
   (Implemented first with optional `TcpTransport`, followed by optional
-  `RedisTransport` and `NatsTransport`; MQTT, RabbitMQ, Kafka, and gRPC remain
-  future companion features.)
+  `RedisTransport`, `NatsTransport`, and `MqttTransport`; RabbitMQ, Kafka, and
+  gRPC remain future companion features.)
 
 Acceptance:
 
@@ -591,8 +591,8 @@ framework capability. Keep GraphQL out of scope.
 
 Suggested implementation sequence:
 
-1. Add the next production message transport, such as MQTT, RabbitMQ, Kafka, or
-   gRPC, now that the async provider, TCP, Redis, and NATS transport contracts
+1. Add the next production message transport, such as RabbitMQ, Kafka, or gRPC,
+   now that the async provider, TCP, Redis, NATS, and MQTT transport contracts
    are stable.
 2. Continue defining integrations through providers, middleware, guards,
    interceptors, or adapters instead of adding one-off framework hooks.
