@@ -111,6 +111,7 @@ fn extractor_validation_tokens(
             | Extractor::Headers
             | Extractor::HostParam(_)
             | Extractor::Ip(_)
+            | Extractor::Response
             | Extractor::Session
             | Extractor::UploadedFile(_)
             | Extractor::UploadedFiles(_)

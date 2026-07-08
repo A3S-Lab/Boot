@@ -71,7 +71,7 @@ pub use a3s_boot_macros::{
     host, host_param, http_code, injectable, ip, message_controller, message_pattern, metadata,
     module, on_gateway_connection, on_gateway_disconnect, on_gateway_init, operation, options,
     param, params, patch, patch_json, post, post_json, put, put_json, query, redirect, render,
-    request, request_body, response, serialize, skip_validation, sse, subscribe_message, tag,
+    request, request_body, res, response, serialize, skip_validation, sse, subscribe_message, tag,
     use_filter, use_guard, use_interceptor, use_pipe, validate, version, version_neutral, versions,
     websocket_gateway, ValidationSchema,
 };
@@ -135,8 +135,8 @@ pub use http::{
     extract_request_value, transform_request_value, BootRequest, BootResponse, CookieOptions,
     CookieSameSite, DefaultValuePipe, HttpMethod, ParseArrayPipe, ParseArraySeparatorPipe,
     ParseBoolPipe, ParseEnumPipe, ParseFloatPipe, ParseFloatTarget, ParseIntPipe, ParseIntTarget,
-    ParseUuidPipe, ParseUuidVersionPipe, RequestExtractor, RequestValuePipe, SseEvent, SseStream,
-    StreamableFile, StreamableFileOptions, StreamableFileStream, UuidVersion,
+    ParseUuidPipe, ParseUuidVersionPipe, RequestExtractor, RequestValuePipe, ResponsePassthrough,
+    SseEvent, SseStream, StreamableFile, StreamableFileOptions, StreamableFileStream, UuidVersion,
 };
 #[cfg(feature = "http-client")]
 pub use http_client::{

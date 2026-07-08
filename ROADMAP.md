@@ -110,6 +110,9 @@ Implemented today:
   route-level override semantics, protocol-neutral `ExecutionContext` access
   for HTTP, WebSocket, and transport guards/interceptors, and typed `Reflector`
   lookup from discovery snapshots.
+- Nest-style response passthrough with `ResponsePassthrough` and `#[res]`,
+  allowing controller methods to set status codes, headers, and cookies while
+  still returning a typed DTO or adapter-neutral `BootResponse`.
 - Nest-style runtime discovery and devtools-ready application graph snapshots
   for modules, imports, provider tokens, exports, route counts, WebSocket
   gateway counts, and microservice message pattern counts.
@@ -779,6 +782,9 @@ Acceptance:
   (Covered)
 - Response cookies can be written and expired through typed `BootResponse`
   helpers instead of hand-built `Set-Cookie` strings. (Covered)
+- Response passthrough can set status codes, headers, and cookies through
+  `ResponsePassthrough` and Nest-style `#[res]` arguments without exposing
+  adapter-native response objects. (Covered)
 - Testing utilities can compile Nest-style testing modules, override providers
   before controllers are built, resolve providers, and dispatch in-process
   requests. (Covered)

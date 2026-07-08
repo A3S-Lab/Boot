@@ -312,6 +312,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@Headers("x-request-id")` | `#[header("x-request-id")]` on a method argument |
 | `@Ip()` | `#[ip]` on a method argument |
 | `@Req()` | `#[request]` on a `BootRequest` argument |
+| `@Res({ passthrough: true })` | `#[res]` on a `ResponsePassthrough` argument |
 | `@Session()` | `#[session]` on a `Session` or `Option<Session>` argument |
 | `createParamDecorator(...)` | `#[extract(current_user)]` with a `RequestExtractor<T>` or function |
 | `@Sse("events")` | `#[sse("/events")]` on an async method returning an SSE event stream |
@@ -533,9 +534,11 @@ and DELETE route attributes default to JSON.
 Use extractor attributes on method arguments for Nest-style request binding:
 `#[param("id")]`, `#[params]`, `#[query]`, `#[query("name")]`, `#[body]`,
 `#[header("name")]`, `#[headers]`, `#[host_param("account")]`, `#[ip]`, and
-`#[request]`. With the `session` feature enabled, `#[session]` mirrors Nest's
-`@Session()` parameter decorator. Single-value extractors parse into the
-argument type with
+`#[request]`. `#[res]` injects a `ResponsePassthrough` handle for Nest-style
+response passthrough metadata: set status codes, headers, and cookies while
+still returning a DTO or `BootResponse` through the normal Boot pipeline. With
+the `session` feature enabled, `#[session]` mirrors Nest's `@Session()`
+parameter decorator. Single-value extractors parse into the argument type with
 `FromStr`, so `#[param("id")] id: u64` and `#[query("active")] active: bool`
 work without a separate parse pipe. For custom Nest-style parameter pipes, add
 `pipe = <expr>` to `#[param]`, `#[query("name")]`, `#[header]`,
@@ -3865,6 +3868,37 @@ fn from_error(error: &a3s_boot::BootError) -> BootResponse {
 }
 ```
 
+For the common Nest `@Res({ passthrough: true })` workflow, inject
+`ResponsePassthrough` with `#[res]`. The handler can set response metadata and
+still return the normal typed value:
+
+```rust
+use a3s_boot::{
+    controller, get, res, CookieOptions, ResponsePassthrough, Result,
+};
+
+#[controller("/cats")]
+impl CatsController {
+    #[get("/{id}")]
+    async fn find_one(
+        &self,
+        #[res] response: ResponsePassthrough,
+    ) -> Result<CatDto> {
+        response.set_status(202)?;
+        response.set_header("x-cache", "warm")?;
+        response.set_cookie("last_cat", "milo", CookieOptions::new().with_path("/"))?;
+        Ok(CatDto {
+            name: "Milo".to_string(),
+            adopted: true,
+        })
+    }
+}
+```
+
+Boot does not expose adapter-native Express/Fastify response objects. Returning
+`BootResponse` remains the explicit raw-response path; `ResponsePassthrough`
+only layers metadata onto that response or onto a serialized DTO response.
+
 ## View Rendering
 
 Boot supports Nest-style MVC responses through a provider-backed
@@ -4810,6 +4844,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | Security | Optional CORS, security headers, CSRF, and rate limiting helpers |
 | Session | Optional provider-backed session store, middleware, and cookie persistence |
 | Response cookies | Typed `Set-Cookie` and delete-cookie helpers on `BootResponse` |
+| Response passthrough | Nest-style `#[res]` metadata handle for status, headers, and cookies |
 | API versioning | URI, header, or media type version matching through route metadata |
 | Serialization | JSON response shaping through `SerializationInterceptor` metadata |
 | Filter | Error mapping into HTTP responses |

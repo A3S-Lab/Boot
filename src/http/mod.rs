@@ -5,6 +5,7 @@ mod method;
 mod query;
 mod request;
 mod response;
+mod response_passthrough;
 mod sse;
 mod streamable_file;
 
@@ -18,5 +19,6 @@ pub use extractor::{
 pub use method::HttpMethod;
 pub use request::BootRequest;
 pub use response::BootResponse;
+pub use response_passthrough::ResponsePassthrough;
 pub use sse::{SseEvent, SseStream};
 pub use streamable_file::{StreamableFile, StreamableFileOptions, StreamableFileStream};

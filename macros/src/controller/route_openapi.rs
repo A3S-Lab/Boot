@@ -101,6 +101,7 @@ fn extractor_openapi_tokens(
             | Extractor::Headers
             | Extractor::HostParam(_)
             | Extractor::Ip(_)
+            | Extractor::Response
             | Extractor::Session
             | Extractor::UploadedFile(_)
             | Extractor::UploadedFiles(_)
