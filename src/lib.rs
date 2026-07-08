@@ -150,8 +150,9 @@ pub use openapi::{
 };
 pub use pipeline::{
     catch_errors, CatchFilter, ExceptionFilter, ExecutionContext, ExecutionInterceptor,
-    ExecutionProtocol, ExecutionTransportKind, Guard, Interceptor, Middleware, MiddlewareOutcome,
-    Pipe, TransportExecutionContext, WebSocketExecutionContext,
+    ExecutionProtocol, ExecutionTransportKind, Guard, Interceptor, Middleware, MiddlewareConsumer,
+    MiddlewareConsumerBuilder, MiddlewareOutcome, MiddlewareRoute, Pipe, TransportExecutionContext,
+    WebSocketExecutionContext,
 };
 pub use provider::{
     FromModuleRef, ModuleRef, ProviderDefinition, ProviderOnApplicationBootstrap,

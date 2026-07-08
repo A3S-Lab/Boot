@@ -2,8 +2,9 @@ use super::application::ModuleInstance;
 use crate::pipeline::PipelineComponents;
 use crate::routing::path::join_paths;
 use crate::{
-    BootError, BoxFuture, ControllerDefinition, MessagePatternDefinition, Module, ModuleRef,
-    ProviderDefinition, ProviderToken, Result, RouteDefinition, WebSocketGatewayDefinition,
+    BootError, BoxFuture, ControllerDefinition, MessagePatternDefinition, MiddlewareConsumer,
+    Module, ModuleRef, ProviderDefinition, ProviderToken, Result, RouteDefinition,
+    WebSocketGatewayDefinition,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -165,27 +166,31 @@ impl ModuleRegistry {
         for middleware in module.middleware() {
             module_pipeline.push_middleware_arc(middleware);
         }
+        let mut middleware_consumer = MiddlewareConsumer::new();
+        module.configure(&mut middleware_consumer, &module_ref)?;
 
         for controller in module.controllers(&module_ref)? {
-            register_controller(
-                name,
-                controller,
-                &module_ref,
+            let context = RouteRegistrationContext {
+                module_name: name,
+                module_ref: &module_ref,
                 global_pipeline,
-                &module_pipeline,
-                &route_prefix,
-                sink.routes,
-            )?;
+                module_pipeline: &module_pipeline,
+                middleware_consumer: &middleware_consumer,
+                route_prefix: &route_prefix,
+            };
+            register_controller(&context, controller, sink.routes)?;
         }
 
         for route in module.routes()? {
-            let route = route
-                .with_pipeline_prefix(&module_pipeline)
-                .with_pipeline_prefix(global_pipeline)
-                .with_module_name(name)
-                .with_module_ref(module_ref.clone());
-            let route = with_route_prefix(route, &route_prefix)?;
-            sink.routes.push(route);
+            let context = RouteRegistrationContext {
+                module_name: name,
+                module_ref: &module_ref,
+                global_pipeline,
+                module_pipeline: &module_pipeline,
+                middleware_consumer: &middleware_consumer,
+                route_prefix: &route_prefix,
+            };
+            sink.routes.push(context.prepare_route(route)?);
         }
         sink.gateways.extend(
             module
@@ -264,27 +269,31 @@ impl ModuleRegistry {
             for middleware in module.middleware() {
                 module_pipeline.push_middleware_arc(middleware);
             }
+            let mut middleware_consumer = MiddlewareConsumer::new();
+            module.configure(&mut middleware_consumer, &module_ref)?;
 
             for controller in module.controllers(&module_ref)? {
-                register_controller(
-                    name,
-                    controller,
-                    &module_ref,
+                let context = RouteRegistrationContext {
+                    module_name: name,
+                    module_ref: &module_ref,
                     global_pipeline,
-                    &module_pipeline,
-                    &route_prefix,
-                    sink.routes,
-                )?;
+                    module_pipeline: &module_pipeline,
+                    middleware_consumer: &middleware_consumer,
+                    route_prefix: &route_prefix,
+                };
+                register_controller(&context, controller, sink.routes)?;
             }
 
             for route in module.routes()? {
-                let route = route
-                    .with_pipeline_prefix(&module_pipeline)
-                    .with_pipeline_prefix(global_pipeline)
-                    .with_module_name(name)
-                    .with_module_ref(module_ref.clone());
-                let route = with_route_prefix(route, &route_prefix)?;
-                sink.routes.push(route);
+                let context = RouteRegistrationContext {
+                    module_name: name,
+                    module_ref: &module_ref,
+                    global_pipeline,
+                    module_pipeline: &module_pipeline,
+                    middleware_consumer: &middleware_consumer,
+                    route_prefix: &route_prefix,
+                };
+                sink.routes.push(context.prepare_route(route)?);
             }
             sink.gateways.extend(
                 module
@@ -343,22 +352,39 @@ pub(super) struct RegisteredModule {
     pub exports: ModuleRef,
 }
 
+struct RouteRegistrationContext<'a> {
+    module_name: &'a str,
+    module_ref: &'a ModuleRef,
+    global_pipeline: &'a PipelineComponents,
+    module_pipeline: &'a PipelineComponents,
+    middleware_consumer: &'a MiddlewareConsumer,
+    route_prefix: &'a str,
+}
+
+impl RouteRegistrationContext<'_> {
+    fn prepare_route(&self, route: RouteDefinition) -> Result<RouteDefinition> {
+        let local_path = route.path().to_string();
+        let route = with_route_prefix(route, self.route_prefix)?;
+        let path_candidates = route_path_candidates(local_path, route.path());
+        let route = self
+            .middleware_consumer
+            .apply_to_route(route, &path_candidates);
+
+        Ok(route
+            .with_pipeline_prefix(self.module_pipeline)
+            .with_pipeline_prefix(self.global_pipeline)
+            .with_module_name(self.module_name)
+            .with_module_ref(self.module_ref.clone()))
+    }
+}
+
 fn register_controller(
-    module_name: &str,
+    context: &RouteRegistrationContext<'_>,
     controller: ControllerDefinition,
-    module_ref: &ModuleRef,
-    global_pipeline: &PipelineComponents,
-    module_pipeline: &PipelineComponents,
-    route_prefix: &str,
     routes: &mut Vec<RouteDefinition>,
 ) -> Result<()> {
     for route in controller.into_routes() {
-        let route = route
-            .with_pipeline_prefix(module_pipeline)
-            .with_pipeline_prefix(global_pipeline)
-            .with_module_name(module_name)
-            .with_module_ref(module_ref.clone());
-        routes.push(with_route_prefix(route, route_prefix)?);
+        routes.push(context.prepare_route(route)?);
     }
     Ok(())
 }
@@ -381,5 +407,13 @@ fn with_route_prefix(route: RouteDefinition, route_prefix: &str) -> Result<Route
         Ok(route)
     } else {
         route.with_path_prefix(route_prefix)
+    }
+}
+
+fn route_path_candidates(local_path: String, prefixed_path: &str) -> Vec<String> {
+    if local_path == prefixed_path {
+        vec![local_path]
+    } else {
+        vec![local_path, prefixed_path.to_string()]
     }
 }

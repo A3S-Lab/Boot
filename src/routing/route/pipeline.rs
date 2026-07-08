@@ -38,6 +38,11 @@ impl RouteDefinition {
         self
     }
 
+    pub(crate) fn with_middleware_prefix_arc(mut self, middleware: &[Arc<dyn Middleware>]) -> Self {
+        self.middleware = prepend_arc(middleware, self.middleware);
+        self
+    }
+
     pub fn with_guard<G>(mut self, guard: G) -> Self
     where
         G: Guard,

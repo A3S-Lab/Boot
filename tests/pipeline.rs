@@ -1,9 +1,9 @@
 use a3s_boot::{
     BootApplication, BootError, BootErrorKind, BootRequest, BootResponse, BoxFuture,
     ControllerDefinition, ExecutionContext, ExecutionInterceptor, Guard, HttpMethod, Interceptor,
-    MessagePatternDefinition, Middleware, MiddlewareOutcome, Module, ModuleRef, Result,
-    RouteDefinition, TransportMessage, TransportReply, WebSocketGatewayDefinition,
-    WebSocketMessage,
+    MessagePatternDefinition, Middleware, MiddlewareConsumer, MiddlewareOutcome, MiddlewareRoute,
+    Module, ModuleRef, Result, RouteDefinition, TransportMessage, TransportReply,
+    WebSocketGatewayDefinition, WebSocketMessage,
 };
 use serde_json::json;
 use std::sync::Arc;
@@ -102,6 +102,167 @@ async fn middleware_can_short_circuit_before_guards() {
     assert_eq!(response.status(), 202);
     assert_eq!(response.body, b"middleware");
     assert_eq!(*guard_calls.lock().unwrap(), 0);
+}
+
+#[tokio::test]
+async fn middleware_consumer_applies_and_excludes_module_routes() -> Result<()> {
+    #[derive(Debug)]
+    struct ConsumerModule {
+        log: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl Module for ConsumerModule {
+        fn name(&self) -> &'static str {
+            "consumer"
+        }
+
+        fn route_prefix(&self) -> Option<&str> {
+            Some("/api")
+        }
+
+        fn configure(
+            &self,
+            consumer: &mut MiddlewareConsumer,
+            _module_ref: &ModuleRef,
+        ) -> Result<()> {
+            let log = Arc::clone(&self.log);
+            consumer
+                .apply(move |request: BootRequest| {
+                    let log = Arc::clone(&log);
+                    async move {
+                        log.lock().unwrap().push(format!(
+                            "{} {}",
+                            request.method.as_str(),
+                            request.path
+                        ));
+                        Ok(MiddlewareOutcome::next(
+                            request.with_header("x-consumer", "yes"),
+                        ))
+                    }
+                })
+                .exclude([MiddlewareRoute::get("/cats/internal")?])
+                .for_routes([MiddlewareRoute::get("/cats/{id}")?])
+        }
+
+        fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
+            Ok(vec![ControllerDefinition::new("/cats")?
+                .get("/internal", |request: BootRequest| async move {
+                    Ok(BootResponse::text(format!(
+                        "internal:{}",
+                        request.header("x-consumer").unwrap_or("missing")
+                    )))
+                })?
+                .get("/{id}", |request: BootRequest| async move {
+                    Ok(BootResponse::text(format!(
+                        "get:{}",
+                        request.header("x-consumer").unwrap_or("missing")
+                    )))
+                })?
+                .post("/{id}", |request: BootRequest| async move {
+                    Ok(BootResponse::text(format!(
+                        "post:{}",
+                        request.header("x-consumer").unwrap_or("missing")
+                    )))
+                })?])
+        }
+    }
+
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let app = BootApplication::builder()
+        .global_prefix("/v1")
+        .import(ConsumerModule {
+            log: Arc::clone(&log),
+        })
+        .build()?;
+
+    let matched = app
+        .call(BootRequest::new(HttpMethod::Get, "/v1/api/cats/42"))
+        .await?;
+    let excluded = app
+        .call(BootRequest::new(HttpMethod::Get, "/v1/api/cats/internal"))
+        .await?;
+    let method_miss = app
+        .call(BootRequest::new(HttpMethod::Post, "/v1/api/cats/42"))
+        .await?;
+
+    assert_eq!(matched.body, b"get:yes");
+    assert_eq!(excluded.body, b"internal:missing");
+    assert_eq!(method_miss.body, b"post:missing");
+    assert_eq!(log.lock().unwrap().as_slice(), ["GET /v1/api/cats/42"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn dynamic_module_can_configure_middleware_consumer() -> Result<()> {
+    let app = BootApplication::builder()
+        .import(
+            a3s_boot::DynamicModule::new("dynamic-consumer")
+                .route_prefix("/dynamic")
+                .route(RouteDefinition::get(
+                    "/health",
+                    |request: BootRequest| async move {
+                        Ok(BootResponse::text(
+                            request.header("x-dynamic").unwrap_or("missing"),
+                        ))
+                    },
+                )?)
+                .configure_middleware(|consumer| {
+                    consumer
+                        .apply(|request: BootRequest| async move {
+                            Ok(MiddlewareOutcome::next(
+                                request.with_header("x-dynamic", "yes"),
+                            ))
+                        })
+                        .for_routes([MiddlewareRoute::get("/health")?])
+                })?,
+        )
+        .build()?;
+
+    let response = app
+        .call(BootRequest::new(HttpMethod::Get, "/dynamic/health"))
+        .await?;
+
+    assert_eq!(response.body, b"yes");
+    Ok(())
+}
+
+#[tokio::test]
+async fn middleware_consumer_can_apply_to_all_module_routes() -> Result<()> {
+    let app = BootApplication::builder()
+        .import(
+            a3s_boot::DynamicModule::new("all-consumer")
+                .route(RouteDefinition::get(
+                    "/a",
+                    |request: BootRequest| async move {
+                        Ok(BootResponse::text(
+                            request.header("x-all").unwrap_or("missing"),
+                        ))
+                    },
+                )?)
+                .route(RouteDefinition::get(
+                    "/b",
+                    |request: BootRequest| async move {
+                        Ok(BootResponse::text(
+                            request.header("x-all").unwrap_or("missing"),
+                        ))
+                    },
+                )?)
+                .configure_middleware(|consumer| {
+                    consumer
+                        .apply(|request: BootRequest| async move {
+                            Ok(MiddlewareOutcome::next(request.with_header("x-all", "yes")))
+                        })
+                        .for_all_routes()
+                })?,
+        )
+        .build()?;
+
+    let first = app.call(BootRequest::new(HttpMethod::Get, "/a")).await?;
+    let second = app.call(BootRequest::new(HttpMethod::Get, "/b")).await?;
+
+    assert_eq!(first.body, b"yes");
+    assert_eq!(second.body, b"yes");
+    Ok(())
 }
 
 #[tokio::test]

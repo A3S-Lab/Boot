@@ -15,5 +15,7 @@ pub use filter::{catch_errors, CatchFilter, ExceptionFilter};
 pub use guard::Guard;
 pub(crate) use interceptor::ExecutionInterceptorAdapter;
 pub use interceptor::{ExecutionInterceptor, Interceptor};
-pub use middleware::{Middleware, MiddlewareOutcome};
+pub use middleware::{
+    Middleware, MiddlewareConsumer, MiddlewareConsumerBuilder, MiddlewareOutcome, MiddlewareRoute,
+};
 pub use pipe::Pipe;

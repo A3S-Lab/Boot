@@ -1,7 +1,8 @@
 use super::Module;
 use crate::{
-    BoxFuture, ControllerDefinition, MessagePatternDefinition, Middleware, ModuleRef,
-    ProviderDefinition, ProviderToken, Result, RouteDefinition, WebSocketGatewayDefinition,
+    BoxFuture, ControllerDefinition, MessagePatternDefinition, Middleware, MiddlewareConsumer,
+    ModuleRef, ProviderDefinition, ProviderToken, Result, RouteDefinition,
+    WebSocketGatewayDefinition,
 };
 use std::sync::Arc;
 
@@ -19,6 +20,7 @@ pub struct DynamicModule {
     message_patterns: Vec<MessagePatternDefinition>,
     global: bool,
     route_prefix: Option<String>,
+    middleware_consumer: MiddlewareConsumer,
 }
 
 impl DynamicModule {
@@ -35,6 +37,7 @@ impl DynamicModule {
             message_patterns: Vec::new(),
             global: false,
             route_prefix: None,
+            middleware_consumer: MiddlewareConsumer::new(),
         }
     }
 
@@ -85,6 +88,14 @@ impl DynamicModule {
     pub fn middleware_arc(mut self, middleware: Arc<dyn Middleware>) -> Self {
         self.middleware.push(middleware);
         self
+    }
+
+    pub fn configure_middleware<F>(mut self, configure: F) -> Result<Self>
+    where
+        F: FnOnce(&mut MiddlewareConsumer) -> Result<()>,
+    {
+        configure(&mut self.middleware_consumer)?;
+        Ok(self)
     }
 
     pub fn controller(mut self, controller: ControllerDefinition) -> Self {
@@ -145,6 +156,11 @@ impl Module for DynamicModule {
 
     fn middleware(&self) -> Vec<Arc<dyn Middleware>> {
         self.middleware.clone()
+    }
+
+    fn configure(&self, consumer: &mut MiddlewareConsumer, _module_ref: &ModuleRef) -> Result<()> {
+        consumer.extend(self.middleware_consumer.clone());
+        Ok(())
     }
 
     fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {

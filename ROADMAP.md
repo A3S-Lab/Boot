@@ -88,7 +88,8 @@ Implemented today:
   `ViewModule`, `StringTemplateViewEngine`, `RouteDefinition::get_view(...)`,
   `ControllerDefinition::get_view(...)`, `BootResponse::html(...)`, and the
   `#[render("view")]` route macro.
-- Global, module, controller-level, and route-level middleware plus global and
+- Global, module, controller-level, and route-level middleware plus Nest-style
+  `MiddlewareConsumer` include/exclude route configuration, with global and
   controller-level `Pipe`, `Guard`, `Interceptor`, and `ExceptionFilter`
   support.
 - Adapter-neutral request/response types, typed params/query helpers, typed
@@ -123,8 +124,9 @@ Implemented today:
   preserve target provider scope.
 - Request-scoped route/controller handler factories through `*_scoped` helpers.
 - Middleware with request mutation, short-circuit responses, global/module/
-  controller/route scopes, filter integration for errors, and adapter
-  validation before middleware execution.
+  controller/route scopes, `MiddlewareConsumer::apply(...).for_routes(...)`
+  include/exclude rules, filter integration for errors, and adapter validation
+  before middleware execution.
 - WebSocket gateways with adapter-neutral messages and connections, gateway
   pipes/guards/interceptors, provider-backed handlers, Nest-style gateway
   macros, and Axum WebSocket route registration.
@@ -494,6 +496,8 @@ Tasks:
   `MiddlewareOutcome::Respond`)
 - Support global, module/controller, and route-scoped registration.
   (Implemented)
+- Add Nest-style `MiddlewareConsumer` with `apply`, `exclude`, `for_routes`,
+  and `for_all_routes` for module-scoped route selection. (Implemented)
 - Preserve order: middleware, guards, interceptor `before` hooks, pipes,
   validation, handler, interceptor `after` hooks, filters. (Covered)
 - Ensure adapter-level request validation remains before middleware.
@@ -505,6 +509,8 @@ Acceptance:
   (Covered)
 - Middleware can reject a request before guards run. (Covered)
 - Route-scoped middleware only applies to matching route groups. (Covered)
+- Consumer route selectors support method-specific include/exclude rules and
+  module-local or module-prefixed paths. (Covered)
 - Pipeline ordering is covered by tests. (Covered)
 
 ## Milestone 6: WebSocket Gateways

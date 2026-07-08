@@ -1,6 +1,7 @@
 use crate::{
-    BoxFuture, ControllerDefinition, MessagePatternDefinition, Middleware, ModuleRef,
-    ProviderDefinition, ProviderToken, Result, RouteDefinition, WebSocketGatewayDefinition,
+    BoxFuture, ControllerDefinition, MessagePatternDefinition, Middleware, MiddlewareConsumer,
+    ModuleRef, ProviderDefinition, ProviderToken, Result, RouteDefinition,
+    WebSocketGatewayDefinition,
 };
 use std::sync::Arc;
 
@@ -44,6 +45,11 @@ pub trait Module: Send + Sync + 'static {
     /// Middleware applied to controllers and direct routes declared by this module.
     fn middleware(&self) -> Vec<Arc<dyn Middleware>> {
         Vec::new()
+    }
+
+    /// Configure route-scoped middleware with a Nest-style consumer.
+    fn configure(&self, _consumer: &mut MiddlewareConsumer, _module_ref: &ModuleRef) -> Result<()> {
+        Ok(())
     }
 
     /// Controller route groups built with access to the provider container.

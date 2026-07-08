@@ -348,6 +348,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@Optional()` | `Option<Arc<T>>` on an injectable field |
 | `@Module({ imports, providers, controllers, exports })` | `#[module(...)]` on a module struct, or an explicit `impl Module` |
 | `RouterModule.register([{ path: "api", module: CatsModule }])` | `#[module(route_prefix = "/api", ...)]` or `Module::route_prefix()` |
+| `configure(consumer: MiddlewareConsumer)` | `Module::configure(...)` with `MiddlewareConsumer::apply(...).for_routes(...)` |
 | `NestFactory.create(AppModule)` | `BootFactory::create(AppModule)?` |
 | `app.listen(3000)` | `app.listen_with(&AxumAdapter::new(), addr).await` |
 | `app.close()` | `app.close().await` |
@@ -3384,6 +3385,52 @@ and applies to controllers and direct routes declared by that module. Errors
 returned by middleware go through exception filters; short-circuit responses
 skip the remaining request pipeline. Adapters still run their own request
 validation before Boot middleware executes.
+
+For Nest-style `MiddlewareConsumer` configuration, override
+`Module::configure(...)` and attach middleware to matching routes:
+
+```rust
+use a3s_boot::{
+    BootRequest, MiddlewareConsumer, MiddlewareOutcome, MiddlewareRoute, Module, ModuleRef,
+    Result,
+};
+
+#[derive(Debug)]
+struct CatsModule;
+
+impl Module for CatsModule {
+    fn name(&self) -> &'static str {
+        "cats"
+    }
+
+    fn route_prefix(&self) -> Option<&str> {
+        Some("/api")
+    }
+
+    fn configure(
+        &self,
+        consumer: &mut MiddlewareConsumer,
+        _module_ref: &ModuleRef,
+    ) -> Result<()> {
+        consumer
+            .apply(|request: BootRequest| async move {
+                Ok(MiddlewareOutcome::next(
+                    request.with_header("x-feature", "cats"),
+                ))
+            })
+            .exclude([MiddlewareRoute::get("/cats/internal")?])
+            .for_routes([MiddlewareRoute::get("/cats/{id}")?])
+    }
+}
+```
+
+Consumer route selectors match HTTP routes declared by the same module. They can
+use either module-local paths such as `/cats/{id}` or module-prefixed paths such
+as `/api/cats/{id}`; `global_prefix(...)` is still applied later at the
+application layer. `MiddlewareRoute::any(...)` matches every route method, and
+`for_all_routes()` applies the middleware to every HTTP route in the module.
+`DynamicModule::configure_middleware(...)` exposes the same consumer API for
+runtime-built modules.
 
 ## JSON DTOs
 
