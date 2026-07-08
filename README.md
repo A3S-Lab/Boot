@@ -878,10 +878,10 @@ async fn dispatch() -> Result<()> {
 ```
 
 Gateway-specific `WebSocketPipe`, `WebSocketGuard`, and `WebSocketInterceptor`
-hooks run in deterministic order: pipes, guards, interceptor `before`, handler,
+hooks run in deterministic order: guards, interceptor `before`, pipes, handler,
 then interceptor `after` in reverse order. They are separate from HTTP
 middleware because WebSocket message dispatch is event-based rather than
-request/response-based, but they follow the same pipeline vocabulary.
+request/response-based, but they follow the same Nest-style pipeline order.
 
 ## Microservice Transports
 
@@ -1017,9 +1017,8 @@ async fn dispatch() -> Result<()> {
 ```
 
 Transport-specific `TransportPipe`, `TransportGuard`, and
-`TransportInterceptor` hooks run in deterministic order: pipes, validation,
-guards, interceptor `before`, handler, then interceptor `after` in reverse
-order.
+`TransportInterceptor` hooks run in deterministic order: guards, interceptor
+`before`, pipes, validation, handler, then interceptor `after` in reverse order.
 
 ## Application Events
 

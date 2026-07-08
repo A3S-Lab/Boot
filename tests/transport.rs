@@ -239,9 +239,9 @@ async fn transport_pipeline_runs_in_order() {
     assert_eq!(
         log.lock().unwrap().as_slice(),
         [
-            "pipe",
             "guard:ping",
             "before:message",
+            "pipe",
             "handler",
             "after:message"
         ]

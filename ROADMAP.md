@@ -455,7 +455,8 @@ Acceptance:
 - A gateway can accept a WebSocket connection and dispatch messages by event
   name. (Covered)
 - Gateway handlers can use providers. (Covered)
-- Gateway guards/pipes/interceptors run in deterministic order. (Covered)
+- Gateway guards/interceptors/pipes run in Nest-style deterministic order.
+  (Covered)
 - Tests cover in-process adapter behavior and Axum integration. (Covered)
 
 ## Milestone 7: Microservice Transports
@@ -476,8 +477,8 @@ Tasks:
   `BootApplicationBuilder::message_pattern`, `#[message_controller]`,
   `#[message_pattern]`, and `#[event_pattern]`)
 - Reuse provider lookup and pipeline primitives. (Implemented with
-  provider-backed module registration plus transport-specific pipes, guards,
-  interceptors, and payload validation)
+  provider-backed module registration plus transport-specific guards,
+  interceptors, pipes, and payload validation)
 - Start with an in-process test transport before external brokers.
   (Implemented with `InProcessTransport`)
 - Add one production transport only after the core contract is stable.

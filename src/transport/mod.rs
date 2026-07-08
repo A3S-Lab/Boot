@@ -512,14 +512,6 @@ impl MessagePatternDefinition {
             )));
         }
 
-        for pipe in &self.pipes {
-            message = pipe.transform(message).await?;
-        }
-
-        for validator in &self.validators {
-            validator(&message)?;
-        }
-
         let context = TransportContext::new(self, &message.pattern);
         for guard in &self.guards {
             let can_activate = guard.can_activate(context.clone()).await?;
@@ -533,6 +525,14 @@ impl MessagePatternDefinition {
 
         for interceptor in &self.interceptors {
             interceptor.before(context.clone()).await?;
+        }
+
+        for pipe in &self.pipes {
+            message = pipe.transform(message).await?;
+        }
+
+        for validator in &self.validators {
+            validator(&message)?;
         }
 
         let mut reply = self.handler.call(message).await?;

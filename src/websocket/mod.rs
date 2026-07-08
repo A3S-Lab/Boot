@@ -452,10 +452,6 @@ impl WebSocketGatewayConnection {
             BootError::NotFound(format!("websocket event {} {}", self.gateway.path, event))
         })?;
 
-        for pipe in &self.gateway.pipes {
-            message = pipe.transform(message).await?;
-        }
-
         let context = WebSocketContext::new(&self.gateway, self.request.clone(), &message.event);
         for guard in &self.gateway.guards {
             let can_activate = guard.can_activate(context.clone()).await?;
@@ -469,6 +465,10 @@ impl WebSocketGatewayConnection {
 
         for interceptor in &self.gateway.interceptors {
             interceptor.before(context.clone()).await?;
+        }
+
+        for pipe in &self.gateway.pipes {
+            message = pipe.transform(message).await?;
         }
 
         let mut reply = handler.call(message).await?;

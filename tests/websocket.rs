@@ -205,9 +205,9 @@ async fn websocket_gateway_pipeline_runs_in_order() {
     assert_eq!(
         log.lock().unwrap().as_slice(),
         [
-            "pipe",
             "guard:ping",
             "before:gateway",
+            "pipe",
             "handler",
             "after:gateway"
         ]
