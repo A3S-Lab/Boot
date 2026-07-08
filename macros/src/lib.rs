@@ -363,6 +363,21 @@ pub fn request_body(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
+pub fn api_param(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    openapi_attribute_outside_controller("api_param", item)
+}
+
+#[proc_macro_attribute]
+pub fn api_query(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    openapi_attribute_outside_controller("api_query", item)
+}
+
+#[proc_macro_attribute]
+pub fn api_header(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    openapi_attribute_outside_controller("api_header", item)
+}
+
+#[proc_macro_attribute]
 pub fn bearer_auth(_attr: TokenStream, item: TokenStream) -> TokenStream {
     openapi_attribute_outside_controller("bearer_auth", item)
 }
@@ -4679,6 +4694,9 @@ enum OpenApiAttrKind {
     Operation,
     Response,
     RequestBody,
+    ApiParam,
+    ApiQuery,
+    ApiHeader,
     BearerAuth,
     HideFromOpenApi,
 }
@@ -4691,6 +4709,9 @@ impl OpenApiAttrKind {
             "operation" => Some(Self::Operation),
             "response" => Some(Self::Response),
             "request_body" => Some(Self::RequestBody),
+            "api_param" => Some(Self::ApiParam),
+            "api_query" => Some(Self::ApiQuery),
+            "api_header" => Some(Self::ApiHeader),
             "bearer_auth" => Some(Self::BearerAuth),
             "hide_from_openapi" => Some(Self::HideFromOpenApi),
             _ => None,
@@ -4709,6 +4730,24 @@ impl OpenApiAttrKind {
             Self::RequestBody => attr
                 .parse_args::<RequestBodyArgs>()
                 .map(RouteOpenApiSpec::RequestBody),
+            Self::ApiParam => attr.parse_args::<OpenApiParameterArgs>().map(|args| {
+                RouteOpenApiSpec::Parameter(OpenApiParameterSpec {
+                    kind: OpenApiParameterSpecKind::Path,
+                    args,
+                })
+            }),
+            Self::ApiQuery => attr.parse_args::<OpenApiParameterArgs>().map(|args| {
+                RouteOpenApiSpec::Parameter(OpenApiParameterSpec {
+                    kind: OpenApiParameterSpecKind::Query,
+                    args,
+                })
+            }),
+            Self::ApiHeader => attr.parse_args::<OpenApiParameterArgs>().map(|args| {
+                RouteOpenApiSpec::Parameter(OpenApiParameterSpec {
+                    kind: OpenApiParameterSpecKind::Header,
+                    args,
+                })
+            }),
             Self::BearerAuth => {
                 expect_no_extractor_args(attr, "bearer_auth")?;
                 Ok(RouteOpenApiSpec::BearerAuth)
@@ -4727,6 +4766,7 @@ enum RouteOpenApiSpec {
     Operation(OperationArgs),
     Response(ResponseArgs),
     RequestBody(RequestBodyArgs),
+    Parameter(OpenApiParameterSpec),
     BearerAuth,
     HideFromOpenApi,
 }
@@ -4738,6 +4778,7 @@ impl RouteOpenApiSpec {
             Self::Operation(args) => Ok(args.tokens()),
             Self::Response(args) => args.tokens().map(|token| vec![token]),
             Self::RequestBody(args) => Ok(vec![args.tokens()]),
+            Self::Parameter(spec) => spec.tokens().map(|token| vec![token]),
             Self::BearerAuth => Ok(vec![quote!(with_bearer_auth())]),
             Self::HideFromOpenApi => Ok(vec![quote!(hide_from_openapi())]),
         }
@@ -4949,6 +4990,111 @@ impl Parse for RequestBodyArgs {
         }
 
         Ok(args)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum OpenApiParameterSpecKind {
+    Path,
+    Query,
+    Header,
+}
+
+#[derive(Clone)]
+struct OpenApiParameterSpec {
+    kind: OpenApiParameterSpecKind,
+    args: OpenApiParameterArgs,
+}
+
+impl OpenApiParameterSpec {
+    fn tokens(&self) -> Result<proc_macro2::TokenStream> {
+        let name = &self.args.name;
+        let schema = self
+            .args
+            .schema
+            .as_ref()
+            .map(openapi_schema_tokens)
+            .unwrap_or_else(|| quote!(::a3s_boot::OpenApiSchema::string()));
+        let required = self.args.required.as_ref().map_or(true, LitBool::value);
+
+        if matches!(self.kind, OpenApiParameterSpecKind::Path) && !required {
+            return Err(syn::Error::new_spanned(
+                self.args.required.as_ref().expect("checked above"),
+                "OpenAPI path parameters are always required",
+            ));
+        }
+
+        let mut parameter = match self.kind {
+            OpenApiParameterSpecKind::Path => {
+                quote!(::a3s_boot::OpenApiParameter::path(#name, #schema))
+            }
+            OpenApiParameterSpecKind::Query => {
+                quote!(::a3s_boot::OpenApiParameter::query(#name, #required, #schema))
+            }
+            OpenApiParameterSpecKind::Header => {
+                quote!(::a3s_boot::OpenApiParameter::header(#name, #required, #schema))
+            }
+        };
+
+        if let Some(description) = &self.args.description {
+            parameter = quote!((#parameter).with_description(#description));
+        }
+
+        Ok(quote!(with_parameter(#parameter)))
+    }
+}
+
+#[derive(Clone)]
+struct OpenApiParameterArgs {
+    name: LitStr,
+    schema: Option<Type>,
+    description: Option<LitStr>,
+    required: Option<LitBool>,
+}
+
+impl Parse for OpenApiParameterArgs {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let mut name = if input.peek(LitStr) {
+            let name = Some(input.parse::<LitStr>()?);
+            parse_optional_comma(input)?;
+            name
+        } else {
+            None
+        };
+        let mut schema = None;
+        let mut description = None;
+        let mut required = None;
+
+        while !input.is_empty() {
+            let ident = input.parse::<Ident>()?;
+            input.parse::<Token![=]>()?;
+            if ident == "name" {
+                set_once(&mut name, input.parse::<LitStr>()?, ident)?;
+            } else if ident == "schema" || ident == "ty" || ident == "type" {
+                set_once(&mut schema, input.parse::<Type>()?, ident)?;
+            } else if ident == "description" {
+                set_once(&mut description, input.parse::<LitStr>()?, ident)?;
+            } else if ident == "required" {
+                set_once(&mut required, input.parse::<LitBool>()?, ident)?;
+            } else {
+                return Err(syn::Error::new_spanned(
+                    ident,
+                    "expected `name`, `schema`, `description`, or `required`",
+                ));
+            }
+            parse_optional_comma(input)?;
+        }
+
+        let Some(name) = name else {
+            return Err(input.error("missing required `name` option"));
+        };
+
+        Ok(Self {
+            name,
+            schema,
+            description,
+            required,
+        })
     }
 }
 

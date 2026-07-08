@@ -347,6 +347,9 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@Render("cats/show")` | `#[render("cats/show")]` on a route method returning a serializable view model |
 | `@ApiTags("cats")` | `#[tag("cats")]` below `#[controller]` |
 | `@ApiOperation(...)` | `#[operation(summary = "...", operation_id = "...")]` on a route method |
+| `@ApiParam(...)` | `#[api_param(name = "id", schema = String, description = "...")]` |
+| `@ApiQuery(...)` | `#[api_query(name = "page", schema = u16, required = false)]` |
+| `@ApiHeader(...)` | `#[api_header(name = "x-request-id", required = false)]` |
 | `@ApiResponse(...)` | `#[response(status = 200, description = "...", schema = CatDto)]` |
 | `@ApiResponse({ example: ... })` | `#[response(status = 200, schema = CatDto, example = serde_json::json!(...))]` |
 | `@ApiBody({ example: ... })` | `#[request_body(schema = CreateCatDto, example = serde_json::json!(...))]` |
@@ -1080,6 +1083,9 @@ parameter schema. `ControllerDefinition::with_tag("cats")` applies a tag to all
 routes registered after it, similar to Nest Swagger's `@ApiTags`. In macro
 controllers, `#[param("id")]`, `#[query("name")]`, `#[header("name")]`, and
 `#[body]` also add matching OpenAPI parameter or request-body metadata.
+Use `#[api_param(...)]`, `#[api_query(...)]`, and `#[api_header(...)]` when a
+route needs explicit Swagger metadata without adding a request extractor, or
+when the inferred parameter needs a description or a more precise schema.
 Use `try_with_json_request_body_example(...)`,
 `try_with_json_response_example(...)`, `#[request_body(example = ...)]`, and
 `#[response(example = ...)]` to mirror Nest Swagger request and response

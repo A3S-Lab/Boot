@@ -275,6 +275,19 @@ impl MacroCatsController {
         description = "Cat details",
         schema = MacroCatDetailsDto
     )]
+    #[a3s_boot::api_param(name = "id", schema = String, description = "Cat identifier")]
+    #[a3s_boot::api_query(
+        name = "include_toys",
+        schema = bool,
+        required = false,
+        description = "Include toy data"
+    )]
+    #[a3s_boot::api_header(
+        name = "x-request-id",
+        schema = String,
+        required = false,
+        description = "Request correlation id"
+    )]
     #[bearer_auth]
     async fn details(
         &self,
@@ -1439,6 +1452,11 @@ async fn macros_register_injectable_services_and_controller_routes() {
         true,
         json!({ "type": "string" }),
     ));
+    assert_eq!(
+        find_openapi_parameter(details_operation, "id", "path")
+            .and_then(|parameter| parameter["description"].as_str()),
+        Some("Cat identifier")
+    );
     assert!(has_openapi_parameter(
         details_operation,
         "page",
@@ -1460,6 +1478,16 @@ async fn macros_register_injectable_services_and_controller_routes() {
         false,
         json!({ "type": "string" }),
     ));
+    assert_eq!(
+        find_openapi_parameter(details_operation, "include_toys", "query")
+            .and_then(|parameter| parameter["description"].as_str()),
+        Some("Include toy data")
+    );
+    assert_eq!(
+        find_openapi_parameter(details_operation, "x-request-id", "header")
+            .and_then(|parameter| parameter["description"].as_str()),
+        Some("Request correlation id")
+    );
 
     let piped_operation = &document["paths"]["/macro-cats/pipe/{id}"]["get"];
     assert!(has_openapi_parameter(
@@ -1597,16 +1625,20 @@ fn has_openapi_parameter(
     required: bool,
     schema: serde_json::Value,
 ) -> bool {
+    find_openapi_parameter(operation, name, location)
+        .is_some_and(|parameter| parameter["required"] == required && parameter["schema"] == schema)
+}
+
+fn find_openapi_parameter<'a>(
+    operation: &'a serde_json::Value,
+    name: &str,
+    location: &str,
+) -> Option<&'a serde_json::Value> {
     operation["parameters"]
         .as_array()
         .unwrap()
         .iter()
-        .any(|parameter| {
-            parameter["name"] == name
-                && parameter["in"] == location
-                && parameter["required"] == required
-                && parameter["schema"] == schema
-        })
+        .find(|parameter| parameter["name"] == name && parameter["in"] == location)
 }
 
 #[tokio::test]
