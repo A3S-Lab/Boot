@@ -502,6 +502,36 @@ impl OpenApiSchema {
         Self(json!({ "type": "array", "items": items.0 }))
     }
 
+    pub fn binary_file() -> Self {
+        Self(json!({ "type": "string", "format": "binary" }))
+    }
+
+    pub fn object_with_properties<P, K, R, S>(properties: P, required: R) -> Self
+    where
+        P: IntoIterator<Item = (K, OpenApiSchema)>,
+        K: Into<String>,
+        R: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let properties = properties
+            .into_iter()
+            .map(|(name, schema)| (name.into(), schema.into_value()))
+            .collect::<BTreeMap<String, Value>>();
+        let required = required.into_iter().map(Into::into).collect::<Vec<_>>();
+        let mut schema = json!({
+            "type": "object",
+            "properties": properties,
+        });
+
+        if !required.is_empty() {
+            if let Value::Object(object) = &mut schema {
+                object.insert("required".to_string(), json!(required));
+            }
+        }
+
+        Self(schema)
+    }
+
     pub fn reference(name: impl AsRef<str>) -> Self {
         Self(json!({ "$ref": format!("#/components/schemas/{}", name.as_ref()) }))
     }

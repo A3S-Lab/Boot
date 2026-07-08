@@ -313,6 +313,16 @@ pub fn ip(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
+pub fn uploaded_file(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    extractor_attribute_outside_controller("uploaded_file", item)
+}
+
+#[proc_macro_attribute]
+pub fn uploaded_files(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    extractor_attribute_outside_controller("uploaded_files", item)
+}
+
+#[proc_macro_attribute]
 pub fn extract(_attr: TokenStream, item: TokenStream) -> TokenStream {
     extractor_attribute_outside_controller("extract", item)
 }
@@ -2532,6 +2542,8 @@ fn extractor_validation_tokens(
             | Extractor::Headers
             | Extractor::HostParam(_)
             | Extractor::Ip(_)
+            | Extractor::UploadedFile(_)
+            | Extractor::UploadedFiles(_)
             | Extractor::Custom(_) => {}
         }
     }
@@ -2717,6 +2729,7 @@ fn extracted_arguments(
     input: RouteMethodInput,
 ) -> Result<(Vec<proc_macro2::TokenStream>, Vec<Ident>)> {
     let mut body_arg: Option<Ident> = None;
+    let mut multipart_arg: Option<Ident> = None;
     let mut extractors = Vec::new();
     let mut args = Vec::new();
 
@@ -2729,6 +2742,12 @@ fn extracted_arguments(
         })?;
 
         if matches!(extractor, Extractor::Body) {
+            if multipart_arg.is_some() {
+                return Err(syn::Error::new_spanned(
+                    arg.ident,
+                    "route methods cannot combine #[body] with multipart upload extractors",
+                ));
+            }
             if let Some(existing) = body_arg {
                 return Err(syn::Error::new_spanned(
                     existing,
@@ -2737,9 +2756,30 @@ fn extracted_arguments(
             }
             body_arg = Some(arg.ident.clone());
         }
+        if matches!(
+            extractor,
+            Extractor::UploadedFile(_) | Extractor::UploadedFiles(_)
+        ) {
+            if body_arg.is_some() {
+                return Err(syn::Error::new_spanned(
+                    arg.ident,
+                    "route methods cannot combine multipart upload extractors with #[body]",
+                ));
+            }
+            multipart_arg = Some(arg.ident.clone());
+        }
 
         args.push(arg.ident.clone());
         extractors.push(extractor_tokens(arg, extractor));
+    }
+
+    if multipart_arg.is_some() {
+        extractors.insert(
+            0,
+            quote! {
+                let __a3s_boot_multipart_form = __a3s_boot_request.multipart_form().await?;
+            },
+        );
     }
 
     Ok((extractors, args))
@@ -2830,9 +2870,48 @@ fn extractor_tokens(arg: MethodArg, extractor: Extractor) -> proc_macro2::TokenS
             |value_ty| quote!(__a3s_boot_request.ip_as::<#value_ty>()),
             |value_ty| quote!(__a3s_boot_request.optional_ip_as::<#value_ty>()),
         ),
+        Extractor::UploadedFile(spec) => uploaded_file_extractor_tokens(ident, ty, spec),
+        Extractor::UploadedFiles(spec) => uploaded_files_extractor_tokens(ident, ty, spec),
         Extractor::Custom(extractor) => quote! {
             let #ident: #ty = ::a3s_boot::extract_request_value::<#ty, _>(&__a3s_boot_request, #extractor)?;
         },
+    }
+}
+
+fn uploaded_file_extractor_tokens(
+    ident: Ident,
+    ty: Box<Type>,
+    spec: UploadedFileExtractor,
+) -> proc_macro2::TokenStream {
+    let name = spec.name;
+    if option_inner_type(&ty).is_some() {
+        quote! {
+            let #ident: #ty = __a3s_boot_multipart_form.file(#name).cloned();
+        }
+    } else {
+        quote! {
+            let #ident: #ty = __a3s_boot_multipart_form
+                .file(#name)
+                .cloned()
+                .ok_or_else(|| ::a3s_boot::BootError::BadRequest(
+                    format!("missing uploaded file: {}", #name)
+                ))?;
+        }
+    }
+}
+
+fn uploaded_files_extractor_tokens(
+    ident: Ident,
+    ty: Box<Type>,
+    spec: UploadedFileExtractor,
+) -> proc_macro2::TokenStream {
+    let name = spec.name;
+    quote! {
+        let #ident: #ty = __a3s_boot_multipart_form
+            .files_by_name(#name)
+            .into_iter()
+            .cloned()
+            .collect();
     }
 }
 
@@ -3049,6 +3128,10 @@ fn extractor_openapi_tokens(
         }
     }
 
+    if let Some(token) = uploaded_files_openapi_token(input) {
+        tokens.push(token);
+    }
+
     for arg in &input.args {
         let Some(extractor) = &arg.extractor else {
             continue;
@@ -3091,11 +3174,69 @@ fn extractor_openapi_tokens(
             | Extractor::Headers
             | Extractor::HostParam(_)
             | Extractor::Ip(_)
+            | Extractor::UploadedFile(_)
+            | Extractor::UploadedFiles(_)
             | Extractor::Custom(_) => {}
         }
     }
 
     tokens
+}
+
+fn uploaded_files_openapi_token(input: &RouteMethodInput) -> Option<proc_macro2::TokenStream> {
+    let mut properties = Vec::new();
+    let mut required = Vec::new();
+
+    for arg in &input.args {
+        let Some(extractor) = &arg.extractor else {
+            continue;
+        };
+
+        match extractor {
+            Extractor::UploadedFile(spec) => {
+                let name = &spec.name;
+                properties.push(quote! {
+                    (#name, ::a3s_boot::OpenApiSchema::binary_file())
+                });
+                if option_inner_type(&arg.ty).is_none() {
+                    required.push(quote!(#name));
+                }
+            }
+            Extractor::UploadedFiles(spec) => {
+                let name = &spec.name;
+                properties.push(quote! {
+                    (
+                        #name,
+                        ::a3s_boot::OpenApiSchema::array(
+                            ::a3s_boot::OpenApiSchema::binary_file()
+                        )
+                    )
+                });
+                required.push(quote!(#name));
+            }
+            _ => {}
+        }
+    }
+
+    if properties.is_empty() {
+        return None;
+    }
+
+    let required = if required.is_empty() {
+        quote!(::std::iter::empty::<&str>())
+    } else {
+        quote!([#(#required),*])
+    };
+
+    Some(quote! {
+        with_request_body_content_type(
+            "multipart/form-data",
+            ::a3s_boot::OpenApiSchema::object_with_properties(
+                [#(#properties),*],
+                #required,
+            )
+        )
+    })
 }
 
 fn openapi_schema_tokens(ty: &Type) -> proc_macro2::TokenStream {
@@ -5619,6 +5760,8 @@ enum Extractor {
     Headers,
     HostParam(SingleValueExtractor),
     Ip(Option<Expr>),
+    UploadedFile(UploadedFileExtractor),
+    UploadedFiles(UploadedFileExtractor),
     Custom(Expr),
 }
 
@@ -5634,6 +5777,11 @@ struct QueryExtractor {
     name: Option<LitStr>,
     pipe: Option<Expr>,
     default: Option<Expr>,
+}
+
+#[derive(Clone)]
+struct UploadedFileExtractor {
+    name: LitStr,
 }
 
 impl Extractor {
@@ -5664,6 +5812,10 @@ impl Extractor {
             Self::HostParam(parse_single_value_extractor(attr, "host_param")?)
         } else if ident == "ip" {
             Self::Ip(parse_optional_pipe_only_extractor(attr, "ip")?)
+        } else if ident == "uploaded_file" {
+            Self::UploadedFile(parse_uploaded_file_extractor(attr, "uploaded_file")?)
+        } else if ident == "uploaded_files" {
+            Self::UploadedFiles(parse_uploaded_file_extractor(attr, "uploaded_files")?)
         } else if ident == "extract" {
             Self::Custom(parse_extractor_expr(attr)?)
         } else {
@@ -5711,6 +5863,17 @@ fn parse_extractor_expr(attr: &Attribute) -> Result<Expr> {
     attr.parse_args::<Expr>().map_err(|_| {
         syn::Error::new_spanned(attr, "#[extract] requires one request extractor expression")
     })
+}
+
+fn parse_uploaded_file_extractor(attr: &Attribute, name: &str) -> Result<UploadedFileExtractor> {
+    attr.parse_args::<LitStr>()
+        .map(|name| UploadedFileExtractor { name })
+        .map_err(|_| {
+            syn::Error::new_spanned(
+                attr,
+                format!("#[{name}] requires a multipart field-name string literal"),
+            )
+        })
 }
 
 fn parse_single_value_extractor(attr: &Attribute, name: &str) -> Result<SingleValueExtractor> {

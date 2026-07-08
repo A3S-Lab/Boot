@@ -345,6 +345,8 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@Header("cache-control", "max-age=60")` | `#[header("cache-control", "max-age=60")]` on a route method |
 | `@Redirect("/new", 301)` | `#[redirect("/new", status = 301)]` on a route method |
 | `@Render("cats/show")` | `#[render("cats/show")]` on a route method returning a serializable view model |
+| `@UploadedFile()` with `FileInterceptor("avatar")` | `#[uploaded_file("avatar")]` on an `UploadedFile` or `Option<UploadedFile>` argument |
+| `@UploadedFiles()` with `FilesInterceptor("photos")` | `#[uploaded_files("photos")]` on a `Vec<UploadedFile>` argument |
 | `@ApiTags("cats")` | `#[tag("cats")]` below `#[controller]` |
 | `@ApiOperation(...)` | `#[operation(summary = "...", operation_id = "...")]` on a route method |
 | `@ApiParam(...)` | `#[api_param(name = "id", schema = String, description = "...")]` |
@@ -4206,6 +4208,59 @@ field count, and file count. Non-multipart requests return
 `BootError::UnsupportedMediaType`; malformed multipart bodies and invalid text
 fields return `BootError::BadRequest`; limit failures return
 `BootError::PayloadTooLarge`.
+
+With the default `macros` feature enabled, file uploads can be extracted from
+controller arguments in the same style as Nest's `@UploadedFile()` and
+`@UploadedFiles()` decorators:
+
+```rust
+use a3s_boot::{controller, injectable, Result, UploadedFile};
+use serde::Serialize;
+
+#[derive(Debug, Serialize)]
+struct UploadResult {
+    file_names: Vec<String>,
+    bytes: usize,
+}
+
+#[injectable]
+#[derive(Debug)]
+struct UploadsController;
+
+#[controller("/uploads")]
+impl UploadsController {
+    #[a3s_boot::post("/avatar", status = 201)]
+    async fn avatar(
+        &self,
+        #[a3s_boot::uploaded_file("avatar")] avatar: UploadedFile,
+    ) -> Result<UploadResult> {
+        Ok(UploadResult {
+            file_names: vec![avatar.file_name().to_string()],
+            bytes: avatar.size(),
+        })
+    }
+
+    #[a3s_boot::post("/photos", status = 201)]
+    async fn photos(
+        &self,
+        #[a3s_boot::uploaded_files("photos")] photos: Vec<UploadedFile>,
+    ) -> Result<UploadResult> {
+        Ok(UploadResult {
+            file_names: photos
+                .iter()
+                .map(|file| file.file_name().to_string())
+                .collect(),
+            bytes: photos.iter().map(UploadedFile::size).sum(),
+        })
+    }
+}
+```
+
+`#[uploaded_file("field")]` returns `BootError::BadRequest` when a required
+`UploadedFile` is missing; use `Option<UploadedFile>` for optional uploads.
+Upload extractors automatically document the route as `multipart/form-data`
+with binary file properties in the generated OpenAPI document. Add an explicit
+`#[request_body(...)]` when a route needs a custom multipart schema.
 
 ## Static Assets
 

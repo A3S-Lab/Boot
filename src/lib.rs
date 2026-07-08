@@ -77,6 +77,8 @@ pub use a3s_boot_macros::{
 pub use a3s_boot_macros::{cron, interval, schedule, timeout};
 #[cfg(all(feature = "macros", feature = "events"))]
 pub use a3s_boot_macros::{event_listener, on_event};
+#[cfg(all(feature = "macros", feature = "file-upload"))]
+pub use a3s_boot_macros::{uploaded_file, uploaded_files};
 #[cfg(feature = "axum")]
 pub use adapters::AxumAdapter;
 #[cfg(feature = "shutdown-hooks")]

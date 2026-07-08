@@ -200,8 +200,10 @@ Implemented today:
   `CompressionOptions`, `Accept-Encoding` negotiation, `Vary` handling, and
   content-length updates.
 - Optional multipart file upload helpers with `BootRequest::multipart_form`,
-  `MultipartOptions`, text field and uploaded-file accessors, and body/count/
-  per-field/per-file limits.
+  `MultipartOptions`, text field and uploaded-file accessors, body/count/
+  per-field/per-file limits, Nest-style `#[uploaded_file]` /
+  `#[uploaded_files]` parameter macros, and automatic multipart OpenAPI
+  request-body metadata.
 - Optional provider-backed static file serving with `StaticModule`,
   `StaticFileService`, GET/HEAD catch-all routes, index-file support, SPA
   fallback, cache-control headers, content-type detection, and traversal
@@ -760,8 +762,10 @@ Acceptance:
   explicit route/controller helpers, and mirror Nest `@Render()` with
   `#[render(...)]`. (Covered)
 - File upload can parse adapter-neutral multipart forms, expose repeated text
-  fields and uploaded files, reject non-multipart or malformed requests, and
-  enforce body, field, file, and count limits. (Covered)
+  fields and uploaded files, reject non-multipart or malformed requests,
+  enforce body, field, file, and count limits, extract uploads through
+  Nest-style controller parameter macros, and document upload routes as
+  `multipart/form-data`. (Covered)
 - Static assets can be served from an imported module with GET and HEAD routes,
   optional SPA fallback, cache-control headers, basic content-type detection,
   hidden dotfile defaults, and root traversal protection. (Covered)
