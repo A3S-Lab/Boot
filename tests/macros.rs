@@ -85,6 +85,45 @@ fn current_tenant(request: &BootRequest) -> Result<String> {
     Ok(request.header("x-tenant").unwrap_or("public").to_string())
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct MacroCatId(String);
+
+fn parse_macro_cat_id(value: String) -> Result<MacroCatId> {
+    if !value.starts_with("cat_") {
+        return Err(BootError::BadRequest(
+            "cat id must start with cat_".to_string(),
+        ));
+    }
+
+    Ok(MacroCatId(value))
+}
+
+fn parse_macro_page(value: String) -> Result<u16> {
+    let page = value
+        .parse::<u16>()
+        .map_err(|error| BootError::BadRequest(format!("invalid page: {error}")))?;
+    if page == 0 {
+        return Err(BootError::BadRequest(
+            "page must be greater than zero".to_string(),
+        ));
+    }
+
+    Ok(page)
+}
+
+fn normalize_macro_kind(value: String) -> Result<String> {
+    let kind = value.trim();
+    if kind.is_empty() {
+        return Err(BootError::BadRequest("cat kind is required".to_string()));
+    }
+
+    Ok(kind.to_ascii_uppercase())
+}
+
+fn normalize_macro_ip(value: String) -> Result<String> {
+    Ok(format!("ip:{value}"))
+}
+
 #[a3s_boot::websocket_gateway("/macro-cats/ws")]
 impl MacroCatsGateway {
     #[a3s_boot::subscribe_message("cat.find")]
@@ -168,6 +207,22 @@ impl MacroCatsController {
             tag,
             request_id,
             tenant,
+        })
+    }
+
+    #[get("/pipe/{id}")]
+    async fn piped_extractors(
+        &self,
+        #[param("id", pipe = parse_macro_cat_id)] id: MacroCatId,
+        #[query("page", pipe = parse_macro_page)] page: Option<u16>,
+        #[header("x-cat-kind", pipe = normalize_macro_kind)] kind: String,
+    ) -> Result<MacroCatDto> {
+        let page = page
+            .map(|page| page.to_string())
+            .unwrap_or_else(|| "none".to_string());
+        Ok(MacroCatDto {
+            id: id.0,
+            name: format!("{kind}:{page}"),
         })
     }
 
@@ -550,6 +605,12 @@ impl MacroHostController {
     async fn api(&self, #[ip] ip: Option<String>) -> Result<String> {
         Ok(ip.unwrap_or_else(|| "missing".to_string()))
     }
+
+    #[get("/pipe-ip")]
+    #[host("api.example.com")]
+    async fn pipe_ip(&self, #[ip(pipe = normalize_macro_ip)] ip: Option<String>) -> Result<String> {
+        Ok(ip.unwrap_or_else(|| "missing".to_string()))
+    }
 }
 
 #[derive(Debug)]
@@ -655,7 +716,7 @@ async fn macros_register_injectable_services_and_controller_routes() {
         .build()
         .unwrap();
 
-    assert_eq!(app.routes().len(), 14);
+    assert_eq!(app.routes().len(), 15);
     assert_eq!(app.gateways().len(), 1);
     assert_eq!(app.message_patterns().len(), 3);
     let reader = app.get::<MacroAutoCatsReader>().unwrap();
@@ -724,6 +785,58 @@ async fn macros_register_injectable_services_and_controller_routes() {
             request_id: Some("req-1".to_string()),
             tenant: "acme".to_string(),
         }
+    );
+
+    let piped = app
+        .call(
+            BootRequest::new(a3s_boot::HttpMethod::Get, "/macro-cats/pipe/cat_42?page=7")
+                .with_header("x-cat-kind", "tabby"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        piped.body_json::<MacroCatDto>().unwrap(),
+        MacroCatDto {
+            id: "cat_42".to_string(),
+            name: "TABBY:7".to_string(),
+        }
+    );
+
+    let piped_without_page = app
+        .call(
+            BootRequest::new(a3s_boot::HttpMethod::Get, "/macro-cats/pipe/cat_99")
+                .with_header("x-cat-kind", "calico"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        piped_without_page.body_json::<MacroCatDto>().unwrap(),
+        MacroCatDto {
+            id: "cat_99".to_string(),
+            name: "CALICO:none".to_string(),
+        }
+    );
+
+    let invalid_piped_id = app
+        .call(
+            BootRequest::new(a3s_boot::HttpMethod::Get, "/macro-cats/pipe/42?page=1")
+                .with_header("x-cat-kind", "tabby"),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(invalid_piped_id, BootError::BadRequest(message) if message == "cat id must start with cat_")
+    );
+
+    let invalid_piped_page = app
+        .call(
+            BootRequest::new(a3s_boot::HttpMethod::Get, "/macro-cats/pipe/cat_42?page=0")
+                .with_header("x-cat-kind", "tabby"),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(invalid_piped_page, BootError::BadRequest(message) if message == "page must be greater than zero")
     );
 
     let params = app
@@ -963,6 +1076,29 @@ async fn macros_register_injectable_services_and_controller_routes() {
         json!({ "type": "string" }),
     ));
 
+    let piped_operation = &document["paths"]["/macro-cats/pipe/{id}"]["get"];
+    assert!(has_openapi_parameter(
+        piped_operation,
+        "id",
+        "path",
+        true,
+        json!({ "type": "string" }),
+    ));
+    assert!(has_openapi_parameter(
+        piped_operation,
+        "page",
+        "query",
+        false,
+        json!({ "type": "string" }),
+    ));
+    assert!(has_openapi_parameter(
+        piped_operation,
+        "x-cat-kind",
+        "header",
+        true,
+        json!({ "type": "string" }),
+    ));
+
     let create_operation = &document["paths"]["/macro-cats"]["post"];
     assert_eq!(create_operation["operationId"], json!("createMacroCat"));
     assert_eq!(
@@ -1140,6 +1276,17 @@ async fn macro_host_and_ip_extractors_register_host_scoped_routes() {
         .unwrap();
 
     assert_eq!(api.body_json::<String>().unwrap(), "192.0.2.24");
+
+    let pipe_ip = app
+        .call(
+            BootRequest::new(a3s_boot::HttpMethod::Get, "/macro-host/pipe-ip")
+                .with_header("host", "api.example.com")
+                .with_header("x-real-ip", "192.0.2.25"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(pipe_ip.body_json::<String>().unwrap(), "ip:192.0.2.25");
 
     let missing = app
         .handle(

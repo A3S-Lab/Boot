@@ -1896,16 +1896,19 @@ fn extractor_validation_tokens(
             Extractor::Params => tokens.push(quote! {
                 with_params_validation::<#ty>()
             }),
-            Extractor::Query(None) => tokens.push(quote! {
-                with_query_validation::<#ty>()
-            }),
+            Extractor::Query(query) => {
+                if query.name.is_none() {
+                    tokens.push(quote! {
+                        with_query_validation::<#ty>()
+                    });
+                }
+            }
             Extractor::Request
             | Extractor::Param(_)
-            | Extractor::Query(Some(_))
             | Extractor::Header(_)
             | Extractor::Headers
             | Extractor::HostParam(_)
-            | Extractor::Ip
+            | Extractor::Ip(_)
             | Extractor::Custom(_) => {}
         }
     }
@@ -2065,39 +2068,58 @@ fn extractor_tokens(arg: MethodArg, extractor: Extractor) -> proc_macro2::TokenS
         Extractor::Params => quote! {
             let #ident: #ty = __a3s_boot_request.params::<#ty>()?;
         },
-        Extractor::Param(name) => single_value_extractor_tokens(
-            ident,
-            ty,
-            |value_ty| quote!(__a3s_boot_request.param_as::<#value_ty>(#name)),
-            |value_ty| quote!(__a3s_boot_request.optional_param_as::<#value_ty>(#name)),
-        ),
-        Extractor::Query(None) => quote! {
-            let #ident: #ty = __a3s_boot_request.query::<#ty>()?;
-        },
-        Extractor::Query(Some(name)) => single_value_extractor_tokens(
-            ident,
-            ty,
-            |value_ty| quote!(__a3s_boot_request.query_value_as::<#value_ty>(#name)),
-            |value_ty| quote!(__a3s_boot_request.optional_query_value_as::<#value_ty>(#name)),
-        ),
-        Extractor::Header(name) => single_value_extractor_tokens(
-            ident,
-            ty,
-            |value_ty| quote!(__a3s_boot_request.header_as::<#value_ty>(#name)),
-            |value_ty| quote!(__a3s_boot_request.optional_header_as::<#value_ty>(#name)),
-        ),
+        Extractor::Param(spec) => {
+            let SingleValueExtractor { name, pipe } = spec;
+            single_value_extractor_tokens(
+                ident,
+                ty,
+                pipe,
+                |value_ty| quote!(__a3s_boot_request.param_as::<#value_ty>(#name)),
+                |value_ty| quote!(__a3s_boot_request.optional_param_as::<#value_ty>(#name)),
+            )
+        }
+        Extractor::Query(spec) => {
+            if let Some(name) = spec.name {
+                single_value_extractor_tokens(
+                    ident,
+                    ty,
+                    spec.pipe,
+                    |value_ty| quote!(__a3s_boot_request.query_value_as::<#value_ty>(#name)),
+                    |value_ty| quote!(__a3s_boot_request.optional_query_value_as::<#value_ty>(#name)),
+                )
+            } else {
+                quote! {
+                    let #ident: #ty = __a3s_boot_request.query::<#ty>()?;
+                }
+            }
+        }
+        Extractor::Header(spec) => {
+            let SingleValueExtractor { name, pipe } = spec;
+            single_value_extractor_tokens(
+                ident,
+                ty,
+                pipe,
+                |value_ty| quote!(__a3s_boot_request.header_as::<#value_ty>(#name)),
+                |value_ty| quote!(__a3s_boot_request.optional_header_as::<#value_ty>(#name)),
+            )
+        }
         Extractor::Headers => quote! {
             let #ident: #ty = __a3s_boot_request.headers.clone();
         },
-        Extractor::HostParam(name) => single_value_extractor_tokens(
+        Extractor::HostParam(spec) => {
+            let SingleValueExtractor { name, pipe } = spec;
+            single_value_extractor_tokens(
+                ident,
+                ty,
+                pipe,
+                |value_ty| quote!(__a3s_boot_request.host_param_as::<#value_ty>(#name)),
+                |value_ty| quote!(__a3s_boot_request.optional_host_param_as::<#value_ty>(#name)),
+            )
+        }
+        Extractor::Ip(pipe) => single_value_extractor_tokens(
             ident,
             ty,
-            |value_ty| quote!(__a3s_boot_request.host_param_as::<#value_ty>(#name)),
-            |value_ty| quote!(__a3s_boot_request.optional_host_param_as::<#value_ty>(#name)),
-        ),
-        Extractor::Ip => single_value_extractor_tokens(
-            ident,
-            ty,
+            pipe,
             |value_ty| quote!(__a3s_boot_request.ip_as::<#value_ty>()),
             |value_ty| quote!(__a3s_boot_request.optional_ip_as::<#value_ty>()),
         ),
@@ -2110,6 +2132,7 @@ fn extractor_tokens(arg: MethodArg, extractor: Extractor) -> proc_macro2::TokenS
 fn single_value_extractor_tokens<Required, Optional>(
     ident: Ident,
     ty: Box<Type>,
+    pipe: Option<Expr>,
     required: Required,
     optional: Optional,
 ) -> proc_macro2::TokenStream
@@ -2117,7 +2140,30 @@ where
     Required: FnOnce(&Type) -> proc_macro2::TokenStream,
     Optional: FnOnce(&Type) -> proc_macro2::TokenStream,
 {
-    if let Some(inner) = option_inner_type(&ty) {
+    if let Some(pipe) = pipe {
+        if let Some(inner) = option_inner_type(&ty) {
+            let value = optional(&parse_string_type());
+            quote! {
+                let #ident: #ty = match #value? {
+                    Some(__a3s_boot_value) => {
+                        Some(::a3s_boot::transform_request_value::<String, #inner, _>(
+                            __a3s_boot_value,
+                            #pipe,
+                        )?)
+                    }
+                    None => None,
+                };
+            }
+        } else {
+            let value = required(&parse_string_type());
+            quote! {
+                let #ident: #ty = ::a3s_boot::transform_request_value::<String, #ty, _>(
+                    #value?,
+                    #pipe,
+                )?;
+            }
+        }
+    } else if let Some(inner) = option_inner_type(&ty) {
         let value = optional(&inner);
         quote! {
             let #ident: #ty = #value?;
@@ -2128,6 +2174,71 @@ where
             let #ident: #ty = #value?;
         }
     }
+}
+
+fn parse_string_type() -> Type {
+    syn::parse_quote!(String)
+}
+
+fn single_value_extractor_schema_type(extractor_ty: &Type, pipe: Option<&Expr>) -> Type {
+    if pipe.is_some() {
+        return syn::parse_quote!(String);
+    }
+
+    extractor_ty.clone()
+}
+
+fn single_value_extractor_required(ty: &Type) -> bool {
+    option_inner_type(ty).is_none()
+}
+
+fn single_value_extractor_schema(ty: &Type, pipe: Option<&Expr>) -> proc_macro2::TokenStream {
+    let schema_ty = single_value_extractor_schema_type(ty, pipe);
+    openapi_schema_tokens(&schema_ty)
+}
+
+fn single_value_extractor_required_schema(
+    ty: &Type,
+    pipe: Option<&Expr>,
+) -> (bool, proc_macro2::TokenStream) {
+    (
+        single_value_extractor_required(ty),
+        single_value_extractor_schema(ty, pipe),
+    )
+}
+
+fn single_value_extractor_openapi_tokens(
+    name: &LitStr,
+    ty: &Type,
+    pipe: Option<&Expr>,
+    kind: SingleValueOpenApiKind,
+) -> proc_macro2::TokenStream {
+    match kind {
+        SingleValueOpenApiKind::Path => {
+            let schema = single_value_extractor_schema(ty, pipe);
+            quote! {
+                with_path_parameter(#name, #schema)
+            }
+        }
+        SingleValueOpenApiKind::Query => {
+            let (required, schema) = single_value_extractor_required_schema(ty, pipe);
+            quote! {
+                with_query_parameter(#name, #required, #schema)
+            }
+        }
+        SingleValueOpenApiKind::Header => {
+            let (required, schema) = single_value_extractor_required_schema(ty, pipe);
+            quote! {
+                with_header_parameter(#name, #required, #schema)
+            }
+        }
+    }
+}
+
+enum SingleValueOpenApiKind {
+    Path,
+    Query,
+    Header,
 }
 
 fn openapi_route_definition(
@@ -2190,32 +2301,33 @@ fn extractor_openapi_tokens(
                     with_json_request_body(#schema)
                 });
             }
-            Extractor::Param(name) => {
-                let schema = openapi_schema_tokens(&arg.ty);
-                tokens.push(quote! {
-                    with_path_parameter(#name, #schema)
-                });
+            Extractor::Param(spec) => tokens.push(single_value_extractor_openapi_tokens(
+                &spec.name,
+                &arg.ty,
+                spec.pipe.as_ref(),
+                SingleValueOpenApiKind::Path,
+            )),
+            Extractor::Query(spec) => {
+                if let Some(name) = &spec.name {
+                    tokens.push(single_value_extractor_openapi_tokens(
+                        name,
+                        &arg.ty,
+                        spec.pipe.as_ref(),
+                        SingleValueOpenApiKind::Query,
+                    ));
+                }
             }
-            Extractor::Query(Some(name)) => {
-                let required = option_inner_type(&arg.ty).is_none();
-                let schema = openapi_schema_tokens(&arg.ty);
-                tokens.push(quote! {
-                    with_query_parameter(#name, #required, #schema)
-                });
-            }
-            Extractor::Header(name) => {
-                let required = option_inner_type(&arg.ty).is_none();
-                let schema = openapi_schema_tokens(&arg.ty);
-                tokens.push(quote! {
-                    with_header_parameter(#name, #required, #schema)
-                });
-            }
+            Extractor::Header(spec) => tokens.push(single_value_extractor_openapi_tokens(
+                &spec.name,
+                &arg.ty,
+                spec.pipe.as_ref(),
+                SingleValueOpenApiKind::Header,
+            )),
             Extractor::Request
             | Extractor::Params
-            | Extractor::Query(None)
             | Extractor::Headers
             | Extractor::HostParam(_)
-            | Extractor::Ip
+            | Extractor::Ip(_)
             | Extractor::Custom(_) => {}
         }
     }
@@ -4262,13 +4374,25 @@ enum Extractor {
     Body,
     Request,
     Params,
-    Param(LitStr),
-    Query(Option<LitStr>),
-    Header(LitStr),
+    Param(SingleValueExtractor),
+    Query(QueryExtractor),
+    Header(SingleValueExtractor),
     Headers,
-    HostParam(LitStr),
-    Ip,
+    HostParam(SingleValueExtractor),
+    Ip(Option<Expr>),
     Custom(Expr),
+}
+
+#[derive(Clone)]
+struct SingleValueExtractor {
+    name: LitStr,
+    pipe: Option<Expr>,
+}
+
+#[derive(Clone)]
+struct QueryExtractor {
+    name: Option<LitStr>,
+    pipe: Option<Expr>,
 }
 
 impl Extractor {
@@ -4287,19 +4411,18 @@ impl Extractor {
             expect_no_extractor_args(attr, "params")?;
             Self::Params
         } else if ident == "param" {
-            Self::Param(parse_extractor_name(attr, "param")?)
+            Self::Param(parse_single_value_extractor(attr, "param")?)
         } else if ident == "query" {
-            Self::Query(parse_optional_extractor_name(attr, "query")?)
+            Self::Query(parse_query_extractor(attr)?)
         } else if ident == "header" {
-            Self::Header(parse_extractor_name(attr, "header")?)
+            Self::Header(parse_single_value_extractor(attr, "header")?)
         } else if ident == "headers" {
             expect_no_extractor_args(attr, "headers")?;
             Self::Headers
         } else if ident == "host_param" {
-            Self::HostParam(parse_extractor_name(attr, "host_param")?)
+            Self::HostParam(parse_single_value_extractor(attr, "host_param")?)
         } else if ident == "ip" {
-            expect_no_extractor_args(attr, "ip")?;
-            Self::Ip
+            Self::Ip(parse_optional_pipe_only_extractor(attr, "ip")?)
         } else if ident == "extract" {
             Self::Custom(parse_extractor_expr(attr)?)
         } else {
@@ -4343,26 +4466,117 @@ fn expect_no_extractor_args(attr: &Attribute, name: &str) -> Result<()> {
     }
 }
 
-fn parse_extractor_name(attr: &Attribute, name: &str) -> Result<LitStr> {
-    attr.parse_args::<LitStr>().map_err(|_| {
-        syn::Error::new_spanned(
-            attr,
-            format!("#[{name}] requires one string literal argument"),
-        )
-    })
-}
-
-fn parse_optional_extractor_name(attr: &Attribute, name: &str) -> Result<Option<LitStr>> {
-    match &attr.meta {
-        syn::Meta::Path(_) => Ok(None),
-        _ => parse_extractor_name(attr, name).map(Some),
-    }
-}
-
 fn parse_extractor_expr(attr: &Attribute) -> Result<Expr> {
     attr.parse_args::<Expr>().map_err(|_| {
         syn::Error::new_spanned(attr, "#[extract] requires one request extractor expression")
     })
+}
+
+fn parse_single_value_extractor(attr: &Attribute, name: &str) -> Result<SingleValueExtractor> {
+    attr.parse_args::<SingleValueExtractorArgs>()
+        .map(|args| SingleValueExtractor {
+            name: args.name,
+            pipe: args.pipe,
+        })
+        .map_err(|_| {
+            syn::Error::new_spanned(
+                attr,
+                format!("#[{name}] requires a string literal and optional `pipe = <expr>`"),
+            )
+        })
+}
+
+fn parse_query_extractor(attr: &Attribute) -> Result<QueryExtractor> {
+    match &attr.meta {
+        syn::Meta::Path(_) => Ok(QueryExtractor {
+            name: None,
+            pipe: None,
+        }),
+        _ => attr
+            .parse_args::<SingleValueExtractorArgs>()
+            .map(|args| QueryExtractor {
+                name: Some(args.name),
+                pipe: args.pipe,
+            })
+            .map_err(|_| {
+                syn::Error::new_spanned(
+                    attr,
+                    "#[query] accepts no arguments for a DTO or a string literal and optional `pipe = <expr>` for one value",
+                )
+            }),
+    }
+}
+
+fn parse_optional_pipe_only_extractor(attr: &Attribute, name: &str) -> Result<Option<Expr>> {
+    match &attr.meta {
+        syn::Meta::Path(_) => Ok(None),
+        _ => attr
+            .parse_args::<PipeOnlyExtractorArgs>()
+            .map(|args| Some(args.pipe))
+            .map_err(|_| {
+                syn::Error::new_spanned(
+                    attr,
+                    format!("#[{name}] accepts no arguments or `pipe = <expr>`"),
+                )
+            }),
+    }
+}
+
+struct SingleValueExtractorArgs {
+    name: LitStr,
+    pipe: Option<Expr>,
+}
+
+impl Parse for SingleValueExtractorArgs {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let name = input.parse::<LitStr>()?;
+        let pipe = parse_optional_pipe_arg(input)?;
+        Ok(Self { name, pipe })
+    }
+}
+
+struct PipeOnlyExtractorArgs {
+    pipe: Expr,
+}
+
+impl Parse for PipeOnlyExtractorArgs {
+    fn parse(input: ParseStream<'_>) -> Result<Self> {
+        let pipe = parse_required_pipe_arg(input)?;
+        Ok(Self { pipe })
+    }
+}
+
+fn parse_optional_pipe_arg(input: ParseStream<'_>) -> Result<Option<Expr>> {
+    let mut pipe = None;
+
+    while !input.is_empty() {
+        input.parse::<Token![,]>()?;
+        if input.is_empty() {
+            break;
+        }
+        let ident = input.parse::<Ident>()?;
+        if ident != "pipe" {
+            return Err(syn::Error::new_spanned(ident, "expected `pipe`"));
+        }
+        if pipe.is_some() {
+            return Err(syn::Error::new_spanned(ident, "duplicate `pipe` option"));
+        }
+        input.parse::<Token![=]>()?;
+        pipe = Some(input.parse::<Expr>()?);
+    }
+
+    Ok(pipe)
+}
+
+fn parse_required_pipe_arg(input: ParseStream<'_>) -> Result<Expr> {
+    let ident = input.parse::<Ident>()?;
+    if ident != "pipe" {
+        return Err(syn::Error::new_spanned(ident, "expected `pipe`"));
+    }
+    input.parse::<Token![=]>()?;
+    let pipe = input.parse::<Expr>()?;
+    parse_optional_comma(input)?;
+    Ok(pipe)
 }
 
 fn option_inner_type(ty: &Type) -> Option<Type> {

@@ -93,8 +93,8 @@ pub use health::{
     HealthStatus,
 };
 pub use http::{
-    extract_request_value, BootRequest, BootResponse, CookieOptions, CookieSameSite, HttpMethod,
-    RequestExtractor, SseEvent, SseStream,
+    extract_request_value, transform_request_value, BootRequest, BootResponse, CookieOptions,
+    CookieSameSite, HttpMethod, RequestExtractor, RequestValuePipe, SseEvent, SseStream,
 };
 #[cfg(feature = "logging")]
 pub use logging::{

@@ -171,8 +171,10 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@Post()` | `#[post("/", status = 201)]` on an async method |
 | `@All("catch")` | `#[all("/catch")]` on an async method that handles every standard HTTP method |
 | `@Param("id")` | `#[param("id")]` on a method argument |
+| `@Param("id", ParsePipe)` | `#[param("id", pipe = parse_cat_id)]` on a method argument |
 | `@HostParam("account")` | `#[host_param("account")]` on a method argument |
 | `@Query()` / `@Query("page")` | `#[query]` for a DTO or `#[query("page")]` for one value |
+| `@Query("page", ParsePipe)` | `#[query("page", pipe = parse_page)]` on a method argument |
 | `@Body()` | `#[body]` on a JSON body DTO argument |
 | `@Headers("x-request-id")` | `#[header("x-request-id")]` on a method argument |
 | `@Ip()` | `#[ip]` on a method argument |
@@ -375,7 +377,40 @@ Use extractor attributes on method arguments for Nest-style request binding:
 `#[header("name")]`, `#[headers]`, `#[host_param("account")]`, `#[ip]`, and
 `#[request]`. Single-value extractors parse into the argument type with
 `FromStr`, so `#[param("id")] id: u64` and `#[query("active")] active: bool`
-work without a separate parse pipe. Add `raw` only when the method should return
+work without a separate parse pipe. For custom Nest-style parameter pipes, add
+`pipe = <expr>` to `#[param]`, `#[query("name")]`, `#[header]`,
+`#[host_param]`, or `#[ip]`; the pipe receives the raw `String` and returns
+`Result<T>`:
+
+```rust
+#[derive(Debug)]
+struct CatId(String);
+
+fn parse_cat_id(value: String) -> Result<CatId> {
+    if value.starts_with("cat_") {
+        Ok(CatId(value))
+    } else {
+        Err(BootError::BadRequest("invalid cat id".to_string()))
+    }
+}
+
+fn parse_page(value: String) -> Result<u16> {
+    value
+        .parse::<u16>()
+        .map_err(|error| BootError::BadRequest(format!("invalid page: {error}")))
+}
+
+#[get("/{id}")]
+async fn find(
+    &self,
+    #[param("id", pipe = parse_cat_id)] id: CatId,
+    #[query("page", pipe = parse_page)] page: Option<u16>,
+) -> Result<CatDto> {
+    self.cats.find(id, page).await
+}
+```
+
+Add `raw` only when the method should return
 `Result<BootResponse>` directly, for example `#[get("/health", raw)]`. The
 explicit `*_json` route attributes remain available as compatibility aliases,
 but typical code should use `#[get]` and `#[post]` directly.

@@ -45,7 +45,10 @@ Implemented today:
   method argument extractors including `#[body]`, `#[request]`,
   `#[param("name")]`, `#[params]`, `#[query]`, `#[query("name")]`,
   `#[header("name")]`, `#[headers]`, `#[host_param("name")]`, `#[ip]`, and
-  custom `#[extract(...)]` request value binding, plus `#[host]` for
+  custom `#[extract(...)]` request value binding. Single-value extractors can
+  also run Nest-style parameter pipes through `pipe = <expr>`, for example
+  `#[param("id", pipe = parse_cat_id)]` and
+  `#[query("page", pipe = parse_page)]`, plus `#[host]` for
   host-scoped controllers and routes, `#[metadata]` for
   Nest-style custom route/controller metadata and `#[http_code]` for Nest-style
   response status metadata, `#[header]` for response headers, and `#[redirect]`
@@ -574,17 +577,19 @@ Acceptance:
 
 ## Immediate Next Task
 
-Continue the Nest framework parity audit and pick the next missing framework
-module. Keep GraphQL out of scope.
+Continue the Nest framework parity audit and implement the next missing
+framework capability. Keep GraphQL out of scope.
 
 Suggested implementation sequence:
 
-1. Re-check remaining Nest framework capabilities against implemented Boot
-   modules.
-2. Define integration through providers, middleware, guards, interceptors, or
-   adapters instead of adding one-off framework hooks.
-3. Add crate-local tests and README examples for the chosen framework module.
-4. Run:
+1. Add async provider factories so startup can await provider construction in a
+   Nest-style way.
+2. Add the first production message transport after the async provider contract
+   is stable.
+3. Continue defining integrations through providers, middleware, guards,
+   interceptors, or adapters instead of adding one-off framework hooks.
+4. Add crate-local tests and README examples for each chosen framework module.
+5. Run:
 
 ```sh
 cargo fmt --all

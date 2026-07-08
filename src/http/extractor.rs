@@ -21,3 +21,24 @@ where
 {
     extractor.extract(request)
 }
+
+/// Transforms a single request value extracted from a path, query, header, or host parameter.
+pub trait RequestValuePipe<I, O>: Send + Sync + 'static {
+    fn transform(&self, value: I) -> Result<O>;
+}
+
+impl<I, O, F> RequestValuePipe<I, O> for F
+where
+    F: Fn(I) -> Result<O> + Send + Sync + 'static,
+{
+    fn transform(&self, value: I) -> Result<O> {
+        self(value)
+    }
+}
+
+pub fn transform_request_value<I, O, P>(value: I, pipe: P) -> Result<O>
+where
+    P: RequestValuePipe<I, O>,
+{
+    pipe.transform(value)
+}

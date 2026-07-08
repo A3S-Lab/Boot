@@ -8,7 +8,9 @@ mod response;
 mod sse;
 
 pub use cookie::{CookieOptions, CookieSameSite};
-pub use extractor::{extract_request_value, RequestExtractor};
+pub use extractor::{
+    extract_request_value, transform_request_value, RequestExtractor, RequestValuePipe,
+};
 pub use method::HttpMethod;
 pub use request::BootRequest;
 pub use response::BootResponse;
