@@ -5025,7 +5025,15 @@ src/
 ├── validation.rs # DTO validation trait and route validation hooks
 ├── versioning.rs # Adapter-neutral API versioning strategies and route metadata
 ├── view.rs       # Provider-backed MVC view rendering
-├── websocket/    # Adapter-neutral WebSocket gateways, messages, and pipeline hooks
+├── websocket/    # Adapter-neutral WebSocket gateway modules
+│   ├── connection.rs # In-process gateway connections and dispatch
+│   ├── context.rs    # Gateway execution and lifecycle contexts
+│   ├── gateway.rs    # Gateway definition, matching, hooks, rooms, and broadcasts
+│   ├── handler.rs    # Message handler adapter
+│   ├── hooks.rs      # Gateway lifecycle hook traits
+│   ├── message.rs    # WebSocket message and outbound writer types
+│   ├── pipeline.rs   # Gateway pipes, guards, and interceptors
+│   └── state.rs      # Connection ids, rooms, and outbound state
 ├── error.rs
 ├── file_upload.rs # Optional multipart form and file upload helpers
 └── lib.rs
