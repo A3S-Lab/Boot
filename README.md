@@ -5016,7 +5016,12 @@ src/
 ├── request_context.rs # Optional task-local request context
 ├── routing/      # Route handlers, controllers, route execution, and path matching
 ├── schedule.rs   # Optional provider-backed scheduler and in-process backend
-├── security.rs   # Optional CORS, security headers, CSRF, and rate limiting helpers
+├── security/     # Optional CORS, security headers, CSRF, and rate limiting helpers
+│   ├── cors.rs        # CORS options, middleware, preflight routes, and response headers
+│   ├── csrf.rs        # CSRF guard and options
+│   ├── headers.rs     # Helmet-like security response headers
+│   ├── http_methods.rs # Shared HTTP method collection helpers
+│   └── rate_limit.rs  # In-memory rate limiting guard
 ├── serialization.rs # Adapter-neutral JSON response shaping interceptor
 ├── session.rs    # Optional provider-backed session store and cookie pipeline
 ├── static_files.rs # Optional provider-backed static file module

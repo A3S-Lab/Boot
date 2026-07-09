@@ -160,7 +160,14 @@ async fn csrf_guard_allows_matching_tokens_and_rejects_missing_tokens() {
     assert_eq!(allowed.status(), 200);
     assert_eq!(allowed.body_text().unwrap(), "created");
     assert_eq!(rejected.status(), 403);
-    assert_eq!(rejected.body_text().unwrap(), "invalid CSRF token");
+    assert_eq!(
+        rejected.body_json::<serde_json::Value>().unwrap(),
+        json!({
+            "statusCode": 403,
+            "message": "invalid CSRF token",
+            "error": "Forbidden"
+        })
+    );
 }
 
 #[tokio::test]
@@ -196,6 +203,13 @@ async fn rate_limit_guard_rejects_requests_after_the_window_limit() {
         .unwrap();
 
     assert_eq!(rejected.status(), 429);
-    assert_eq!(rejected.body_text().unwrap(), "rate limit exceeded");
+    assert_eq!(
+        rejected.body_json::<serde_json::Value>().unwrap(),
+        json!({
+            "statusCode": 429,
+            "message": "rate limit exceeded",
+            "error": "Too Many Requests"
+        })
+    );
     assert_eq!(separate_key.status(), 200);
 }
