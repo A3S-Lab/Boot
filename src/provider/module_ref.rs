@@ -1,9 +1,11 @@
+use super::cache::{new_provider_cache, ProviderCache};
+use super::entry::ProviderEntry;
+use super::provider_ref::ProviderRef;
+use super::resolution::{new_resolution_stack, ProviderResolutionStack};
 use super::{AnyProvider, FromModuleRef, ProviderDefinition, ProviderScope, ProviderToken};
 use crate::{BootError, Result};
 use std::collections::BTreeMap;
 use std::fmt;
-use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 /// Runtime provider container. This is Boot's Rust equivalent of Nest's ModuleRef.
@@ -14,382 +16,6 @@ pub struct ModuleRef {
     visible_scopes: Arc<RwLock<Vec<ModuleRef>>>,
     request_cache: Option<ProviderCache>,
     resolution_stack: Option<ProviderResolutionStack>,
-}
-
-/// Lazy provider handle for forward-reference-style dependencies.
-#[derive(Clone)]
-pub struct ProviderRef<T> {
-    module_ref: ModuleRef,
-    token: ProviderToken,
-    _marker: PhantomData<fn() -> T>,
-}
-
-impl<T> fmt::Debug for ProviderRef<T> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ProviderRef")
-            .field("token", &self.token)
-            .finish_non_exhaustive()
-    }
-}
-
-impl<T> ProviderRef<T>
-where
-    T: Send + Sync + 'static,
-{
-    pub fn new(module_ref: ModuleRef, token: ProviderToken) -> Self {
-        Self {
-            module_ref,
-            token,
-            _marker: PhantomData,
-        }
-    }
-
-    pub fn token(&self) -> &ProviderToken {
-        &self.token
-    }
-
-    pub fn module_ref(&self) -> &ModuleRef {
-        &self.module_ref
-    }
-
-    pub fn get(&self) -> Result<Arc<T>> {
-        self.module_ref.get_token(&self.token)
-    }
-
-    pub fn get_optional(&self) -> Result<Option<Arc<T>>> {
-        self.module_ref.get_optional_token(&self.token)
-    }
-
-    pub fn resolve(&self) -> Result<Arc<T>> {
-        self.module_ref.resolve_token(&self.token)
-    }
-
-    pub fn resolve_optional(&self) -> Result<Option<Arc<T>>> {
-        self.module_ref.resolve_optional_token(&self.token)
-    }
-}
-
-type ProviderCache = Arc<RwLock<BTreeMap<ProviderCacheKey, Arc<AnyProvider>>>>;
-type ProviderResolutionStack = Arc<RwLock<Vec<ProviderToken>>>;
-
-static NEXT_PROVIDER_CACHE_KEY: AtomicU64 = AtomicU64::new(1);
-
-fn new_resolution_stack() -> ProviderResolutionStack {
-    Arc::new(RwLock::new(Vec::new()))
-}
-
-fn enter_resolution_stack(
-    resolution_stack: &ProviderResolutionStack,
-    token: &ProviderToken,
-) -> Result<()> {
-    let mut stack = resolution_stack.write().map_err(|_| {
-        BootError::Internal("provider resolution stack lock is poisoned".to_string())
-    })?;
-    if let Some(index) = stack.iter().position(|active| active == token) {
-        let mut chain = stack[index..].to_vec();
-        chain.push(token.clone());
-        let chain = chain
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join(" -> ");
-        return Err(BootError::Internal(format!(
-            "cyclic provider dependency detected: {chain}"
-        )));
-    }
-
-    stack.push(token.clone());
-    Ok(())
-}
-
-fn exit_resolution_stack(resolution_stack: &ProviderResolutionStack) -> Result<()> {
-    let mut stack = resolution_stack.write().map_err(|_| {
-        BootError::Internal("provider resolution stack lock is poisoned".to_string())
-    })?;
-    stack
-        .pop()
-        .ok_or_else(|| BootError::Internal("provider resolution stack underflow".to_string()))?;
-    Ok(())
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct ProviderCacheKey(u64);
-
-impl ProviderCacheKey {
-    fn next() -> Self {
-        Self(NEXT_PROVIDER_CACHE_KEY.fetch_add(1, Ordering::Relaxed))
-    }
-}
-
-#[derive(Clone)]
-struct ProviderEntry {
-    cache_key: ProviderCacheKey,
-    definition: ProviderDefinition,
-    singleton: ProviderCache,
-    owner: Option<ModuleRef>,
-}
-
-impl ProviderEntry {
-    fn new(definition: ProviderDefinition) -> Self {
-        Self {
-            cache_key: ProviderCacheKey::next(),
-            definition,
-            singleton: Arc::new(RwLock::new(BTreeMap::new())),
-            owner: None,
-        }
-    }
-
-    fn with_owner(mut self, owner: ModuleRef) -> Self {
-        if self.owner.is_none() {
-            self.owner = Some(owner);
-        }
-        self
-    }
-
-    fn scope(&self) -> ProviderScope {
-        self.definition.scope()
-    }
-
-    fn is_local_singleton(&self) -> bool {
-        self.scope() == ProviderScope::Singleton && !self.definition.is_alias()
-    }
-
-    fn is_async_factory(&self) -> bool {
-        self.definition.is_async_factory()
-    }
-
-    fn resolve(
-        &self,
-        module_ref: &ModuleRef,
-        request_cache: Option<ProviderCache>,
-        resolution_stack: &ProviderResolutionStack,
-        alias_path: &mut Vec<ProviderToken>,
-    ) -> Result<Arc<AnyProvider>> {
-        let base_ref = self.owner.as_ref().unwrap_or(module_ref);
-        if let Some(target) = self.definition.alias_target() {
-            return self.resolve_alias(
-                base_ref,
-                target,
-                request_cache,
-                resolution_stack,
-                alias_path,
-            );
-        }
-
-        match self.scope() {
-            ProviderScope::Singleton => self.resolve_singleton(base_ref, resolution_stack),
-            ProviderScope::Transient => {
-                let factory_ref =
-                    self.factory_ref(base_ref, request_cache.clone(), resolution_stack);
-                self.build_with_resolution_stack(&factory_ref, resolution_stack)
-            }
-            ProviderScope::Request => {
-                let factory_ref =
-                    self.factory_ref(base_ref, request_cache.clone(), resolution_stack);
-                self.resolve_request(&factory_ref, request_cache, resolution_stack)
-            }
-        }
-    }
-
-    fn resolve_alias(
-        &self,
-        module_ref: &ModuleRef,
-        target: &ProviderToken,
-        request_cache: Option<ProviderCache>,
-        resolution_stack: &ProviderResolutionStack,
-        alias_path: &mut Vec<ProviderToken>,
-    ) -> Result<Arc<AnyProvider>> {
-        if alias_path.contains(self.definition.token()) {
-            alias_path.push(self.definition.token().clone());
-            let chain = alias_path
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(" -> ");
-            return Err(BootError::Internal(format!(
-                "cyclic provider alias detected: {chain}"
-            )));
-        }
-
-        alias_path.push(self.definition.token().clone());
-        let value = module_ref.get_any_with_request_cache_inner(
-            target,
-            request_cache,
-            resolution_stack,
-            alias_path,
-        )?;
-        alias_path.pop();
-
-        value.ok_or_else(|| BootError::MissingProvider(target.to_string()))
-    }
-
-    fn resolve_singleton(
-        &self,
-        module_ref: &ModuleRef,
-        resolution_stack: &ProviderResolutionStack,
-    ) -> Result<Arc<AnyProvider>> {
-        if let Some(value) = self
-            .read_cache(&self.singleton)?
-            .get(&self.cache_key)
-            .cloned()
-        {
-            return Ok(value);
-        }
-
-        let factory_ref = module_ref.with_resolution_stack(Arc::clone(resolution_stack));
-        let value = self.build_with_resolution_stack(&factory_ref, resolution_stack)?;
-        self.write_cache(&self.singleton)?
-            .insert(self.cache_key, Arc::clone(&value));
-        Ok(value)
-    }
-
-    fn resolve_request(
-        &self,
-        module_ref: &ModuleRef,
-        request_cache: Option<ProviderCache>,
-        resolution_stack: &ProviderResolutionStack,
-    ) -> Result<Arc<AnyProvider>> {
-        let Some(request_cache) = request_cache else {
-            return self.build_with_resolution_stack(module_ref, resolution_stack);
-        };
-
-        if let Some(value) = self
-            .read_cache(&request_cache)?
-            .get(&self.cache_key)
-            .cloned()
-        {
-            return Ok(value);
-        }
-
-        let value = self.build_with_resolution_stack(module_ref, resolution_stack)?;
-        self.write_cache(&request_cache)?
-            .insert(self.cache_key, Arc::clone(&value));
-        Ok(value)
-    }
-
-    async fn seed_singleton_async(&self, module_ref: ModuleRef) -> Result<()> {
-        let resolution_stack = new_resolution_stack();
-        let module_ref = module_ref.with_resolution_stack(Arc::clone(&resolution_stack));
-        enter_resolution_stack(&resolution_stack, self.definition.token())?;
-        let result = self.definition.build_async(module_ref).await;
-        let exit_result = exit_resolution_stack(&resolution_stack);
-        let value = match (result, exit_result) {
-            (Ok(value), Ok(())) => value,
-            (Err(error), _) => return Err(error),
-            (Ok(_), Err(error)) => return Err(error),
-        };
-        self.seed_singleton(value)
-    }
-
-    fn seed_singleton(&self, value: Arc<AnyProvider>) -> Result<()> {
-        self.write_cache(&self.singleton)?
-            .insert(self.cache_key, value);
-        Ok(())
-    }
-
-    fn on_module_init(&self, module_ref: &ModuleRef) -> Result<()> {
-        let Some(hook) = self.definition.lifecycle().on_module_init() else {
-            return Ok(());
-        };
-
-        let resolution_stack = new_resolution_stack();
-        let value = self.resolve_singleton(module_ref, &resolution_stack)?;
-        hook(value, module_ref)
-    }
-
-    async fn on_application_bootstrap(&self, module_ref: ModuleRef) -> Result<()> {
-        let Some(hook) = self.definition.lifecycle().on_application_bootstrap() else {
-            return Ok(());
-        };
-
-        let resolution_stack = new_resolution_stack();
-        let value = self.resolve_singleton(&module_ref, &resolution_stack)?;
-        hook(value, module_ref).await
-    }
-
-    async fn on_module_destroy(&self, module_ref: ModuleRef, signal: Option<String>) -> Result<()> {
-        let Some(hook) = self.definition.lifecycle().on_module_destroy() else {
-            return Ok(());
-        };
-
-        let resolution_stack = new_resolution_stack();
-        let value = self.resolve_singleton(&module_ref, &resolution_stack)?;
-        hook(value, module_ref, signal).await
-    }
-
-    async fn before_application_shutdown(
-        &self,
-        module_ref: ModuleRef,
-        signal: Option<String>,
-    ) -> Result<()> {
-        let Some(hook) = self.definition.lifecycle().before_application_shutdown() else {
-            return Ok(());
-        };
-
-        let resolution_stack = new_resolution_stack();
-        let value = self.resolve_singleton(&module_ref, &resolution_stack)?;
-        hook(value, module_ref, signal).await
-    }
-
-    async fn on_application_shutdown(
-        &self,
-        module_ref: ModuleRef,
-        signal: Option<String>,
-    ) -> Result<()> {
-        let Some(hook) = self.definition.lifecycle().on_application_shutdown() else {
-            return Ok(());
-        };
-
-        let resolution_stack = new_resolution_stack();
-        let value = self.resolve_singleton(&module_ref, &resolution_stack)?;
-        hook(value, module_ref, signal).await
-    }
-
-    fn factory_ref(
-        &self,
-        module_ref: &ModuleRef,
-        request_cache: Option<ProviderCache>,
-        resolution_stack: &ProviderResolutionStack,
-    ) -> ModuleRef {
-        let factory_ref = module_ref.with_resolution_stack(Arc::clone(resolution_stack));
-        match request_cache {
-            Some(request_cache) => factory_ref.with_request_cache(request_cache),
-            None => factory_ref,
-        }
-    }
-
-    fn build_with_resolution_stack(
-        &self,
-        module_ref: &ModuleRef,
-        resolution_stack: &ProviderResolutionStack,
-    ) -> Result<Arc<AnyProvider>> {
-        enter_resolution_stack(resolution_stack, self.definition.token())?;
-        let result = self.definition.build(module_ref);
-        let exit_result = exit_resolution_stack(resolution_stack);
-        match (result, exit_result) {
-            (Ok(value), Ok(())) => Ok(value),
-            (Err(error), _) => Err(error),
-            (Ok(_), Err(error)) => Err(error),
-        }
-    }
-
-    fn read_cache<'a>(
-        &self,
-        cache: &'a ProviderCache,
-    ) -> Result<std::sync::RwLockReadGuard<'a, BTreeMap<ProviderCacheKey, Arc<AnyProvider>>>> {
-        cache
-            .read()
-            .map_err(|_| BootError::Internal("provider cache lock is poisoned".to_string()))
-    }
-
-    fn write_cache<'a>(
-        &self,
-        cache: &'a ProviderCache,
-    ) -> Result<std::sync::RwLockWriteGuard<'a, BTreeMap<ProviderCacheKey, Arc<AnyProvider>>>> {
-        cache
-            .write()
-            .map_err(|_| BootError::Internal("provider cache lock is poisoned".to_string()))
-    }
 }
 
 impl fmt::Debug for ModuleRef {
@@ -417,10 +43,10 @@ impl ModuleRef {
     }
 
     pub fn request_scope(&self) -> Self {
-        self.with_request_cache(Arc::new(RwLock::new(BTreeMap::new())))
+        self.with_request_cache(new_provider_cache())
     }
 
-    fn with_request_cache(&self, request_cache: ProviderCache) -> Self {
+    pub(crate) fn with_request_cache(&self, request_cache: ProviderCache) -> Self {
         Self {
             providers: Arc::clone(&self.providers),
             provider_order: Arc::clone(&self.provider_order),
@@ -430,7 +56,7 @@ impl ModuleRef {
         }
     }
 
-    fn with_resolution_stack(&self, resolution_stack: ProviderResolutionStack) -> Self {
+    pub(crate) fn with_resolution_stack(&self, resolution_stack: ProviderResolutionStack) -> Self {
         Self {
             providers: Arc::clone(&self.providers),
             provider_order: Arc::clone(&self.provider_order),
@@ -741,7 +367,7 @@ impl ModuleRef {
         Ok(())
     }
 
-    fn get_token<T>(&self, token: &ProviderToken) -> Result<Arc<T>>
+    pub(crate) fn get_token<T>(&self, token: &ProviderToken) -> Result<Arc<T>>
     where
         T: Send + Sync + 'static,
     {
@@ -752,7 +378,7 @@ impl ModuleRef {
         Arc::downcast::<T>(value).map_err(|_| BootError::ProviderTypeMismatch(token.to_string()))
     }
 
-    fn get_optional_token<T>(&self, token: &ProviderToken) -> Result<Option<Arc<T>>>
+    pub(crate) fn get_optional_token<T>(&self, token: &ProviderToken) -> Result<Option<Arc<T>>>
     where
         T: Send + Sync + 'static,
     {
@@ -765,14 +391,14 @@ impl ModuleRef {
         }
     }
 
-    fn resolve_token<T>(&self, token: &ProviderToken) -> Result<Arc<T>>
+    pub(crate) fn resolve_token<T>(&self, token: &ProviderToken) -> Result<Arc<T>>
     where
         T: Send + Sync + 'static,
     {
         self.request_scope().get_token(token)
     }
 
-    fn resolve_optional_token<T>(&self, token: &ProviderToken) -> Result<Option<Arc<T>>>
+    pub(crate) fn resolve_optional_token<T>(&self, token: &ProviderToken) -> Result<Option<Arc<T>>>
     where
         T: Send + Sync + 'static,
     {
@@ -793,7 +419,7 @@ impl ModuleRef {
         )
     }
 
-    fn get_any_with_request_cache_inner(
+    pub(crate) fn get_any_with_request_cache_inner(
         &self,
         token: &ProviderToken,
         request_cache: Option<ProviderCache>,

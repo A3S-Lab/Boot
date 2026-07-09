@@ -5012,6 +5012,13 @@ src/
 ├── module/       # Module trait, dynamic modules, exports, and lifecycle hooks
 ├── pipeline/     # Middleware, pipes, guards, interceptors, filters, and execution context
 ├── provider/     # Provider tokens, definitions, and ModuleRef container
+│   ├── cache.rs       # Provider cache keys and request/singleton caches
+│   ├── definition.rs  # Provider definitions, scopes, factories, and lifecycle hooks
+│   ├── entry.rs       # Provider resolution, aliases, scopes, and lifecycle dispatch
+│   ├── module_ref.rs  # ModuleRef registration, lookup, visibility, and public APIs
+│   ├── provider_ref.rs # Lazy provider handles for forward-reference-style dependencies
+│   ├── resolution.rs  # Provider dependency cycle detection stack
+│   └── token.rs       # Provider tokens
 ├── queue.rs      # Optional provider-backed queue and in-process backend
 ├── request_context.rs # Optional task-local request context
 ├── routing/      # Route handlers, controllers, route execution, and path matching
