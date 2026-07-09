@@ -1,3 +1,6 @@
+use crate::openapi_security::{
+    parse_args_or_default, ApiCookieAuthArgs, ApiKeyAuthArgs, ApiSecurityArgs, BearerAuthArgs,
+};
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::{
@@ -14,6 +17,9 @@ pub(crate) enum AttrKind {
     ApiParam,
     ApiQuery,
     ApiHeader,
+    ApiSecurity,
+    ApiCookieAuth,
+    ApiKeyAuth,
     BearerAuth,
     HideFromOpenApi,
 }
@@ -29,6 +35,9 @@ impl AttrKind {
             "api_param" => Some(Self::ApiParam),
             "api_query" => Some(Self::ApiQuery),
             "api_header" => Some(Self::ApiHeader),
+            "api_security" => Some(Self::ApiSecurity),
+            "api_cookie_auth" => Some(Self::ApiCookieAuth),
+            "api_key_auth" => Some(Self::ApiKeyAuth),
             "bearer_auth" => Some(Self::BearerAuth),
             "hide_from_openapi" => Some(Self::HideFromOpenApi),
             _ => None,
@@ -61,9 +70,17 @@ impl AttrKind {
                     args,
                 })
             }),
+            Self::ApiSecurity => attr
+                .parse_args::<ApiSecurityArgs>()
+                .map(RouteSpec::ApiSecurity),
+            Self::ApiCookieAuth => {
+                parse_args_or_default::<ApiCookieAuthArgs>(attr).map(RouteSpec::ApiCookieAuth)
+            }
+            Self::ApiKeyAuth => {
+                parse_args_or_default::<ApiKeyAuthArgs>(attr).map(RouteSpec::ApiKeyAuth)
+            }
             Self::BearerAuth => {
-                crate::expect_no_extractor_args(attr, "bearer_auth")?;
-                Ok(RouteSpec::BearerAuth)
+                parse_args_or_default::<BearerAuthArgs>(attr).map(RouteSpec::BearerAuth)
             }
             Self::HideFromOpenApi => {
                 crate::expect_no_extractor_args(attr, "hide_from_openapi")?;
@@ -80,7 +97,10 @@ pub(crate) enum RouteSpec {
     Response(ResponseArgs),
     RequestBody(RequestBodyArgs),
     Parameter(OpenApiParameterSpec),
-    BearerAuth,
+    ApiSecurity(ApiSecurityArgs),
+    ApiCookieAuth(ApiCookieAuthArgs),
+    ApiKeyAuth(ApiKeyAuthArgs),
+    BearerAuth(BearerAuthArgs),
     HideFromOpenApi,
 }
 
@@ -92,7 +112,10 @@ impl RouteSpec {
             Self::Response(args) => args.tokens().map(|token| vec![token]),
             Self::RequestBody(args) => Ok(vec![args.tokens()]),
             Self::Parameter(spec) => spec.tokens().map(|token| vec![token]),
-            Self::BearerAuth => Ok(vec![quote!(with_bearer_auth())]),
+            Self::ApiSecurity(args) => Ok(vec![args.tokens()]),
+            Self::ApiCookieAuth(args) => args.tokens().map(|token| vec![token]),
+            Self::ApiKeyAuth(args) => args.tokens().map(|token| vec![token]),
+            Self::BearerAuth(args) => Ok(vec![args.tokens()]),
             Self::HideFromOpenApi => Ok(vec![quote!(hide_from_openapi())]),
         }
     }

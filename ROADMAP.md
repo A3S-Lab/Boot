@@ -67,6 +67,10 @@ Implemented today:
   `#[module]` implements `Module` from Nest-style metadata lists for imports,
   providers, controllers, routes, gateways, message controllers, exports,
   route prefixes, and global modules.
+- Nest-style OpenAPI security macros: `#[bearer_auth]`, `#[api_security]`,
+  `#[api_cookie_auth]`, and `#[api_key_auth]`, including operation security
+  requirements and generated security schemes for bearer, cookie, header, and
+  query API key authentication.
 - WebSocket lifecycle macros: `#[on_gateway_init]`,
   `#[on_gateway_connection]`, and `#[on_gateway_disconnect]`.
 - Host-scoped HTTP routes with `RouteDefinition::with_host(...)` and
@@ -106,6 +110,7 @@ Implemented today:
 - OpenAPI route metadata, schema-crate-neutral document generation from resolved
   routes, explicit Nest-style parameter decorators, automatic path-parameter
   documentation, request/response examples, non-JSON media type metadata, and
+  security requirements plus generated `components.securitySchemes`, and
   optional `serve_openapi(...)` JSON route registration plus
   `serve_openapi_ui(...)` Swagger UI route registration.
 - Custom route/controller metadata through builders and `#[metadata]`,
@@ -356,8 +361,9 @@ Tasks:
 - Preserve adapter neutrality. (Implemented)
 - Add Nest-style OpenAPI macros such as `#[tag]`, `#[operation]`,
   `#[api_param]`, `#[api_query]`, `#[api_header]`, `#[response]`,
-  request/response examples, request/response media types, and auth metadata
-  attributes. (Implemented)
+  request/response examples, request/response media types, `#[bearer_auth]`,
+  `#[api_security]`, `#[api_cookie_auth]`, `#[api_key_auth]`, and auth
+  metadata attributes. (Implemented)
 - Add optional schema component generation from `schemars`. (Implemented)
 
 Acceptance:
@@ -365,7 +371,7 @@ Acceptance:
 - A sample controller can generate a valid OpenAPI 3 document.
 - The generated document includes paths, methods, inferred and explicit params,
   request body, responses, request/response examples, non-JSON media types,
-  tags, and security metadata.
+  tags, security requirements, and generated security schemes.
 - A generated Swagger UI route can load the generated JSON document.
 - JSON examples in README are generated from tested code paths.
 - OpenAPI tests validate a representative document with `serde_json`.

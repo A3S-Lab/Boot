@@ -8,6 +8,7 @@ mod events;
 mod file_upload;
 mod messaging;
 mod openapi;
+mod openapi_security;
 mod outside;
 mod schedule;
 mod util;
@@ -424,6 +425,21 @@ pub fn api_query(_attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn api_header(_attr: TokenStream, item: TokenStream) -> TokenStream {
     openapi_attribute_outside_controller("api_header", item)
+}
+
+#[proc_macro_attribute]
+pub fn api_security(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    openapi_attribute_outside_controller("api_security", item)
+}
+
+#[proc_macro_attribute]
+pub fn api_cookie_auth(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    openapi_attribute_outside_controller("api_cookie_auth", item)
+}
+
+#[proc_macro_attribute]
+pub fn api_key_auth(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    openapi_attribute_outside_controller("api_key_auth", item)
 }
 
 #[proc_macro_attribute]

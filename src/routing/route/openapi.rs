@@ -2,8 +2,8 @@ use super::definition::RouteDefinition;
 #[cfg(feature = "openapi-schemas")]
 use crate::{openapi_schema_name, BootError};
 use crate::{
-    OpenApiParameter, OpenApiRequestBody, OpenApiResponse, OpenApiRouteMetadata, OpenApiSchema,
-    OpenApiSecurityRequirement, Result,
+    OpenApiApiKeyLocation, OpenApiParameter, OpenApiRequestBody, OpenApiResponse,
+    OpenApiRouteMetadata, OpenApiSchema, OpenApiSecurityRequirement, OpenApiSecurityScheme, Result,
 };
 use serde::Serialize;
 
@@ -200,10 +200,74 @@ impl RouteDefinition {
         self
     }
 
-    pub fn with_bearer_auth(self) -> Self {
+    pub fn with_api_security<I, S>(self, name: impl Into<String>, scopes: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
         let mut requirement = OpenApiSecurityRequirement::new();
-        requirement.insert("bearerAuth".to_string(), Vec::new());
+        requirement.insert(
+            name.into(),
+            scopes.into_iter().map(Into::into).collect::<Vec<_>>(),
+        );
         self.with_security_requirement(requirement)
+    }
+
+    pub fn with_security_scheme(
+        mut self,
+        name: impl Into<String>,
+        scheme: OpenApiSecurityScheme,
+    ) -> Self {
+        self.openapi.security_schemes.insert(name.into(), scheme);
+        self
+    }
+
+    pub fn with_bearer_auth(self) -> Self {
+        self.with_bearer_auth_named("bearerAuth")
+    }
+
+    pub fn with_bearer_auth_named(self, name: impl Into<String>) -> Self {
+        let name = name.into();
+        self.with_security_scheme(name.clone(), OpenApiSecurityScheme::http_bearer())
+            .with_api_security(name, Vec::<String>::new())
+    }
+
+    pub fn with_api_key_auth(
+        self,
+        scheme_name: impl Into<String>,
+        location: OpenApiApiKeyLocation,
+        key_name: impl Into<String>,
+    ) -> Self {
+        let scheme_name = scheme_name.into();
+        self.with_security_scheme(
+            scheme_name.clone(),
+            OpenApiSecurityScheme::api_key(location, key_name),
+        )
+        .with_api_security(scheme_name, Vec::<String>::new())
+    }
+
+    pub fn with_header_api_key_auth(
+        self,
+        scheme_name: impl Into<String>,
+        header_name: impl Into<String>,
+    ) -> Self {
+        self.with_api_key_auth(scheme_name, OpenApiApiKeyLocation::Header, header_name)
+    }
+
+    pub fn with_query_api_key_auth(
+        self,
+        scheme_name: impl Into<String>,
+        query_name: impl Into<String>,
+    ) -> Self {
+        self.with_api_key_auth(scheme_name, OpenApiApiKeyLocation::Query, query_name)
+    }
+
+    pub fn with_cookie_auth(
+        self,
+        scheme_name: impl Into<String>,
+        cookie_name: impl Into<String>,
+    ) -> Self {
+        self.with_api_key_auth(scheme_name, OpenApiApiKeyLocation::Cookie, cookie_name)
     }
 
     pub fn with_schema_component(mut self, name: impl Into<String>, schema: OpenApiSchema) -> Self {

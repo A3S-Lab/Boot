@@ -360,7 +360,10 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@ApiBody({ example: ... })` | `#[request_body(schema = CreateCatDto, example = serde_json::json!(...))]` |
 | `@ApiConsumes("multipart/form-data")` | `#[request_body(content_type = "multipart/form-data", schema = UploadDto)]` |
 | `@ApiProduces("text/csv")` | `#[response(status = 200, content_type = "text/csv", schema = String)]` |
-| `@ApiBearerAuth()` | `#[bearer_auth]` on a route method |
+| `@ApiBearerAuth()` | `#[bearer_auth]` or `#[bearer_auth("accessToken")]` on a route method |
+| `@ApiSecurity("apiKey")` | `#[api_security("apiKey")]` or `#[api_security("oauth2", scopes = ["read"])]` |
+| `@ApiCookieAuth()` | `#[api_cookie_auth(name = "sid")]` |
+| API key security scheme | `#[api_key_auth(name = "x-api-key")]` or `#[api_key_auth(name = "api_key", location = "query")]` |
 | Constructor injection | `#[injectable]` fields such as `cats: Arc<CatsService>` plus `CatsController::provider()` |
 | `@Inject("TOKEN")` | `#[inject("token")]` on an `Arc<T>`, `Option<Arc<T>>`, or `ProviderRef<T>` field |
 | `@Optional()` | `Option<Arc<T>>` or `Option<ProviderRef<T>>` on an injectable field |
@@ -387,9 +390,9 @@ into:
 use std::sync::Arc;
 
 use a3s_boot::{
-    controller, injectable, module, AxumAdapter, BootError, BootFactory, BootRequest, BootResponse,
-    Result, SseEvent, SseStream,
-    Validate,
+    all, api_key_auth, bearer_auth, body, controller, get, header, injectable, module, operation,
+    param, post, query, request, request_body, response, sse, tag, validate, AxumAdapter,
+    BootError, BootFactory, BootRequest, BootResponse, Result, SseEvent, SseStream, Validate,
 };
 use serde::{Deserialize, Serialize};
 
@@ -454,6 +457,7 @@ impl CatsController {
     #[operation(summary = "Find a cat", operation_id = "findCat")]
     #[response(status = 200, description = "Cat found", schema = CatDto)]
     #[bearer_auth]
+    #[api_key_auth(name = "x-api-key")]
     async fn find_one(
         &self,
         #[param("id")] id: String,
@@ -1140,6 +1144,31 @@ examples. Use `with_request_body_content_type(...)`,
 `with_response_content_type(...)`, `#[request_body(content_type = "...")]`, and
 `#[response(content_type = "...")]` for non-JSON media types such as
 `multipart/form-data`, vendor JSON, or CSV.
+
+OpenAPI security metadata mirrors the common Nest Swagger decorators. Builder
+routes can call `with_bearer_auth()`,
+`with_bearer_auth_named("accessToken")`,
+`with_header_api_key_auth("apiKeyAuth", "x-api-key")`,
+`with_query_api_key_auth("queryKeyAuth", "api_key")`, or
+`with_cookie_auth("cookieAuth", "sid")`. These helpers add both an operation
+security requirement and the matching `components.securitySchemes` entry.
+Use `with_api_security("oauth2", ["cats:read"])` or
+`#[api_security("oauth2", scopes = ["cats:read"])]` when the route should
+reference a custom scheme that is managed by surrounding OpenAPI tooling.
+
+```rust
+#[controller("/cats")]
+impl CatsController {
+    #[get("/{id}")]
+    #[bearer_auth]
+    #[api_key_auth(name = "x-api-key")]
+    #[api_cookie_auth(name = "sid")]
+    #[api_security("oauth2", scopes = ["cats:read"])]
+    async fn find_one(&self, #[param("id")] id: String) -> Result<CatDto> {
+        Ok(self.cats.find_one(&id))
+    }
+}
+```
 
 With `openapi-schemas`, routes can collect component schemas directly from
 types that derive `schemars::JsonSchema`:

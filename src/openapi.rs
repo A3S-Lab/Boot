@@ -1,3 +1,4 @@
+use crate::openapi_security::{OpenApiSecurityRequirement, OpenApiSecurityScheme};
 use crate::{BootError, HttpMethod, Result, RouteDefinition};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -55,6 +56,7 @@ impl OpenApiDocument {
                 tag_names.insert(tag.clone());
             }
             components.merge_schemas(route.openapi().schema_components.clone());
+            components.merge_security_schemes(route.openapi().security_schemes.clone());
 
             let path = paths.entry(openapi_route_path(route.path())).or_default();
             for method in openapi_methods(route.method()) {
@@ -107,15 +109,24 @@ fn openapi_route_path(path: &str) -> String {
 pub struct OpenApiComponents {
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub schemas: BTreeMap<String, OpenApiSchema>,
+    #[serde(rename = "securitySchemes", skip_serializing_if = "BTreeMap::is_empty")]
+    pub security_schemes: BTreeMap<String, OpenApiSecurityScheme>,
 }
 
 impl OpenApiComponents {
     pub fn is_empty(&self) -> bool {
-        self.schemas.is_empty()
+        self.schemas.is_empty() && self.security_schemes.is_empty()
     }
 
     pub fn merge_schemas(&mut self, schemas: BTreeMap<String, OpenApiSchema>) {
         self.schemas.extend(schemas);
+    }
+
+    pub fn merge_security_schemes(
+        &mut self,
+        security_schemes: BTreeMap<String, OpenApiSecurityScheme>,
+    ) {
+        self.security_schemes.extend(security_schemes);
     }
 }
 
@@ -191,6 +202,7 @@ pub struct OpenApiRouteMetadata {
     pub request_body: Option<OpenApiRequestBody>,
     pub responses: BTreeMap<String, OpenApiResponse>,
     pub schema_components: BTreeMap<String, OpenApiSchema>,
+    pub security_schemes: BTreeMap<String, OpenApiSecurityScheme>,
     pub security: Vec<OpenApiSecurityRequirement>,
     pub deprecated: bool,
     pub hidden: bool,
@@ -561,9 +573,6 @@ impl Serialize for OpenApiSchema {
         self.0.serialize(serializer)
     }
 }
-
-/// OpenAPI security requirement object.
-pub type OpenApiSecurityRequirement = BTreeMap<String, Vec<String>>;
 
 fn openapi_methods(method: HttpMethod) -> &'static [&'static str] {
     match method {
