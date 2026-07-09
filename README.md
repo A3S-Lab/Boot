@@ -331,6 +331,8 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@UseInterceptors(TraceInterceptor)` | `#[use_interceptor(TraceInterceptor)]` on a controller impl or route method |
 | `@UseFilters(HttpErrorFilter)` | `#[use_filter(HttpErrorFilter)]` on a controller impl or route method |
 | `@Catch(BadRequestException)` | `#[catch(BadRequest)]` on a filter struct, used through `BadRequestFilter::catch_filter()` |
+| `BadRequestException` / `ConflictException` | `BootError::bad_request("...")` / `BootError::conflict("...")` |
+| `new HttpException("...", status)` | `BootError::http_exception(status, "...")?` |
 | `@UsePipes(ParsePipe)` | `#[use_pipe(ParsePipe)]` on a controller impl or route method |
 | `@UsePipes(new ValidationPipe())` | `#[validate]` on a controller impl or route method for DTO validation |
 | `new ValidationPipe({ transform: true })` | `#[validate(transform)]` or `ValidationOptions::new().transform(true)` |
@@ -3902,13 +3904,16 @@ framework's standard HTTP error mapping. `BootErrorKind`, `catch_errors(...)`,
 and `#[catch(...)]` provide Nest-style catch filters for selected error kinds;
 use `with_catch_filter(...)` for builder-style routes or
 `#[use_filter(BadRequestFilter::catch_filter())]` for decorator-style
-controllers. Routes can also
-attach static response headers or redirect successful handler results
+controllers. `BootError` also provides Nest-style HTTP exception helpers for
+common error classes such as `bad_request`, `conflict`,
+`unprocessable_entity`, `service_unavailable`, and the generic
+`http_exception(status, message)` equivalent of Nest's `HttpException`.
+Routes can also attach static response headers or redirect successful handler results
 declaratively, mirroring Nest's `@Header()` and `@Redirect()` decorators while
 keeping the behavior adapter-neutral:
 
 ```rust
-use a3s_boot::{BootErrorKind, BootResponse, Result, RouteDefinition};
+use a3s_boot::{BootError, BootErrorKind, BootResponse, Result, RouteDefinition};
 
 fn deleted() -> BootResponse {
     BootResponse::no_content()
@@ -3941,12 +3946,24 @@ fn moved_route() -> Result<RouteDefinition> {
 
 fn bad_request_route() -> Result<RouteDefinition> {
     RouteDefinition::get("/bad", |_| async {
-        Err(a3s_boot::BootError::BadRequest("invalid cat".to_string()))
+        Err(BootError::bad_request("invalid cat"))
     })
     .map(|route| {
         route.with_catch_filter([BootErrorKind::BadRequest], |_, error| async move {
             Ok(Some(BootResponse::text(error.to_string()).with_status(400)))
         })
+    })
+}
+
+fn conflict_route() -> Result<RouteDefinition> {
+    RouteDefinition::post("/cats", |_| async {
+        Err(BootError::conflict("cat already exists"))
+    })
+}
+
+fn legal_reasons_route() -> Result<RouteDefinition> {
+    RouteDefinition::get("/restricted", |_| async {
+        Err(BootError::http_exception(451, "legal reasons")?)
     })
 }
 

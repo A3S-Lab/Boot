@@ -123,59 +123,192 @@ fn http_methods_display_and_parse_canonical_names() {
 
 #[test]
 fn boot_errors_expose_http_status_codes_and_response_messages() {
-    let not_found = BootError::NotFound("GET /missing".to_string());
-    let method_not_allowed = BootError::MethodNotAllowed("POST /items".to_string());
-    let unauthorized = BootError::Unauthorized("missing bearer token".to_string());
-    let forbidden = BootError::Forbidden("GET /private".to_string());
-    let bad_request = BootError::BadRequest("invalid input".to_string());
-    let payload_too_large = BootError::PayloadTooLarge("request body exceeds 4 bytes".to_string());
-    let unsupported_media_type =
-        BootError::UnsupportedMediaType("expected JSON content type".to_string());
-    let not_acceptable =
-        BootError::NotAcceptable("expected client to accept JSON response".to_string());
-    let internal = BootError::Internal("database failed".to_string());
+    let cases = vec![
+        (
+            BootError::NotFound("GET /missing".to_string()),
+            404,
+            BootErrorKind::NotFound,
+            "GET /missing",
+        ),
+        (
+            BootError::MethodNotAllowed("POST /items".to_string()),
+            405,
+            BootErrorKind::MethodNotAllowed,
+            "POST /items",
+        ),
+        (
+            BootError::Unauthorized("missing bearer token".to_string()),
+            401,
+            BootErrorKind::Unauthorized,
+            "missing bearer token",
+        ),
+        (
+            BootError::Forbidden("GET /private".to_string()),
+            403,
+            BootErrorKind::Forbidden,
+            "GET /private",
+        ),
+        (
+            BootError::BadRequest("invalid input".to_string()),
+            400,
+            BootErrorKind::BadRequest,
+            "invalid input",
+        ),
+        (
+            BootError::RequestTimeout("slow request".to_string()),
+            408,
+            BootErrorKind::RequestTimeout,
+            "slow request",
+        ),
+        (
+            BootError::Conflict("version conflict".to_string()),
+            409,
+            BootErrorKind::Conflict,
+            "version conflict",
+        ),
+        (
+            BootError::Gone("cat was removed".to_string()),
+            410,
+            BootErrorKind::Gone,
+            "cat was removed",
+        ),
+        (
+            BootError::PreconditionFailed("etag mismatch".to_string()),
+            412,
+            BootErrorKind::PreconditionFailed,
+            "etag mismatch",
+        ),
+        (
+            BootError::PayloadTooLarge("request body exceeds 4 bytes".to_string()),
+            413,
+            BootErrorKind::PayloadTooLarge,
+            "request body exceeds 4 bytes",
+        ),
+        (
+            BootError::UnsupportedMediaType("expected JSON content type".to_string()),
+            415,
+            BootErrorKind::UnsupportedMediaType,
+            "expected JSON content type",
+        ),
+        (
+            BootError::NotAcceptable("expected client to accept JSON response".to_string()),
+            406,
+            BootErrorKind::NotAcceptable,
+            "expected client to accept JSON response",
+        ),
+        (
+            BootError::ImATeapot("short and stout".to_string()),
+            418,
+            BootErrorKind::ImATeapot,
+            "short and stout",
+        ),
+        (
+            BootError::UnprocessableEntity("invalid cat shape".to_string()),
+            422,
+            BootErrorKind::UnprocessableEntity,
+            "invalid cat shape",
+        ),
+        (
+            BootError::TooManyRequests("rate limit exceeded".to_string()),
+            429,
+            BootErrorKind::TooManyRequests,
+            "rate limit exceeded",
+        ),
+        (
+            BootError::InternalServerError("handler failed".to_string()),
+            500,
+            BootErrorKind::InternalServerError,
+            "handler failed",
+        ),
+        (
+            BootError::NotImplemented("feature unavailable".to_string()),
+            501,
+            BootErrorKind::NotImplemented,
+            "feature unavailable",
+        ),
+        (
+            BootError::BadGateway("upstream failed".to_string()),
+            502,
+            BootErrorKind::BadGateway,
+            "upstream failed",
+        ),
+        (
+            BootError::ServiceUnavailable("maintenance".to_string()),
+            503,
+            BootErrorKind::ServiceUnavailable,
+            "maintenance",
+        ),
+        (
+            BootError::GatewayTimeout("upstream timeout".to_string()),
+            504,
+            BootErrorKind::GatewayTimeout,
+            "upstream timeout",
+        ),
+        (
+            BootError::http_exception(451, "legal reasons").unwrap(),
+            451,
+            BootErrorKind::HttpException,
+            "legal reasons",
+        ),
+        (
+            BootError::Internal("database failed".to_string()),
+            500,
+            BootErrorKind::Internal,
+            "internal error: database failed",
+        ),
+    ];
 
-    assert_eq!(not_found.http_status_code(), 404);
-    assert_eq!(not_found.kind(), BootErrorKind::NotFound);
-    assert_eq!(not_found.http_response_message(), "GET /missing");
-    assert_eq!(method_not_allowed.http_status_code(), 405);
-    assert_eq!(method_not_allowed.kind(), BootErrorKind::MethodNotAllowed);
-    assert_eq!(method_not_allowed.http_response_message(), "POST /items");
-    assert_eq!(unauthorized.http_status_code(), 401);
-    assert_eq!(unauthorized.kind(), BootErrorKind::Unauthorized);
-    assert_eq!(unauthorized.http_response_message(), "missing bearer token");
-    assert_eq!(forbidden.http_status_code(), 403);
-    assert_eq!(forbidden.kind(), BootErrorKind::Forbidden);
-    assert_eq!(forbidden.http_response_message(), "GET /private");
-    assert_eq!(bad_request.http_status_code(), 400);
-    assert_eq!(bad_request.kind(), BootErrorKind::BadRequest);
-    assert_eq!(bad_request.http_response_message(), "invalid input");
-    assert_eq!(payload_too_large.http_status_code(), 413);
-    assert_eq!(payload_too_large.kind(), BootErrorKind::PayloadTooLarge);
+    for (error, status, kind, message) in cases {
+        assert_eq!(error.http_status_code(), status);
+        assert_eq!(error.kind(), kind);
+        assert_eq!(error.http_response_message(), message);
+    }
+
+    assert!(matches!(
+        BootError::from_http_status(409, "duplicate cat"),
+        BootError::Conflict(message) if message == "duplicate cat"
+    ));
+    assert!(matches!(
+        BootError::from_http_status(451, "legal reasons"),
+        BootError::HttpException { status: 451, message } if message == "legal reasons"
+    ));
+    assert!(matches!(
+        BootError::http_exception(99, "invalid").unwrap_err(),
+        BootError::Internal(message) if message == "invalid HTTP exception status 99"
+    ));
+    assert!(matches!(
+        BootError::http_exception(600, "invalid").unwrap_err(),
+        BootError::Internal(message) if message == "invalid HTTP exception status 600"
+    ));
+
+    let constructor_kinds = vec![
+        BootError::bad_request("bad request").kind(),
+        BootError::request_timeout("timeout").kind(),
+        BootError::conflict("conflict").kind(),
+        BootError::gone("gone").kind(),
+        BootError::precondition_failed("precondition failed").kind(),
+        BootError::unprocessable_entity("invalid entity").kind(),
+        BootError::internal_server_error("internal").kind(),
+        BootError::not_implemented("not implemented").kind(),
+        BootError::bad_gateway("bad gateway").kind(),
+        BootError::service_unavailable("unavailable").kind(),
+        BootError::gateway_timeout("gateway timeout").kind(),
+    ];
     assert_eq!(
-        payload_too_large.http_response_message(),
-        "request body exceeds 4 bytes"
-    );
-    assert_eq!(unsupported_media_type.http_status_code(), 415);
-    assert_eq!(
-        unsupported_media_type.kind(),
-        BootErrorKind::UnsupportedMediaType
-    );
-    assert_eq!(
-        unsupported_media_type.http_response_message(),
-        "expected JSON content type"
-    );
-    assert_eq!(not_acceptable.http_status_code(), 406);
-    assert_eq!(not_acceptable.kind(), BootErrorKind::NotAcceptable);
-    assert_eq!(
-        not_acceptable.http_response_message(),
-        "expected client to accept JSON response"
-    );
-    assert_eq!(internal.http_status_code(), 500);
-    assert_eq!(internal.kind(), BootErrorKind::Internal);
-    assert_eq!(
-        internal.http_response_message(),
-        "internal error: database failed"
+        constructor_kinds,
+        vec![
+            BootErrorKind::BadRequest,
+            BootErrorKind::RequestTimeout,
+            BootErrorKind::Conflict,
+            BootErrorKind::Gone,
+            BootErrorKind::PreconditionFailed,
+            BootErrorKind::UnprocessableEntity,
+            BootErrorKind::InternalServerError,
+            BootErrorKind::NotImplemented,
+            BootErrorKind::BadGateway,
+            BootErrorKind::ServiceUnavailable,
+            BootErrorKind::GatewayTimeout,
+        ]
     );
 }
 
@@ -1301,12 +1434,22 @@ fn response_from_error_uses_http_error_mapping() {
     let bad_request = BootResponse::from_error(&BootError::BadRequest("invalid input".to_string()));
     let unauthorized =
         BootResponse::from_error(&BootError::Unauthorized("missing bearer token".to_string()));
+    let conflict = BootResponse::from_error(&BootError::Conflict("duplicate cat".to_string()));
     let unsupported_media_type = BootResponse::from_error(&BootError::UnsupportedMediaType(
         "expected json".to_string(),
     ));
     let not_acceptable = BootResponse::from_error(&BootError::NotAcceptable(
         "expected accept json".to_string(),
     ));
+    let unprocessable_entity = BootResponse::from_error(&BootError::UnprocessableEntity(
+        "invalid entity".to_string(),
+    ));
+    let service_unavailable =
+        BootResponse::from_error(&BootError::ServiceUnavailable("maintenance".to_string()));
+    let legal_reasons = BootResponse::from_error(&BootError::HttpException {
+        status: 451,
+        message: "legal reasons".to_string(),
+    });
     let internal = BootResponse::from_error(&BootError::Internal("database failed".to_string()));
 
     assert_eq!(bad_request.status, 400);
@@ -1317,10 +1460,18 @@ fn response_from_error_uses_http_error_mapping() {
     assert_eq!(bad_request.body, b"invalid input");
     assert_eq!(unauthorized.status, 401);
     assert_eq!(unauthorized.body, b"missing bearer token");
+    assert_eq!(conflict.status, 409);
+    assert_eq!(conflict.body, b"duplicate cat");
     assert_eq!(unsupported_media_type.status, 415);
     assert_eq!(unsupported_media_type.body, b"expected json");
     assert_eq!(not_acceptable.status, 406);
     assert_eq!(not_acceptable.body, b"expected accept json");
+    assert_eq!(unprocessable_entity.status, 422);
+    assert_eq!(unprocessable_entity.body, b"invalid entity");
+    assert_eq!(service_unavailable.status, 503);
+    assert_eq!(service_unavailable.body, b"maintenance");
+    assert_eq!(legal_reasons.status, 451);
+    assert_eq!(legal_reasons.body, b"legal reasons");
     assert_eq!(internal.status, 500);
     assert_eq!(
         internal.header("content-type"),

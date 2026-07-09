@@ -521,12 +521,35 @@ async fn catch_filters_only_handle_matching_error_kinds() {
         },
     );
 
+    let conflict_route = RouteDefinition::get("/conflict", |_| async {
+        Err(BootError::Conflict("duplicate cat".to_string()))
+    })
+    .unwrap()
+    .with_filter(|context: ExecutionContext, error: BootError| async move {
+        Ok(Some(
+            BootResponse::text(format!("fallback:{}:{error}", context.route_path)).with_status(500),
+        ))
+    })
+    .with_catch_filter(
+        [BootErrorKind::Conflict],
+        |context: ExecutionContext, error: BootError| async move {
+            Ok(Some(
+                BootResponse::text(format!("conflict:{}:{error}", context.route_path))
+                    .with_status(409),
+            ))
+        },
+    );
+
     let bad_response = bad_request_route
         .call(BootRequest::new(HttpMethod::Get, "/bad"))
         .await
         .unwrap();
     let internal_response = internal_route
         .call(BootRequest::new(HttpMethod::Get, "/internal"))
+        .await
+        .unwrap();
+    let conflict_response = conflict_route
+        .call(BootRequest::new(HttpMethod::Get, "/conflict"))
         .await
         .unwrap();
 
@@ -539,6 +562,11 @@ async fn catch_filters_only_handle_matching_error_kinds() {
     assert_eq!(
         internal_response.body_text().unwrap(),
         "fallback:/internal:internal error: boom"
+    );
+    assert_eq!(conflict_response.status(), 409);
+    assert_eq!(
+        conflict_response.body_text().unwrap(),
+        "conflict:/conflict:resource conflict: duplicate cat"
     );
 }
 

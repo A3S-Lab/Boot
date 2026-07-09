@@ -87,6 +87,9 @@ Implemented today:
 - Nest-style catch-filter targeting with `#[catch]`, `BootErrorKind`,
   `catch_errors(...)`, `with_catch_filter(...)`, and
   `use_global_catch_filter(...)`.
+- Nest-style HTTP exception helpers with typed `BootError` constructors for
+  common HTTP errors plus a generic `http_exception(status, message)` helper
+  comparable to Nest's `HttpException`.
 - Nest-style built-in request value pipes with `ParseIntPipe`, `ParseBoolPipe`,
   `ParseFloatPipe`, `ParseArrayPipe`, `ParseEnumPipe`, `ParseUuidPipe`,
   `DefaultValuePipe`, and extractor-level `default = ...` fallbacks.

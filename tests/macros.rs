@@ -766,6 +766,24 @@ impl ExceptionFilter for MacroBadRequestFilter {
     }
 }
 
+#[a3s_boot::catch(Conflict)]
+#[derive(Default)]
+struct MacroConflictFilter;
+
+impl ExceptionFilter for MacroConflictFilter {
+    fn catch(
+        &self,
+        context: ExecutionContext,
+        error: BootError,
+    ) -> BoxFuture<'static, Result<Option<BootResponse>>> {
+        Box::pin(async move {
+            Ok(Some(
+                BootResponse::text(format!("{}: {error}", context.route_path)).with_status(409),
+            ))
+        })
+    }
+}
+
 #[injectable]
 #[derive(Debug)]
 struct MacroPipelineController;
@@ -791,6 +809,12 @@ impl MacroPipelineController {
     #[use_filter(MacroBadRequestFilter::catch_filter())]
     async fn filtered(&self) -> Result<String> {
         Err(BootError::BadRequest("macro filter".to_string()))
+    }
+
+    #[get("/filtered-conflict")]
+    #[use_filter(MacroConflictFilter::catch_filter())]
+    async fn filtered_conflict(&self) -> Result<String> {
+        Err(BootError::Conflict("macro conflict".to_string()))
     }
 
     #[get("/unfiltered")]
@@ -1722,6 +1746,23 @@ async fn macro_pipeline_decorators_register_controller_and_route_hooks() {
     assert_eq!(
         MacroBadRequestFilter::caught_kinds(),
         [BootErrorKind::BadRequest]
+    );
+
+    let filtered_conflict = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-pipeline/filtered-conflict",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(filtered_conflict.status(), 409);
+    assert_eq!(
+        filtered_conflict.body_text().unwrap(),
+        "/macro-pipeline/filtered-conflict: resource conflict: macro conflict"
+    );
+    assert_eq!(
+        MacroConflictFilter::caught_kinds(),
+        [BootErrorKind::Conflict]
     );
 
     let unfiltered = app
