@@ -37,6 +37,19 @@ pub use self::nats::{NatsTransport, NatsTransportClient, NatsTransportOptions};
 pub use self::rabbitmq::{RabbitMqTransport, RabbitMqTransportClient, RabbitMqTransportOptions};
 #[cfg(feature = "redis-transport")]
 pub use self::redis::{RedisTransport, RedisTransportClient, RedisTransportOptions};
+#[cfg(any(
+    feature = "grpc-transport",
+    feature = "kafka-transport",
+    feature = "mqtt-transport",
+    feature = "nats-transport",
+    feature = "rabbitmq-transport",
+    feature = "redis-transport",
+    feature = "tcp-transport"
+))]
+pub(super) fn transport_error_from_status(status: u16, message: String) -> BootError {
+    BootError::from_http_status(status, message)
+}
+
 #[cfg(feature = "tcp-transport")]
 pub use tcp::{TcpTransport, TcpTransportClient, TcpTransportOptions};
 

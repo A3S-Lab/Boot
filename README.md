@@ -1576,7 +1576,12 @@ async fn call_tcp_microservice() -> Result<()> {
 The wire format is one UTF-8 JSON frame per line. Clients send a
 `TransportMessage` such as `{"pattern":"cat.find","data":{"id":"1"}}`; servers
 reply with a `reply`, `no_reply`, or `error` envelope. Handler errors are mapped
-back into the closest `BootError` variant on the client.
+back into the closest `BootError` variant on the client through the same HTTP
+exception mapping used by HTTP routes, so errors such as `BadRequest`,
+`Conflict`, `UnprocessableEntity`, `ServiceUnavailable`, and generic
+`HttpException` values keep their status semantics across transports. Redis,
+NATS, MQTT, RabbitMQ, Kafka, and gRPC request-response clients use the same
+status-to-`BootError` mapping for their error envelopes.
 
 With `redis-transport`, request-response messages go through a configured
 request channel and receive replies on per-request reply channels. Event

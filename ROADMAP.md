@@ -187,7 +187,9 @@ Implemented today:
   optional Redis Pub/Sub transport and optional NATS request/reply and event
   subjects plus optional MQTT request/reply and event topics plus optional
   RabbitMQ request/reply and event queues plus optional Kafka request/reply and
-  event topics plus optional gRPC unary request/reply and event calls.
+  event topics plus optional gRPC unary request/reply and event calls. Transport
+  error envelopes round-trip through the same `BootError` HTTP exception mapping
+  used by HTTP routes.
 - ACL-backed typed configuration modules with `ConfigModule`, named/global
   provider exports, environment/default function support, and validation hooks.
 - Provider-backed outbound HTTP clients with `HttpModule`, `HttpService`,
@@ -690,6 +692,9 @@ Acceptance:
   (Covered)
 - Message handlers can use providers and validation. (Covered)
 - Tests cover request-response and event-only patterns. (Covered)
+- Handler errors preserve `BootError` HTTP exception semantics across TCP,
+  Redis, NATS, MQTT, RabbitMQ, Kafka, and gRPC request-response transports.
+  (Covered)
 
 ## Milestone 8: Technique Modules
 

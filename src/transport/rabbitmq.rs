@@ -1,4 +1,4 @@
-use super::{MessageTransport, TransportMessage, TransportReply};
+use super::{transport_error_from_status, MessageTransport, TransportMessage, TransportReply};
 use crate::{BootApplication, BootError, BoxFuture, Result};
 use futures_util::StreamExt;
 use lapin::{
@@ -362,7 +362,7 @@ impl RabbitMqResponseEnvelope {
             Self::NoReply { .. } => Ok(None),
             Self::Error {
                 status, message, ..
-            } => Err(error_from_status(status, message)),
+            } => Err(transport_error_from_status(status, message)),
         }
     }
 }
@@ -543,19 +543,4 @@ fn next_consumer_tag(prefix: &str, role: &str) -> String {
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
     format!("{prefix}.{role}.{}.{nanos}.{counter}", std::process::id())
-}
-
-fn error_from_status(status: u16, message: String) -> BootError {
-    match status {
-        400 => BootError::BadRequest(message),
-        401 => BootError::Unauthorized(message),
-        403 => BootError::Forbidden(message),
-        404 => BootError::NotFound(message),
-        406 => BootError::NotAcceptable(message),
-        413 => BootError::PayloadTooLarge(message),
-        415 => BootError::UnsupportedMediaType(message),
-        429 => BootError::TooManyRequests(message),
-        500 => BootError::Internal(message),
-        _ => BootError::Adapter(message),
-    }
 }

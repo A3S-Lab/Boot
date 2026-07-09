@@ -1,4 +1,4 @@
-use super::{MessageTransport, TransportMessage, TransportReply};
+use super::{transport_error_from_status, MessageTransport, TransportMessage, TransportReply};
 use crate::{BootApplication, BootError, BoxFuture, Result};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -242,7 +242,7 @@ impl NatsResponseEnvelope {
         match self {
             Self::Reply { data } => Ok(Some(TransportReply::new(data))),
             Self::NoReply => Ok(None),
-            Self::Error { status, message } => Err(error_from_status(status, message)),
+            Self::Error { status, message } => Err(transport_error_from_status(status, message)),
         }
     }
 }
@@ -353,19 +353,4 @@ fn request_error(error: async_nats::RequestError, subject: &str) -> BootError {
 
 fn nats_error(error: impl fmt::Display) -> BootError {
     BootError::Adapter(error.to_string())
-}
-
-fn error_from_status(status: u16, message: String) -> BootError {
-    match status {
-        400 => BootError::BadRequest(message),
-        401 => BootError::Unauthorized(message),
-        403 => BootError::Forbidden(message),
-        404 => BootError::NotFound(message),
-        406 => BootError::NotAcceptable(message),
-        413 => BootError::PayloadTooLarge(message),
-        415 => BootError::UnsupportedMediaType(message),
-        429 => BootError::TooManyRequests(message),
-        500 => BootError::Internal(message),
-        _ => BootError::Adapter(message),
-    }
 }

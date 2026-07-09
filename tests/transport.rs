@@ -1073,9 +1073,29 @@ async fn tcp_transport_emits_event_messages() {
 async fn tcp_transport_maps_handler_errors_to_client_errors() {
     let app = BootApplication::builder()
         .message_pattern(
-            MessagePatternDefinition::request("math.fail", |_message: TransportMessage| async {
+            MessagePatternDefinition::request("math.bad", |_message: TransportMessage| async {
                 Err::<TransportReply, BootError>(BootError::BadRequest("invalid math".to_string()))
             })
+            .unwrap(),
+        )
+        .message_pattern(
+            MessagePatternDefinition::request(
+                "math.conflict",
+                |_message: TransportMessage| async {
+                    Err::<TransportReply, BootError>(BootError::conflict("duplicate math"))
+                },
+            )
+            .unwrap(),
+        )
+        .message_pattern(
+            MessagePatternDefinition::request(
+                "math.unprocessable",
+                |_message: TransportMessage| async {
+                    Err::<TransportReply, BootError>(BootError::unprocessable_entity(
+                        "math shape is invalid",
+                    ))
+                },
+            )
             .unwrap(),
         )
         .build()
@@ -1090,12 +1110,32 @@ async fn tcp_transport_maps_handler_errors_to_client_errors() {
 
     let error = send_tcp_with_retry(
         &client,
-        TransportMessage::new("math.fail", json!({ "value": 1 })),
+        TransportMessage::new("math.bad", json!({ "value": 1 })),
     )
     .await
     .unwrap_err();
 
     assert!(matches!(error, BootError::BadRequest(message) if message == "invalid math"));
+
+    let error = send_tcp_with_retry(
+        &client,
+        TransportMessage::new("math.conflict", json!({ "value": 1 })),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(error, BootError::Conflict(message) if message == "duplicate math"));
+
+    let error = send_tcp_with_retry(
+        &client,
+        TransportMessage::new("math.unprocessable", json!({ "value": 1 })),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(
+        matches!(error, BootError::UnprocessableEntity(message) if message == "math shape is invalid")
+    );
     server.abort();
 }
 
@@ -1205,9 +1245,29 @@ async fn grpc_transport_emits_event_messages() {
 async fn grpc_transport_maps_handler_errors_to_client_errors() {
     let app = BootApplication::builder()
         .message_pattern(
-            MessagePatternDefinition::request("math.fail", |_message: TransportMessage| async {
+            MessagePatternDefinition::request("math.bad", |_message: TransportMessage| async {
                 Err::<TransportReply, BootError>(BootError::BadRequest("invalid math".to_string()))
             })
+            .unwrap(),
+        )
+        .message_pattern(
+            MessagePatternDefinition::request(
+                "math.conflict",
+                |_message: TransportMessage| async {
+                    Err::<TransportReply, BootError>(BootError::conflict("duplicate math"))
+                },
+            )
+            .unwrap(),
+        )
+        .message_pattern(
+            MessagePatternDefinition::request(
+                "math.unprocessable",
+                |_message: TransportMessage| async {
+                    Err::<TransportReply, BootError>(BootError::unprocessable_entity(
+                        "math shape is invalid",
+                    ))
+                },
+            )
             .unwrap(),
         )
         .build()
@@ -1222,12 +1282,32 @@ async fn grpc_transport_maps_handler_errors_to_client_errors() {
 
     let error = send_grpc_with_retry(
         &client,
-        TransportMessage::new("math.fail", json!({ "value": 1 })),
+        TransportMessage::new("math.bad", json!({ "value": 1 })),
     )
     .await
     .unwrap_err();
 
     assert!(matches!(error, BootError::BadRequest(message) if message == "invalid math"));
+
+    let error = send_grpc_with_retry(
+        &client,
+        TransportMessage::new("math.conflict", json!({ "value": 1 })),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(error, BootError::Conflict(message) if message == "duplicate math"));
+
+    let error = send_grpc_with_retry(
+        &client,
+        TransportMessage::new("math.unprocessable", json!({ "value": 1 })),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(
+        matches!(error, BootError::UnprocessableEntity(message) if message == "math shape is invalid")
+    );
     server.abort();
 }
 

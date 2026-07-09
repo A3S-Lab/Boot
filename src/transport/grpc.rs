@@ -1,4 +1,4 @@
-use super::{MessageTransport, TransportMessage, TransportReply};
+use super::{transport_error_from_status, MessageTransport, TransportMessage, TransportReply};
 use crate::{BootApplication, BootError, BoxFuture, Result};
 use prost::Message;
 use serde::Serialize;
@@ -398,7 +398,7 @@ impl GrpcTransportReply {
                 Ok(Some(TransportReply::new(data)))
             }
             GrpcReplyKind::NoReply => Ok(None),
-            GrpcReplyKind::Error => Err(error_from_http_status(
+            GrpcReplyKind::Error => Err(transport_error_from_status(
                 self.status.try_into().unwrap_or(500),
                 self.message,
             )),
@@ -449,44 +449,37 @@ fn status_from_error(error: BootError) -> Status {
     let status = error.http_status_code();
     let message = error.http_response_message();
     match status {
-        400 | 415 => Status::invalid_argument(message),
+        400 | 415 | 422 => Status::invalid_argument(message),
         401 => Status::unauthenticated(message),
         403 => Status::permission_denied(message),
         404 => Status::not_found(message),
-        406 => Status::failed_precondition(message),
+        406 | 412 => Status::failed_precondition(message),
+        408 | 504 => Status::deadline_exceeded(message),
+        409 => Status::already_exists(message),
         413 => Status::out_of_range(message),
         429 => Status::resource_exhausted(message),
+        501 => Status::unimplemented(message),
+        502 | 503 => Status::unavailable(message),
         _ => Status::internal(message),
     }
 }
 
 fn error_from_status(status: Status) -> BootError {
+    let message = status.message().to_string();
     match status.code() {
-        tonic::Code::InvalidArgument => BootError::BadRequest(status.message().to_string()),
-        tonic::Code::Unauthenticated => BootError::Unauthorized(status.message().to_string()),
-        tonic::Code::PermissionDenied => BootError::Forbidden(status.message().to_string()),
-        tonic::Code::NotFound => BootError::NotFound(status.message().to_string()),
-        tonic::Code::FailedPrecondition => BootError::NotAcceptable(status.message().to_string()),
-        tonic::Code::OutOfRange => BootError::PayloadTooLarge(status.message().to_string()),
-        tonic::Code::ResourceExhausted => BootError::TooManyRequests(status.message().to_string()),
-        tonic::Code::Unavailable => BootError::Adapter(status.message().to_string()),
-        tonic::Code::Internal => BootError::Internal(status.message().to_string()),
+        tonic::Code::InvalidArgument => BootError::bad_request(message),
+        tonic::Code::Unauthenticated => BootError::unauthorized(message),
+        tonic::Code::PermissionDenied => BootError::forbidden(message),
+        tonic::Code::NotFound => BootError::not_found(message),
+        tonic::Code::FailedPrecondition => BootError::precondition_failed(message),
+        tonic::Code::DeadlineExceeded => BootError::gateway_timeout(message),
+        tonic::Code::AlreadyExists | tonic::Code::Aborted => BootError::conflict(message),
+        tonic::Code::OutOfRange => BootError::payload_too_large(message),
+        tonic::Code::ResourceExhausted => BootError::too_many_requests(message),
+        tonic::Code::Unimplemented => BootError::not_implemented(message),
+        tonic::Code::Unavailable => BootError::service_unavailable(message),
+        tonic::Code::Internal => BootError::internal_server_error(message),
         _ => BootError::Adapter(status.to_string()),
-    }
-}
-
-fn error_from_http_status(status: u16, message: String) -> BootError {
-    match status {
-        400 => BootError::BadRequest(message),
-        401 => BootError::Unauthorized(message),
-        403 => BootError::Forbidden(message),
-        404 => BootError::NotFound(message),
-        406 => BootError::NotAcceptable(message),
-        413 => BootError::PayloadTooLarge(message),
-        415 => BootError::UnsupportedMediaType(message),
-        429 => BootError::TooManyRequests(message),
-        500 => BootError::Internal(message),
-        _ => BootError::Adapter(message),
     }
 }
 

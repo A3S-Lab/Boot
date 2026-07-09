@@ -1,4 +1,4 @@
-use super::{MessageTransport, TransportMessage, TransportReply};
+use super::{transport_error_from_status, MessageTransport, TransportMessage, TransportReply};
 use crate::{BootApplication, BootError, BoxFuture, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -175,7 +175,7 @@ impl TcpTransportResponse {
         match self {
             Self::Reply { data } => Ok(Some(TransportReply::new(data))),
             Self::NoReply => Ok(None),
-            Self::Error { status, message } => Err(error_from_status(status, message)),
+            Self::Error { status, message } => Err(transport_error_from_status(status, message)),
         }
     }
 }
@@ -275,19 +275,4 @@ fn decode_message(frame: &[u8]) -> Result<TransportMessage> {
 
 fn decode_response(frame: &[u8]) -> Result<TcpTransportResponse> {
     serde_json::from_slice(frame).map_err(|err| BootError::Adapter(err.to_string()))
-}
-
-fn error_from_status(status: u16, message: String) -> BootError {
-    match status {
-        400 => BootError::BadRequest(message),
-        401 => BootError::Unauthorized(message),
-        403 => BootError::Forbidden(message),
-        404 => BootError::NotFound(message),
-        406 => BootError::NotAcceptable(message),
-        413 => BootError::PayloadTooLarge(message),
-        415 => BootError::UnsupportedMediaType(message),
-        429 => BootError::TooManyRequests(message),
-        500 => BootError::Internal(message),
-        _ => BootError::Adapter(message),
-    }
 }
