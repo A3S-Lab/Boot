@@ -7,6 +7,18 @@ use a3s_boot::{
 };
 use std::sync::Arc;
 
+fn assert_json_error_body(body: &[u8], status: u16, message: &str, error: &str) {
+    let body: serde_json::Value = serde_json::from_slice(body).unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!({
+            "statusCode": status,
+            "message": message,
+            "error": error,
+        })
+    );
+}
+
 #[test]
 fn axum_method_conversion_rejects_unsupported_methods() {
     use axum::http::Method;
@@ -562,8 +574,8 @@ async fn axum_adapter_uses_boot_method_not_allowed_fallback() {
 
     assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
     assert_eq!(allow.as_deref(), Some("GET"));
-    assert_eq!(content_type.as_deref(), Some("text/plain; charset=utf-8"));
-    assert_eq!(body, "POST /probe");
+    assert_eq!(content_type.as_deref(), Some("application/json"));
+    assert_json_error_body(body.as_ref(), 405, "POST /probe", "Method Not Allowed");
 }
 
 #[tokio::test]
@@ -916,7 +928,12 @@ async fn axum_adapter_rejects_invalid_content_length_headers() {
     let body = to_bytes(response.into_body(), 1024).await.unwrap();
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body, "invalid content-length header: nope");
+    assert_json_error_body(
+        body.as_ref(),
+        400,
+        "invalid content-length header: nope",
+        "Bad Request",
+    );
 }
 
 #[tokio::test]
@@ -992,7 +1009,12 @@ async fn axum_adapter_rejects_invalid_repeated_content_length_headers() {
     let body = to_bytes(response.into_body(), 1024).await.unwrap();
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body, "invalid content-length header: nope");
+    assert_json_error_body(
+        body.as_ref(),
+        400,
+        "invalid content-length header: nope",
+        "Bad Request",
+    );
 }
 
 #[tokio::test]
@@ -1029,7 +1051,12 @@ async fn axum_adapter_rejects_conflicting_repeated_content_length_headers() {
     let body = to_bytes(response.into_body(), 1024).await.unwrap();
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body, "conflicting content-length headers: 4 != 5");
+    assert_json_error_body(
+        body.as_ref(),
+        400,
+        "conflicting content-length headers: 4 != 5",
+        "Bad Request",
+    );
 }
 
 #[tokio::test]
@@ -1064,9 +1091,11 @@ async fn axum_adapter_rejects_shorter_bodies_than_declared_content_length() {
     let body = to_bytes(response.into_body(), 1024).await.unwrap();
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(
-        body,
-        "content-length header does not match request body length: expected 5, got 4"
+    assert_json_error_body(
+        body.as_ref(),
+        400,
+        "content-length header does not match request body length: expected 5, got 4",
+        "Bad Request",
     );
 }
 
@@ -1102,14 +1131,16 @@ async fn axum_adapter_rejects_longer_bodies_than_declared_content_length() {
     let body = to_bytes(response.into_body(), 1024).await.unwrap();
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(
-        body,
-        "content-length header does not match request body length: expected 4, got 5"
+    assert_json_error_body(
+        body.as_ref(),
+        400,
+        "content-length header does not match request body length: expected 4, got 5",
+        "Bad Request",
     );
 }
 
 #[tokio::test]
-async fn axum_adapter_error_responses_are_plain_text() {
+async fn axum_adapter_error_responses_are_json() {
     use axum::body::{to_bytes, Body};
     use axum::http::{header::CONTENT_TYPE, Request, StatusCode};
     use tower::ServiceExt;
@@ -1144,8 +1175,8 @@ async fn axum_adapter_error_responses_are_plain_text() {
     let body = to_bytes(response.into_body(), 1024).await.unwrap();
 
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(content_type.as_deref(), Some("text/plain; charset=utf-8"));
-    assert_eq!(body, "invalid input");
+    assert_eq!(content_type.as_deref(), Some("application/json"));
+    assert_json_error_body(body.as_ref(), 400, "invalid input", "Bad Request");
 }
 
 #[tokio::test]
@@ -1185,8 +1216,13 @@ async fn axum_adapter_maps_unsupported_json_content_type_to_unsupported_media_ty
     let body = to_bytes(response.into_body(), 1024).await.unwrap();
 
     assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
-    assert_eq!(content_type.as_deref(), Some("text/plain; charset=utf-8"));
-    assert_eq!(body, "expected JSON content type, got text/plain");
+    assert_eq!(content_type.as_deref(), Some("application/json"));
+    assert_json_error_body(
+        body.as_ref(),
+        415,
+        "expected JSON content type, got text/plain",
+        "Unsupported Media Type",
+    );
 }
 
 #[tokio::test]
@@ -1233,8 +1269,13 @@ async fn axum_adapter_maps_unaccepted_json_responses_to_not_acceptable() {
     let body = to_bytes(response.into_body(), 1024).await.unwrap();
 
     assert_eq!(status, StatusCode::NOT_ACCEPTABLE);
-    assert_eq!(content_type.as_deref(), Some("text/plain; charset=utf-8"));
-    assert_eq!(body, "expected client to accept JSON response");
+    assert_eq!(content_type.as_deref(), Some("application/json"));
+    assert_json_error_body(
+        body.as_ref(),
+        406,
+        "expected client to accept JSON response",
+        "Not Acceptable",
+    );
 }
 
 #[tokio::test]
@@ -1381,8 +1422,8 @@ async fn axum_adapter_uses_boot_not_found_fallback() {
     let body = to_bytes(response.into_body(), 1024).await.unwrap();
 
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(content_type.as_deref(), Some("text/plain; charset=utf-8"));
-    assert_eq!(body, "GET /missing");
+    assert_eq!(content_type.as_deref(), Some("application/json"));
+    assert_json_error_body(body.as_ref(), 404, "GET /missing", "Not Found");
 }
 
 #[tokio::test]
@@ -1416,7 +1457,7 @@ async fn axum_adapter_strips_head_not_found_fallback_bodies() {
     let body = to_bytes(response.into_body(), 1024).await.unwrap();
 
     assert_eq!(status, StatusCode::NOT_FOUND);
-    assert_eq!(content_type.as_deref(), Some("text/plain; charset=utf-8"));
+    assert_eq!(content_type.as_deref(), Some("application/json"));
     assert!(body.is_empty());
 }
 

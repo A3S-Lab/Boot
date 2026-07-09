@@ -90,6 +90,8 @@ Implemented today:
 - Nest-style HTTP exception helpers with typed `BootError` constructors for
   common HTTP errors plus a generic `http_exception(status, message)` helper
   comparable to Nest's `HttpException`.
+- Nest-style default JSON error responses from `BootResponse::from_error(...)`,
+  application `handle(...)`, route `handle(...)`, and Axum fallback errors.
 - Nest-style built-in request value pipes with `ParseIntPipe`, `ParseBoolPipe`,
   `ParseFloatPipe`, `ParseArrayPipe`, `ParseEnumPipe`, `ParseUuidPipe`,
   `DefaultValuePipe`, and extractor-level `default = ...` fallbacks.

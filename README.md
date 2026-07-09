@@ -3900,9 +3900,12 @@ with `body_text()` and `body_json()`, or check status classes with helpers like
 header name/value checks in adapter order; the individual `validate_status()`,
 `validate_content_length()`, `validate_body_allowed()`, and `validate_headers()`
 helpers remain available for focused checks. Error responses can reuse the
-framework's standard HTTP error mapping. `BootErrorKind`, `catch_errors(...)`,
-and `#[catch(...)]` provide Nest-style catch filters for selected error kinds;
-use `with_catch_filter(...)` for builder-style routes or
+framework's standard HTTP error mapping. Unhandled HTTP errors are rendered as
+Nest-style JSON bodies with `statusCode`, `message`, and `error`; explicit
+`BootResponse::text(...)`, file, redirect, HTML, SSE, or other raw responses
+remain the opt-in escape hatches. `BootErrorKind`, `catch_errors(...)`, and
+`#[catch(...)]` provide Nest-style catch filters for selected error kinds; use
+`with_catch_filter(...)` for builder-style routes or
 `#[use_filter(BadRequestFilter::catch_filter())]` for decorator-style
 controllers. `BootError` also provides Nest-style HTTP exception helpers for
 common error classes such as `bad_request`, `conflict`,
@@ -3977,6 +3980,16 @@ fn read_response(response: &BootResponse) -> Result<CatDto> {
 
 fn from_error(error: &a3s_boot::BootError) -> BootResponse {
     BootResponse::from_error(error)
+}
+
+fn assert_default_error_body() -> Result<()> {
+    let response = BootResponse::from_error(&BootError::conflict("cat already exists"));
+    let body: serde_json::Value = response.body_json()?;
+    assert_eq!(response.status(), 409);
+    assert_eq!(body["statusCode"], 409);
+    assert_eq!(body["message"], "cat already exists");
+    assert_eq!(body["error"], "Conflict");
+    Ok(())
 }
 ```
 

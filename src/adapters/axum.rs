@@ -6,9 +6,8 @@ use axum::body::{to_bytes, Body, HttpBody};
 use axum::extract::ws::{Message as AxumWebSocketMessage, WebSocket, WebSocketUpgrade};
 use axum::extract::Request;
 use axum::http::{
-    header::{ALLOW, CONTENT_TYPE},
-    response::Builder as ResponseBuilder,
-    HeaderMap, HeaderName, HeaderValue, Method, StatusCode, Uri,
+    header::ALLOW, response::Builder as ResponseBuilder, HeaderMap, HeaderName, HeaderValue,
+    Method, StatusCode, Uri,
 };
 use axum::response::Response;
 use axum::routing::{on, MethodFilter, MethodRouter};
@@ -555,13 +554,10 @@ fn boot_error_response(error: BootError) -> Response {
 }
 
 fn error_response(status: StatusCode, message: String) -> Response {
-    let mut response = Response::new(Body::from(message));
-    *response.status_mut() = status;
-    response.headers_mut().insert(
-        CONTENT_TYPE,
-        HeaderValue::from_static("text/plain; charset=utf-8"),
-    );
-    response
+    to_axum_response(BootResponse::from_error(&BootError::from_http_status(
+        status.as_u16(),
+        message,
+    )))
 }
 
 impl TryFrom<Method> for HttpMethod {

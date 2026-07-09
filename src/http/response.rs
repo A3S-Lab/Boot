@@ -92,6 +92,14 @@ enum ResponseStream {
     Body(StreamableFileStream),
 }
 
+#[derive(Debug, Serialize)]
+struct HttpErrorResponseBody {
+    #[serde(rename = "statusCode")]
+    status_code: u16,
+    message: String,
+    error: &'static str,
+}
+
 impl ResponseStream {
     fn kind(&self) -> ResponseStreamKind {
         match self {
@@ -245,7 +253,17 @@ impl BootResponse {
     }
 
     pub fn from_error(error: &BootError) -> Self {
-        Self::text_with_status(error.http_status_code(), error.http_response_message())
+        let status = error.http_status_code();
+        let body = HttpErrorResponseBody {
+            status_code: status,
+            message: error.http_response_message(),
+            error: http_error_name(status),
+        };
+        let body = serde_json::to_vec(&body).unwrap_or_else(|_| {
+            br#"{"statusCode":500,"message":"failed to encode error response","error":"Internal Server Error"}"#.to_vec()
+        });
+
+        Self::new(status, body).with_header("content-type", "application/json")
     }
 
     pub fn body_text(&self) -> Result<String> {
@@ -536,6 +554,52 @@ impl BootResponse {
     fn with_body_stream(mut self, stream: StreamableFileStream) -> Self {
         self.stream = Some(SharedResponseStream::new(ResponseStream::Body(stream)));
         self
+    }
+}
+
+fn http_error_name(status: u16) -> &'static str {
+    match status {
+        400 => "Bad Request",
+        401 => "Unauthorized",
+        402 => "Payment Required",
+        403 => "Forbidden",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        406 => "Not Acceptable",
+        407 => "Proxy Authentication Required",
+        408 => "Request Timeout",
+        409 => "Conflict",
+        410 => "Gone",
+        411 => "Length Required",
+        412 => "Precondition Failed",
+        413 => "Payload Too Large",
+        414 => "URI Too Long",
+        415 => "Unsupported Media Type",
+        416 => "Range Not Satisfiable",
+        417 => "Expectation Failed",
+        418 => "I'm a teapot",
+        421 => "Misdirected Request",
+        422 => "Unprocessable Entity",
+        423 => "Locked",
+        424 => "Failed Dependency",
+        425 => "Too Early",
+        426 => "Upgrade Required",
+        428 => "Precondition Required",
+        429 => "Too Many Requests",
+        431 => "Request Header Fields Too Large",
+        451 => "Unavailable For Legal Reasons",
+        500 => "Internal Server Error",
+        501 => "Not Implemented",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
+        504 => "Gateway Timeout",
+        505 => "HTTP Version Not Supported",
+        506 => "Variant Also Negotiates",
+        507 => "Insufficient Storage",
+        508 => "Loop Detected",
+        510 => "Not Extended",
+        511 => "Network Authentication Required",
+        _ => "Http Exception",
     }
 }
 

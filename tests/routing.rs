@@ -1000,11 +1000,22 @@ async fn application_handle_converts_unhandled_errors_to_responses() {
     assert_eq!(ok.status, 200);
     assert_eq!(ok.body_text().unwrap(), "found");
     assert_eq!(not_found.status, 404);
-    assert_eq!(not_found.body_text().unwrap(), "GET /tools/hammer");
+    assert_eq!(
+        not_found.body_json::<serde_json::Value>().unwrap(),
+        serde_json::json!({
+            "statusCode": 404,
+            "message": "GET /tools/hammer",
+            "error": "Not Found"
+        })
+    );
     assert_eq!(method_not_allowed.status, 405);
     assert_eq!(
-        method_not_allowed.body_text().unwrap(),
-        "POST /items/hammer"
+        method_not_allowed.body_json::<serde_json::Value>().unwrap(),
+        serde_json::json!({
+            "statusCode": 405,
+            "message": "POST /items/hammer",
+            "error": "Method Not Allowed"
+        })
     );
 }
 
@@ -1166,11 +1177,22 @@ async fn route_handle_converts_unhandled_errors_to_responses() {
     assert_eq!(ok.status, 200);
     assert_eq!(ok.body_text().unwrap(), "found");
     assert_eq!(not_found.status, 404);
-    assert_eq!(not_found.body_text().unwrap(), "GET /tools/hammer");
+    assert_eq!(
+        not_found.body_json::<serde_json::Value>().unwrap(),
+        serde_json::json!({
+            "statusCode": 404,
+            "message": "GET /tools/hammer",
+            "error": "Not Found"
+        })
+    );
     assert_eq!(method_not_allowed.status, 405);
     assert_eq!(
-        method_not_allowed.body_text().unwrap(),
-        "POST /items/hammer"
+        method_not_allowed.body_json::<serde_json::Value>().unwrap(),
+        serde_json::json!({
+            "statusCode": 405,
+            "message": "POST /items/hammer",
+            "error": "Method Not Allowed"
+        })
     );
 }
 

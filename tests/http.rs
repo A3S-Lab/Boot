@@ -1453,31 +1453,94 @@ fn response_from_error_uses_http_error_mapping() {
     let internal = BootResponse::from_error(&BootError::Internal("database failed".to_string()));
 
     assert_eq!(bad_request.status, 400);
+    assert_eq!(bad_request.header("content-type"), Some("application/json"));
     assert_eq!(
-        bad_request.header("content-type"),
-        Some("text/plain; charset=utf-8")
+        bad_request.body_json::<serde_json::Value>().unwrap(),
+        serde_json::json!({
+            "statusCode": 400,
+            "message": "invalid input",
+            "error": "Bad Request"
+        })
     );
-    assert_eq!(bad_request.body, b"invalid input");
     assert_eq!(unauthorized.status, 401);
-    assert_eq!(unauthorized.body, b"missing bearer token");
-    assert_eq!(conflict.status, 409);
-    assert_eq!(conflict.body, b"duplicate cat");
-    assert_eq!(unsupported_media_type.status, 415);
-    assert_eq!(unsupported_media_type.body, b"expected json");
-    assert_eq!(not_acceptable.status, 406);
-    assert_eq!(not_acceptable.body, b"expected accept json");
-    assert_eq!(unprocessable_entity.status, 422);
-    assert_eq!(unprocessable_entity.body, b"invalid entity");
-    assert_eq!(service_unavailable.status, 503);
-    assert_eq!(service_unavailable.body, b"maintenance");
-    assert_eq!(legal_reasons.status, 451);
-    assert_eq!(legal_reasons.body, b"legal reasons");
-    assert_eq!(internal.status, 500);
     assert_eq!(
-        internal.header("content-type"),
-        Some("text/plain; charset=utf-8")
+        unauthorized.body_json::<serde_json::Value>().unwrap(),
+        serde_json::json!({
+            "statusCode": 401,
+            "message": "missing bearer token",
+            "error": "Unauthorized"
+        })
     );
-    assert_eq!(internal.body, b"internal error: database failed");
+    assert_eq!(conflict.status, 409);
+    assert_eq!(
+        conflict.body_json::<serde_json::Value>().unwrap(),
+        serde_json::json!({
+            "statusCode": 409,
+            "message": "duplicate cat",
+            "error": "Conflict"
+        })
+    );
+    assert_eq!(unsupported_media_type.status, 415);
+    assert_eq!(
+        unsupported_media_type
+            .body_json::<serde_json::Value>()
+            .unwrap(),
+        serde_json::json!({
+            "statusCode": 415,
+            "message": "expected json",
+            "error": "Unsupported Media Type"
+        })
+    );
+    assert_eq!(not_acceptable.status, 406);
+    assert_eq!(
+        not_acceptable.body_json::<serde_json::Value>().unwrap(),
+        serde_json::json!({
+            "statusCode": 406,
+            "message": "expected accept json",
+            "error": "Not Acceptable"
+        })
+    );
+    assert_eq!(unprocessable_entity.status, 422);
+    assert_eq!(
+        unprocessable_entity
+            .body_json::<serde_json::Value>()
+            .unwrap(),
+        serde_json::json!({
+            "statusCode": 422,
+            "message": "invalid entity",
+            "error": "Unprocessable Entity"
+        })
+    );
+    assert_eq!(service_unavailable.status, 503);
+    assert_eq!(
+        service_unavailable
+            .body_json::<serde_json::Value>()
+            .unwrap(),
+        serde_json::json!({
+            "statusCode": 503,
+            "message": "maintenance",
+            "error": "Service Unavailable"
+        })
+    );
+    assert_eq!(legal_reasons.status, 451);
+    assert_eq!(
+        legal_reasons.body_json::<serde_json::Value>().unwrap(),
+        serde_json::json!({
+            "statusCode": 451,
+            "message": "legal reasons",
+            "error": "Unavailable For Legal Reasons"
+        })
+    );
+    assert_eq!(internal.status, 500);
+    assert_eq!(internal.header("content-type"), Some("application/json"));
+    assert_eq!(
+        internal.body_json::<serde_json::Value>().unwrap(),
+        serde_json::json!({
+            "statusCode": 500,
+            "message": "internal error: database failed",
+            "error": "Internal Server Error"
+        })
+    );
 }
 
 #[test]
