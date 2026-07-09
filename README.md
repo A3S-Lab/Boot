@@ -5078,6 +5078,20 @@ src/
 `lib.rs` only exports the public surface. Behavior tests live under `tests/`
 and exercise the crate through public APIs.
 
+Controller macro attribute parsing is split by concern:
+
+```text
+macros/src/controller/attrs/
+├── host.rs          # #[host] parsing for controller and route scopes
+├── http_code.rs     # #[http_code] parsing
+├── metadata.rs      # #[metadata] parsing
+├── openapi.rs       # Controller and route OpenAPI decorator parsing
+├── pipeline.rs      # #[use_guard], #[use_interceptor], #[use_filter], and #[use_pipe]
+├── response.rs      # #[header], #[redirect], and #[render] parsing
+├── serialization.rs # #[serialize] parsing
+└── version.rs       # #[version], #[versions], and #[version_neutral] parsing
+```
+
 ## Development
 
 ```sh
