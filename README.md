@@ -4995,7 +4995,16 @@ The crate is split by framework concern:
 ```text
 src/
 ├── adapters/     # Optional backend adapters such as Axum
-├── app/          # Application instance, builder, and module registration
+├── app/          # Application instance, builder, factory, and module registration
+│   ├── application.rs # Built application, routes, gateways, transports, and discovery
+│   ├── builder.rs     # Application graph builder and global pipeline configuration
+│   ├── context.rs     # Provider-only managed application context
+│   ├── factory.rs     # NestFactory-style construction entrypoint
+│   ├── handle.rs      # Managed HTTP application handle and connected microservices
+│   ├── lazy.rs        # Lazy module loading
+│   ├── microservice.rs # Managed standalone message transport host
+│   ├── registration.rs # Module registration context
+│   └── shutdown.rs    # Optional OS shutdown signal helpers
 ├── auth.rs       # Optional strategy-backed authentication module and guard
 ├── cache.rs      # Optional typed cache module and in-memory store
 ├── compression.rs # Optional gzip response compression interceptor

@@ -1,132 +1,9 @@
-use super::{BootApplication, BootApplicationBuilder};
-use crate::{BoxFuture, HttpAdapter, MessageTransport, Module, ModuleRef, Result};
-#[cfg(feature = "shutdown-hooks")]
-use futures_util::StreamExt;
-#[cfg(feature = "shutdown-hooks")]
-use std::collections::BTreeSet;
-#[cfg(feature = "shutdown-hooks")]
-use std::fmt;
-#[cfg(feature = "shutdown-hooks")]
-use std::future::Future;
-use std::net::SocketAddr;
+use super::{
+    BootApplication, BootApplicationBuilder, BootApplicationContext, BootApplicationHandle,
+    BootMicroservice,
+};
+use crate::{MessageTransport, Module, Result};
 use std::sync::Arc;
-
-/// Shutdown signal names understood by Nest-style shutdown hooks.
-#[cfg(feature = "shutdown-hooks")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum ShutdownSignal {
-    Sigint,
-    Sigterm,
-    Sigquit,
-    Sighup,
-    Sigusr2,
-}
-
-#[cfg(feature = "shutdown-hooks")]
-impl ShutdownSignal {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Sigint => "SIGINT",
-            Self::Sigterm => "SIGTERM",
-            Self::Sigquit => "SIGQUIT",
-            Self::Sighup => "SIGHUP",
-            Self::Sigusr2 => "SIGUSR2",
-        }
-    }
-
-    pub fn default_signals() -> Vec<Self> {
-        vec![Self::Sigint, Self::Sigterm]
-    }
-}
-
-#[cfg(feature = "shutdown-hooks")]
-impl fmt::Display for ShutdownSignal {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// Wait for one configured operating-system shutdown signal.
-#[cfg(feature = "shutdown-hooks")]
-pub async fn wait_for_shutdown_signal<I>(signals: I) -> Result<ShutdownSignal>
-where
-    I: IntoIterator<Item = ShutdownSignal>,
-{
-    let signals = normalize_shutdown_signals(signals);
-    let mut futures = futures_util::stream::FuturesUnordered::new();
-    for signal in signals {
-        futures.push(shutdown_signal_future(signal)?);
-    }
-
-    futures.next().await.unwrap_or_else(|| {
-        Err(crate::BootError::Internal(
-            "no shutdown signals configured".into(),
-        ))
-    })
-}
-
-#[cfg(feature = "shutdown-hooks")]
-fn normalize_shutdown_signals<I>(signals: I) -> Vec<ShutdownSignal>
-where
-    I: IntoIterator<Item = ShutdownSignal>,
-{
-    let signals = signals.into_iter().collect::<BTreeSet<_>>();
-    if signals.is_empty() {
-        ShutdownSignal::default_signals()
-    } else {
-        signals.into_iter().collect()
-    }
-}
-
-#[cfg(feature = "shutdown-hooks")]
-fn shutdown_signal_future(
-    signal: ShutdownSignal,
-) -> Result<BoxFuture<'static, Result<ShutdownSignal>>> {
-    match signal {
-        ShutdownSignal::Sigint => Ok(Box::pin(async move {
-            tokio::signal::ctrl_c().await?;
-            Ok(ShutdownSignal::Sigint)
-        })),
-        #[cfg(unix)]
-        ShutdownSignal::Sigterm => unix_shutdown_signal_future(
-            ShutdownSignal::Sigterm,
-            tokio::signal::unix::SignalKind::terminate(),
-        ),
-        #[cfg(unix)]
-        ShutdownSignal::Sigquit => unix_shutdown_signal_future(
-            ShutdownSignal::Sigquit,
-            tokio::signal::unix::SignalKind::quit(),
-        ),
-        #[cfg(unix)]
-        ShutdownSignal::Sighup => unix_shutdown_signal_future(
-            ShutdownSignal::Sighup,
-            tokio::signal::unix::SignalKind::hangup(),
-        ),
-        #[cfg(unix)]
-        ShutdownSignal::Sigusr2 => unix_shutdown_signal_future(
-            ShutdownSignal::Sigusr2,
-            tokio::signal::unix::SignalKind::user_defined2(),
-        ),
-        #[cfg(not(unix))]
-        signal => Ok(Box::pin(async move {
-            Err(crate::BootError::Internal(format!(
-                "shutdown signal {signal} is only supported on Unix platforms"
-            )))
-        })),
-    }
-}
-
-#[cfg(all(feature = "shutdown-hooks", unix))]
-fn unix_shutdown_signal_future(
-    signal: ShutdownSignal,
-    kind: tokio::signal::unix::SignalKind,
-) -> Result<BoxFuture<'static, Result<ShutdownSignal>>> {
-    let mut stream = tokio::signal::unix::signal(kind)?;
-    Ok(Box::pin(async move {
-        let _ = stream.recv().await;
-        Ok(signal)
-    }))
-}
 
 /// NestFactory-style entrypoint for building managed Boot applications.
 pub struct BootFactory;
@@ -261,432 +138,14 @@ impl BootFactory {
     }
 }
 
-/// Managed application with idempotent startup and shutdown.
-pub struct BootApplicationHandle {
-    app: BootApplication,
-    initialized: bool,
-    microservices: Vec<Box<dyn ConnectedMicroservice>>,
-    #[cfg(feature = "shutdown-hooks")]
-    shutdown_signals: Option<Vec<ShutdownSignal>>,
-}
-
-impl BootApplicationHandle {
-    pub fn from_app(app: BootApplication) -> Self {
-        Self {
-            app,
-            initialized: false,
-            microservices: Vec::new(),
-            #[cfg(feature = "shutdown-hooks")]
-            shutdown_signals: None,
-        }
-    }
-
-    pub fn app(&self) -> &BootApplication {
-        &self.app
-    }
-
-    pub fn module_ref(&self) -> &ModuleRef {
-        self.app.module_ref()
-    }
-
-    pub fn into_app(self) -> BootApplication {
-        self.app
-    }
-
-    pub fn get<T>(&self) -> Result<Arc<T>>
-    where
-        T: Send + Sync + 'static,
-    {
-        self.app.get::<T>()
-    }
-
-    pub fn get_named<T>(&self, token: &str) -> Result<Arc<T>>
-    where
-        T: Send + Sync + 'static,
-    {
-        self.app.get_named::<T>(token)
-    }
-
-    pub fn get_optional<T>(&self) -> Result<Option<Arc<T>>>
-    where
-        T: Send + Sync + 'static,
-    {
-        self.app.get_optional::<T>()
-    }
-
-    pub fn get_optional_named<T>(&self, token: &str) -> Result<Option<Arc<T>>>
-    where
-        T: Send + Sync + 'static,
-    {
-        self.app.get_optional_named::<T>(token)
-    }
-
-    pub fn is_initialized(&self) -> bool {
-        self.initialized
-    }
-
-    #[cfg(feature = "shutdown-hooks")]
-    pub fn enable_shutdown_hooks<I>(&mut self, signals: I) -> &mut Self
-    where
-        I: IntoIterator<Item = ShutdownSignal>,
-    {
-        self.shutdown_signals = Some(normalize_shutdown_signals(signals));
-        self
-    }
-
-    #[cfg(feature = "shutdown-hooks")]
-    pub fn enable_default_shutdown_hooks(&mut self) -> &mut Self {
-        self.enable_shutdown_hooks(ShutdownSignal::default_signals())
-    }
-
-    pub async fn init(&mut self) -> Result<()> {
-        if self.initialized {
-            return Ok(());
-        }
-
-        if let Err(error) = self.app.bootstrap().await {
-            let _ = self.app.shutdown().await;
-            return Err(error);
-        }
-
-        self.initialized = true;
-        Ok(())
-    }
-
-    pub async fn close(&mut self) -> Result<()> {
-        self.close_inner(None).await
-    }
-
-    pub async fn close_with_signal(&mut self, signal: impl Into<String>) -> Result<()> {
-        self.close_inner(Some(signal.into())).await
-    }
-
-    async fn close_inner(&mut self, signal: Option<String>) -> Result<()> {
-        if !self.initialized {
-            return Ok(());
-        }
-
-        match signal {
-            Some(signal) => self.app.shutdown_with_signal(signal).await?,
-            None => self.app.shutdown().await?,
-        }
-        self.initialized = false;
-        Ok(())
-    }
-
-    pub async fn listen_with<A>(&mut self, adapter: &A, addr: SocketAddr) -> Result<()>
-    where
-        A: HttpAdapter,
-    {
-        #[cfg(feature = "shutdown-hooks")]
-        if let Some(signals) = self.shutdown_signals.clone() {
-            return self
-                .listen_with_shutdown_signal_future(
-                    adapter,
-                    addr,
-                    wait_for_shutdown_signal(signals),
-                )
-                .await;
-        }
-
-        self.init().await?;
-        let serve_result = adapter.serve(self.app.clone(), addr).await;
-        let close_result = self.close().await;
-
-        match (serve_result, close_result) {
-            (Err(error), _) => Err(error),
-            (Ok(()), Err(error)) => Err(error),
-            (Ok(()), Ok(())) => Ok(()),
-        }
-    }
-
-    #[cfg(feature = "shutdown-hooks")]
-    async fn listen_with_shutdown_signal_future<A, F>(
-        &mut self,
-        adapter: &A,
-        addr: SocketAddr,
-        signal_future: F,
-    ) -> Result<()>
-    where
-        A: HttpAdapter,
-        F: Future<Output = Result<ShutdownSignal>> + Send,
-    {
-        self.init().await?;
-        let serve_future = adapter.serve(self.app.clone(), addr);
-        futures_util::pin_mut!(signal_future);
-        futures_util::pin_mut!(serve_future);
-
-        tokio::select! {
-            serve_result = &mut serve_future => {
-                let close_result = self.close().await;
-                match (serve_result, close_result) {
-                    (Err(error), _) => Err(error),
-                    (Ok(()), Err(error)) => Err(error),
-                    (Ok(()), Ok(())) => Ok(()),
-                }
-            }
-            signal_result = &mut signal_future => {
-                match signal_result {
-                    Ok(signal) => self.close_with_signal(signal.as_str()).await,
-                    Err(error) => {
-                        let _ = self.close().await;
-                        Err(error)
-                    }
-                }
-            }
-        }
-    }
-
-    pub fn connect_microservice<T>(&mut self, transport: T) -> usize
-    where
-        T: MessageTransport + Send + Sync + 'static,
-    {
-        let index = self.microservices.len();
-        self.microservices
-            .push(Box::new(ConnectedMessageTransport { transport }));
-        index
-    }
-
-    pub fn connected_microservice_count(&self) -> usize {
-        self.microservices.len()
-    }
-
-    pub async fn start_all_microservices(&mut self) -> Result<()> {
-        self.init().await?;
-        for microservice in &self.microservices {
-            microservice.serve(self.app.clone()).await?;
-        }
-        Ok(())
-    }
-}
-
-/// Managed application context for provider-only hosts and workers.
-pub struct BootApplicationContext {
-    handle: BootApplicationHandle,
-}
-
-impl BootApplicationContext {
-    pub fn app(&self) -> &BootApplication {
-        self.handle.app()
-    }
-
-    pub fn module_ref(&self) -> &ModuleRef {
-        self.handle.module_ref()
-    }
-
-    pub fn into_app(self) -> BootApplication {
-        self.handle.into_app()
-    }
-
-    pub fn get<T>(&self) -> Result<Arc<T>>
-    where
-        T: Send + Sync + 'static,
-    {
-        self.handle.get::<T>()
-    }
-
-    pub fn get_named<T>(&self, token: &str) -> Result<Arc<T>>
-    where
-        T: Send + Sync + 'static,
-    {
-        self.handle.get_named::<T>(token)
-    }
-
-    pub fn get_optional<T>(&self) -> Result<Option<Arc<T>>>
-    where
-        T: Send + Sync + 'static,
-    {
-        self.handle.get_optional::<T>()
-    }
-
-    pub fn get_optional_named<T>(&self, token: &str) -> Result<Option<Arc<T>>>
-    where
-        T: Send + Sync + 'static,
-    {
-        self.handle.get_optional_named::<T>(token)
-    }
-
-    pub fn is_initialized(&self) -> bool {
-        self.handle.is_initialized()
-    }
-
-    pub async fn init(&mut self) -> Result<()> {
-        self.handle.init().await
-    }
-
-    pub async fn close(&mut self) -> Result<()> {
-        self.handle.close().await
-    }
-
-    pub async fn close_with_signal(&mut self, signal: impl Into<String>) -> Result<()> {
-        self.handle.close_with_signal(signal).await
-    }
-}
-
-/// Managed standalone microservice built from Boot message patterns.
-pub struct BootMicroservice<T> {
-    app: BootApplication,
-    transport: T,
-    initialized: bool,
-    #[cfg(feature = "shutdown-hooks")]
-    shutdown_signals: Option<Vec<ShutdownSignal>>,
-}
-
-impl<T> BootMicroservice<T>
-where
-    T: MessageTransport,
-{
-    pub fn new(app: BootApplication, transport: T) -> Self {
-        Self {
-            app,
-            transport,
-            initialized: false,
-            #[cfg(feature = "shutdown-hooks")]
-            shutdown_signals: None,
-        }
-    }
-
-    pub fn app(&self) -> &BootApplication {
-        &self.app
-    }
-
-    pub fn transport(&self) -> &T {
-        &self.transport
-    }
-
-    pub fn into_app(self) -> BootApplication {
-        self.app
-    }
-
-    pub fn build_client(&self) -> Result<T::Output> {
-        self.transport.build(self.app.clone())
-    }
-
-    pub fn is_initialized(&self) -> bool {
-        self.initialized
-    }
-
-    #[cfg(feature = "shutdown-hooks")]
-    pub fn enable_shutdown_hooks<I>(&mut self, signals: I) -> &mut Self
-    where
-        I: IntoIterator<Item = ShutdownSignal>,
-    {
-        self.shutdown_signals = Some(normalize_shutdown_signals(signals));
-        self
-    }
-
-    #[cfg(feature = "shutdown-hooks")]
-    pub fn enable_default_shutdown_hooks(&mut self) -> &mut Self {
-        self.enable_shutdown_hooks(ShutdownSignal::default_signals())
-    }
-
-    pub async fn init(&mut self) -> Result<()> {
-        if self.initialized {
-            return Ok(());
-        }
-
-        if let Err(error) = self.app.bootstrap().await {
-            let _ = self.app.shutdown().await;
-            return Err(error);
-        }
-
-        self.initialized = true;
-        Ok(())
-    }
-
-    pub async fn close(&mut self) -> Result<()> {
-        self.close_inner(None).await
-    }
-
-    pub async fn close_with_signal(&mut self, signal: impl Into<String>) -> Result<()> {
-        self.close_inner(Some(signal.into())).await
-    }
-
-    async fn close_inner(&mut self, signal: Option<String>) -> Result<()> {
-        if !self.initialized {
-            return Ok(());
-        }
-
-        match signal {
-            Some(signal) => self.app.shutdown_with_signal(signal).await?,
-            None => self.app.shutdown().await?,
-        }
-        self.initialized = false;
-        Ok(())
-    }
-
-    pub async fn listen(&mut self) -> Result<()> {
-        #[cfg(feature = "shutdown-hooks")]
-        if let Some(signals) = self.shutdown_signals.clone() {
-            return self
-                .listen_with_shutdown_signal_future(wait_for_shutdown_signal(signals))
-                .await;
-        }
-
-        self.init().await?;
-        let serve_result = self.transport.serve(self.app.clone()).await;
-        let close_result = self.close().await;
-
-        match (serve_result, close_result) {
-            (Err(error), _) => Err(error),
-            (Ok(()), Err(error)) => Err(error),
-            (Ok(()), Ok(())) => Ok(()),
-        }
-    }
-
-    #[cfg(feature = "shutdown-hooks")]
-    async fn listen_with_shutdown_signal_future<F>(&mut self, signal_future: F) -> Result<()>
-    where
-        F: Future<Output = Result<ShutdownSignal>> + Send,
-    {
-        self.init().await?;
-        let serve_future = self.transport.serve(self.app.clone());
-        futures_util::pin_mut!(signal_future);
-        futures_util::pin_mut!(serve_future);
-
-        tokio::select! {
-            serve_result = &mut serve_future => {
-                let close_result = self.close().await;
-                match (serve_result, close_result) {
-                    (Err(error), _) => Err(error),
-                    (Ok(()), Err(error)) => Err(error),
-                    (Ok(()), Ok(())) => Ok(()),
-                }
-            }
-            signal_result = &mut signal_future => {
-                match signal_result {
-                    Ok(signal) => self.close_with_signal(signal.as_str()).await,
-                    Err(error) => {
-                        let _ = self.close().await;
-                        Err(error)
-                    }
-                }
-            }
-        }
-    }
-}
-
-trait ConnectedMicroservice: Send + Sync {
-    fn serve(&self, app: BootApplication) -> BoxFuture<'static, Result<()>>;
-}
-
-struct ConnectedMessageTransport<T> {
-    transport: T,
-}
-
-impl<T> ConnectedMicroservice for ConnectedMessageTransport<T>
-where
-    T: MessageTransport + Send + Sync + 'static,
-{
-    fn serve(&self, app: BootApplication) -> BoxFuture<'static, Result<()>> {
-        self.transport.serve(app)
-    }
-}
-
 #[cfg(all(test, feature = "shutdown-hooks"))]
 mod tests {
     use super::*;
-    use crate::{BootError, Module};
+    use crate::{
+        BootApplication, BootError, BoxFuture, HttpAdapter, MessageTransport, Module, ModuleRef,
+        ShutdownSignal,
+    };
+    use std::net::SocketAddr;
     use std::sync::{Arc, Mutex};
     use tokio::sync::oneshot;
 
@@ -699,7 +158,7 @@ mod tests {
             "shutdown-hook"
         }
 
-        fn on_module_init(&self, _module_ref: &ModuleRef) -> Result<()> {
+        fn on_module_init(&self, _module_ref: &ModuleRef) -> crate::Result<()> {
             self.log.lock().unwrap().push("init".to_string());
             Ok(())
         }
@@ -707,7 +166,7 @@ mod tests {
         fn on_application_bootstrap(
             &self,
             _module_ref: ModuleRef,
-        ) -> BoxFuture<'static, Result<()>> {
+        ) -> BoxFuture<'static, crate::Result<()>> {
             let log = Arc::clone(&self.log);
             Box::pin(async move {
                 log.lock().unwrap().push("bootstrap".to_string());
@@ -719,7 +178,7 @@ mod tests {
             &self,
             _module_ref: ModuleRef,
             signal: Option<String>,
-        ) -> BoxFuture<'static, Result<()>> {
+        ) -> BoxFuture<'static, crate::Result<()>> {
             let log = Arc::clone(&self.log);
             Box::pin(async move {
                 log.lock()
@@ -733,7 +192,7 @@ mod tests {
             &self,
             _module_ref: ModuleRef,
             signal: Option<String>,
-        ) -> BoxFuture<'static, Result<()>> {
+        ) -> BoxFuture<'static, crate::Result<()>> {
             let log = Arc::clone(&self.log);
             Box::pin(async move {
                 log.lock()
@@ -747,7 +206,7 @@ mod tests {
             &self,
             _module_ref: ModuleRef,
             signal: Option<String>,
-        ) -> BoxFuture<'static, Result<()>> {
+        ) -> BoxFuture<'static, crate::Result<()>> {
             let log = Arc::clone(&self.log);
             Box::pin(async move {
                 log.lock()
@@ -775,7 +234,7 @@ mod tests {
     impl HttpAdapter for PendingAdapter {
         type Output = ();
 
-        fn build(&self, _app: BootApplication) -> Result<Self::Output> {
+        fn build(&self, _app: BootApplication) -> crate::Result<Self::Output> {
             Ok(())
         }
 
@@ -783,7 +242,7 @@ mod tests {
             &self,
             _app: BootApplication,
             _addr: SocketAddr,
-        ) -> BoxFuture<'static, Result<()>> {
+        ) -> BoxFuture<'static, crate::Result<()>> {
             let log = Arc::clone(&self.log);
             let ready = self.ready.lock().unwrap().take();
             Box::pin(async move {
@@ -791,7 +250,7 @@ mod tests {
                 if let Some(ready) = ready {
                     let _ = ready.send(());
                 }
-                futures_util::future::pending::<Result<()>>().await
+                futures_util::future::pending::<crate::Result<()>>().await
             })
         }
     }
@@ -813,11 +272,11 @@ mod tests {
     impl MessageTransport for PendingTransport {
         type Output = ();
 
-        fn build(&self, _app: BootApplication) -> Result<Self::Output> {
+        fn build(&self, _app: BootApplication) -> crate::Result<Self::Output> {
             Ok(())
         }
 
-        fn serve(&self, _app: BootApplication) -> BoxFuture<'static, Result<()>> {
+        fn serve(&self, _app: BootApplication) -> BoxFuture<'static, crate::Result<()>> {
             let log = Arc::clone(&self.log);
             let ready = self.ready.lock().unwrap().take();
             Box::pin(async move {
@@ -825,7 +284,7 @@ mod tests {
                 if let Some(ready) = ready {
                     let _ = ready.send(());
                 }
-                futures_util::future::pending::<Result<()>>().await
+                futures_util::future::pending::<crate::Result<()>>().await
             })
         }
     }
