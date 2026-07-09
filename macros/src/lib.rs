@@ -445,6 +445,11 @@ pub fn api_header(_attr: TokenStream, item: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_attribute]
+pub fn api_response_header(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    openapi_attribute_outside_controller("api_response_header", item)
+}
+
+#[proc_macro_attribute]
 pub fn api_security(_attr: TokenStream, item: TokenStream) -> TokenStream {
     openapi_attribute_outside_controller("api_security", item)
 }
@@ -462,6 +467,26 @@ pub fn api_key_auth(_attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn bearer_auth(_attr: TokenStream, item: TokenStream) -> TokenStream {
     openapi_attribute_outside_controller("bearer_auth", item)
+}
+
+#[proc_macro_attribute]
+pub fn oauth2_auth(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    openapi_attribute_outside_controller("oauth2_auth", item)
+}
+
+#[proc_macro_attribute]
+pub fn open_id_connect_auth(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    openapi_attribute_outside_controller("open_id_connect_auth", item)
+}
+
+#[proc_macro_attribute]
+pub fn api_extra_model(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    openapi_attribute_outside_controller("api_extra_model", item)
+}
+
+#[proc_macro_attribute]
+pub fn api_extension(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    openapi_attribute_outside_controller("api_extension", item)
 }
 
 #[proc_macro_attribute]

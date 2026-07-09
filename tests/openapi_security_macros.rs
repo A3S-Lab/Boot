@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use a3s_boot::{
     controller, BootApplication, BootResponse, ControllerDefinition, Module, ModuleRef,
-    OpenApiInfo, Result, RouteDefinition,
+    OpenApiInfo, OpenApiOAuthFlows, Result, RouteDefinition,
 };
 use serde_json::json;
 
@@ -29,6 +29,67 @@ fn route_builder_bearer_auth_registers_requirement_and_scheme() {
             "type": "http",
             "scheme": "bearer",
             "bearerFormat": "JWT"
+        })
+    );
+}
+
+#[test]
+fn route_builder_oauth2_and_openid_connect_register_schemes() {
+    let oauth_route = RouteDefinition::get("/oauth", |_| async { Ok(BootResponse::text("ok")) })
+        .unwrap()
+        .with_oauth2_auth(
+            "oauth2",
+            OpenApiOAuthFlows::authorization_code(
+                "https://auth.example.com/oauth/authorize",
+                "https://auth.example.com/oauth/token",
+                [("cats:read", "Read cats")],
+            ),
+            ["cats:read"],
+        );
+    let open_id_route = RouteDefinition::get("/openid", |_| async { Ok(BootResponse::text("ok")) })
+        .unwrap()
+        .with_open_id_connect_auth(
+            "openId",
+            "https://auth.example.com/.well-known/openid-configuration",
+            ["openid", "profile"],
+        );
+
+    let document = BootApplication::builder()
+        .route(oauth_route)
+        .route(open_id_route)
+        .build()
+        .unwrap()
+        .openapi(OpenApiInfo::new("Security API", "1.0.0"));
+    let value = serde_json::to_value(document).unwrap();
+
+    assert_eq!(
+        value["paths"]["/oauth"]["get"]["security"][0]["oauth2"],
+        json!(["cats:read"])
+    );
+    assert_eq!(
+        value["components"]["securitySchemes"]["oauth2"],
+        json!({
+            "type": "oauth2",
+            "flows": {
+                "authorizationCode": {
+                    "authorizationUrl": "https://auth.example.com/oauth/authorize",
+                    "tokenUrl": "https://auth.example.com/oauth/token",
+                    "scopes": {
+                        "cats:read": "Read cats"
+                    }
+                }
+            }
+        })
+    );
+    assert_eq!(
+        value["paths"]["/openid"]["get"]["security"][0]["openId"],
+        json!(["openid", "profile"])
+    );
+    assert_eq!(
+        value["components"]["securitySchemes"]["openId"],
+        json!({
+            "type": "openIdConnect",
+            "openIdConnectUrl": "https://auth.example.com/.well-known/openid-configuration"
         })
     );
 }
@@ -71,6 +132,31 @@ impl OpenApiSecurityController {
     #[a3s_boot::bearer_auth("accessToken")]
     async fn bearer(&self) -> Result<&'static str> {
         Ok("bearer")
+    }
+
+    #[a3s_boot::get("/oauth2")]
+    #[a3s_boot::oauth2_auth(
+        name = "oauth2",
+        flow = "authorization_code",
+        authorization_url = "https://auth.example.com/oauth/authorize",
+        token_url = "https://auth.example.com/oauth/token",
+        refresh_url = "https://auth.example.com/oauth/refresh",
+        scopes = ["cats:read", "cats:write"],
+        description = "OAuth2 authorization code"
+    )]
+    async fn oauth2(&self) -> Result<&'static str> {
+        Ok("oauth2")
+    }
+
+    #[a3s_boot::get("/openid")]
+    #[a3s_boot::open_id_connect_auth(
+        name = "openId",
+        url = "https://auth.example.com/.well-known/openid-configuration",
+        scopes = ["openid", "profile"],
+        description = "OpenID Connect discovery"
+    )]
+    async fn openid(&self) -> Result<&'static str> {
+        Ok("openid")
     }
 }
 
@@ -156,6 +242,42 @@ fn openapi_security_macros_register_requirements_and_schemes() {
             "type": "http",
             "scheme": "bearer",
             "bearerFormat": "JWT"
+        })
+    );
+
+    assert_eq!(
+        value["paths"]["/secure/oauth2"]["get"]["security"][0]["oauth2"],
+        json!(["cats:read", "cats:write"])
+    );
+    assert_eq!(
+        value["components"]["securitySchemes"]["oauth2"],
+        json!({
+            "type": "oauth2",
+            "description": "OAuth2 authorization code",
+            "flows": {
+                "authorizationCode": {
+                    "authorizationUrl": "https://auth.example.com/oauth/authorize",
+                    "tokenUrl": "https://auth.example.com/oauth/token",
+                    "refreshUrl": "https://auth.example.com/oauth/refresh",
+                    "scopes": {
+                        "cats:read": "",
+                        "cats:write": ""
+                    }
+                }
+            }
+        })
+    );
+
+    assert_eq!(
+        value["paths"]["/secure/openid"]["get"]["security"][0]["openId"],
+        json!(["openid", "profile"])
+    );
+    assert_eq!(
+        value["components"]["securitySchemes"]["openId"],
+        json!({
+            "type": "openIdConnect",
+            "description": "OpenID Connect discovery",
+            "openIdConnectUrl": "https://auth.example.com/.well-known/openid-configuration"
         })
     );
 }

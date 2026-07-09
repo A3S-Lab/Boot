@@ -5,8 +5,9 @@ use super::route::RouteDefinition;
 use crate::pipeline::{PipelineComponent, PipelineComponents};
 use crate::{
     BootErrorKind, BootRequest, ExceptionFilter, ExecutionInterceptor, Guard, Interceptor,
-    Middleware, ModuleRef, Pipe, Result, RouteVersioning, SerializationOptions, SseEvent, Validate,
-    ValidationOptions,
+    Middleware, ModuleRef, OpenApiExample, OpenApiHeader, OpenApiParameter, OpenApiRequestBody,
+    OpenApiResponse, OpenApiSchema, Pipe, Result, RouteVersioning, SerializationOptions, SseEvent,
+    Validate, ValidationOptions,
 };
 use futures_core::Stream;
 use serde::de::DeserializeOwned;
@@ -26,6 +27,14 @@ pub struct ControllerDefinition {
     routes: Vec<RouteDefinition>,
     pipeline: PipelineComponents,
     openapi_tags: Vec<String>,
+    openapi_schema_components: BTreeMap<String, OpenApiSchema>,
+    openapi_response_components: BTreeMap<String, OpenApiResponse>,
+    openapi_parameter_components: BTreeMap<String, OpenApiParameter>,
+    openapi_example_components: BTreeMap<String, OpenApiExample>,
+    openapi_request_body_components: BTreeMap<String, OpenApiRequestBody>,
+    openapi_header_components: BTreeMap<String, OpenApiHeader>,
+    openapi_extensions: BTreeMap<String, Value>,
+    openapi_hidden: bool,
     versioning: RouteVersioning,
     serialization: Option<SerializationOptions>,
     metadata: BTreeMap<String, Value>,
@@ -40,6 +49,14 @@ impl ControllerDefinition {
             routes: Vec::new(),
             pipeline: PipelineComponents::default(),
             openapi_tags: Vec::new(),
+            openapi_schema_components: BTreeMap::new(),
+            openapi_response_components: BTreeMap::new(),
+            openapi_parameter_components: BTreeMap::new(),
+            openapi_example_components: BTreeMap::new(),
+            openapi_request_body_components: BTreeMap::new(),
+            openapi_header_components: BTreeMap::new(),
+            openapi_extensions: BTreeMap::new(),
+            openapi_hidden: false,
             versioning: RouteVersioning::default(),
             serialization: None,
             metadata: BTreeMap::new(),
@@ -63,6 +80,30 @@ impl ControllerDefinition {
         }
         for tag in &self.openapi_tags {
             route = route.with_tag(tag.clone());
+        }
+        for (name, schema) in &self.openapi_schema_components {
+            route = route.with_schema_component(name.clone(), schema.clone());
+        }
+        for (name, response) in &self.openapi_response_components {
+            route = route.with_response_component(name.clone(), response.clone());
+        }
+        for (name, parameter) in &self.openapi_parameter_components {
+            route = route.with_parameter_component(name.clone(), parameter.clone());
+        }
+        for (name, example) in &self.openapi_example_components {
+            route = route.with_example_component(name.clone(), example.clone());
+        }
+        for (name, request_body) in &self.openapi_request_body_components {
+            route = route.with_request_body_component(name.clone(), request_body.clone());
+        }
+        for (name, header) in &self.openapi_header_components {
+            route = route.with_header_component(name.clone(), header.clone());
+        }
+        for (name, value) in &self.openapi_extensions {
+            route = route.with_openapi_extension_default_value(name.clone(), value.clone());
+        }
+        if self.openapi_hidden {
+            route = route.hide_from_openapi();
         }
         route = route.with_metadata_defaults(&self.metadata);
         self.routes.push(
@@ -233,6 +274,145 @@ impl ControllerDefinition {
             .map(|route| route.with_tag(tag.clone()))
             .collect();
         self
+    }
+
+    pub fn with_schema_component(mut self, name: impl Into<String>, schema: OpenApiSchema) -> Self {
+        let name = name.into();
+        self.openapi_schema_components
+            .insert(name.clone(), schema.clone());
+        self.routes = self
+            .routes
+            .into_iter()
+            .map(|route| route.with_schema_component(name.clone(), schema.clone()))
+            .collect();
+        self
+    }
+
+    pub fn with_response_component(
+        mut self,
+        name: impl Into<String>,
+        response: OpenApiResponse,
+    ) -> Self {
+        let name = name.into();
+        self.openapi_response_components
+            .insert(name.clone(), response.clone());
+        self.routes = self
+            .routes
+            .into_iter()
+            .map(|route| route.with_response_component(name.clone(), response.clone()))
+            .collect();
+        self
+    }
+
+    pub fn with_parameter_component(
+        mut self,
+        name: impl Into<String>,
+        parameter: OpenApiParameter,
+    ) -> Self {
+        let name = name.into();
+        self.openapi_parameter_components
+            .insert(name.clone(), parameter.clone());
+        self.routes = self
+            .routes
+            .into_iter()
+            .map(|route| route.with_parameter_component(name.clone(), parameter.clone()))
+            .collect();
+        self
+    }
+
+    pub fn with_example_component(
+        mut self,
+        name: impl Into<String>,
+        example: OpenApiExample,
+    ) -> Self {
+        let name = name.into();
+        self.openapi_example_components
+            .insert(name.clone(), example.clone());
+        self.routes = self
+            .routes
+            .into_iter()
+            .map(|route| route.with_example_component(name.clone(), example.clone()))
+            .collect();
+        self
+    }
+
+    pub fn try_with_example_component<T>(self, name: impl Into<String>, value: T) -> Result<Self>
+    where
+        T: Serialize,
+    {
+        Ok(self.with_example_component(name, OpenApiExample::try_value(value)?))
+    }
+
+    pub fn with_request_body_component(
+        mut self,
+        name: impl Into<String>,
+        request_body: OpenApiRequestBody,
+    ) -> Self {
+        let name = name.into();
+        self.openapi_request_body_components
+            .insert(name.clone(), request_body.clone());
+        self.routes = self
+            .routes
+            .into_iter()
+            .map(|route| route.with_request_body_component(name.clone(), request_body.clone()))
+            .collect();
+        self
+    }
+
+    pub fn with_header_component(mut self, name: impl Into<String>, header: OpenApiHeader) -> Self {
+        let name = name.into();
+        self.openapi_header_components
+            .insert(name.clone(), header.clone());
+        self.routes = self
+            .routes
+            .into_iter()
+            .map(|route| route.with_header_component(name.clone(), header.clone()))
+            .collect();
+        self
+    }
+
+    pub fn with_openapi_extension_value(mut self, name: impl Into<String>, value: Value) -> Self {
+        let name = name.into();
+        self.openapi_extensions.insert(name.clone(), value.clone());
+        self.routes = self
+            .routes
+            .into_iter()
+            .map(|route| route.with_openapi_extension_default_value(name.clone(), value.clone()))
+            .collect();
+        self
+    }
+
+    pub fn try_with_openapi_extension<T>(self, name: impl Into<String>, value: T) -> Result<Self>
+    where
+        T: Serialize,
+    {
+        let name = name.into();
+        let value = serde_json::to_value(value).map_err(|error| {
+            crate::BootError::Internal(format!(
+                "OpenAPI extension `{name}` could not be serialized: {error}"
+            ))
+        })?;
+        Ok(self.with_openapi_extension_value(name, value))
+    }
+
+    pub fn hide_from_openapi(mut self) -> Self {
+        self.openapi_hidden = true;
+        self.routes = self
+            .routes
+            .into_iter()
+            .map(RouteDefinition::hide_from_openapi)
+            .collect();
+        self
+    }
+
+    #[cfg(feature = "openapi-schemas")]
+    pub fn try_with_json_schema_component<T>(self) -> Result<Self>
+    where
+        T: schemars::JsonSchema,
+    {
+        let schema = OpenApiSchema::json_schema::<T>()
+            .map_err(|error| crate::BootError::Internal(error.to_string()))?;
+        Ok(self.with_schema_component(crate::openapi_schema_name::<T>(), schema))
     }
 
     pub fn with_version(mut self, version: impl Into<String>) -> Self {

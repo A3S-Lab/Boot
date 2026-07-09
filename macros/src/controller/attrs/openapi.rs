@@ -1,7 +1,9 @@
 use quote::quote;
 use syn::{Attribute, LitStr};
 
-use crate::openapi::{AttrKind as OpenApiAttrKind, RouteSpec as RouteOpenApiSpec};
+use crate::openapi::{
+    ApiExtensionArgs, ApiExtraModelArgs, AttrKind as OpenApiAttrKind, RouteSpec as RouteOpenApiSpec,
+};
 
 pub(in crate::controller) fn take_controller_openapi_attrs(
     attrs: &[Attribute],
@@ -21,9 +23,24 @@ pub(in crate::controller) fn take_controller_openapi_attrs(
                 Ok(tag) => openapi.tags.push(tag),
                 Err(error) => errors.push(error),
             },
+            OpenApiAttrKind::ApiExtraModel => match attr.parse_args::<ApiExtraModelArgs>() {
+                Ok(extra_model) => openapi.extra_models.push(extra_model),
+                Err(error) => errors.push(error),
+            },
+            OpenApiAttrKind::ApiExtension => match attr.parse_args::<ApiExtensionArgs>() {
+                Ok(extension) => openapi.extensions.push(extension),
+                Err(error) => errors.push(error),
+            },
+            OpenApiAttrKind::HideFromOpenApi => {
+                if let Err(error) = crate::expect_no_extractor_args(attr, "hide_from_openapi") {
+                    errors.push(error);
+                } else {
+                    openapi.hidden = true;
+                }
+            }
             _ => errors.push(syn::Error::new_spanned(
                 attr,
-                "only #[tag(\"name\")] is supported on #[controller] impl blocks",
+                "only #[tag(\"name\")], #[api_extra_model(...)], #[api_extension(...)], and #[hide_from_openapi] are supported on #[controller] impl blocks",
             )),
         }
     }
@@ -56,10 +73,23 @@ pub(in crate::controller) fn take_route_openapi_attrs(
 #[derive(Default)]
 pub(in crate::controller) struct ControllerOpenApiAttrs {
     tags: Vec<LitStr>,
+    extra_models: Vec<ApiExtraModelArgs>,
+    extensions: Vec<ApiExtensionArgs>,
+    hidden: bool,
 }
 
 impl ControllerOpenApiAttrs {
     pub(in crate::controller) fn tokens(&self) -> Vec<proc_macro2::TokenStream> {
-        self.tags.iter().map(|tag| quote!(with_tag(#tag))).collect()
+        let mut tokens = self
+            .tags
+            .iter()
+            .map(|tag| quote!(with_tag(#tag)))
+            .chain(self.extra_models.iter().map(ApiExtraModelArgs::tokens))
+            .chain(self.extensions.iter().map(ApiExtensionArgs::tokens))
+            .collect::<Vec<_>>();
+        if self.hidden {
+            tokens.push(quote!(hide_from_openapi()));
+        }
+        tokens
     }
 }

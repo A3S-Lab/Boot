@@ -350,6 +350,27 @@ impl MacroCatsMessages {
 
 #[controller("/macro-cats")]
 #[tag("macro-cats")]
+#[api_extra_model(
+    name = "MacroCatPageDto",
+    schema = ::a3s_boot::OpenApiSchema::all_of([
+        ::a3s_boot::OpenApiSchema::object_with_properties(
+            [(
+                "items",
+                ::a3s_boot::OpenApiSchema::array(
+                    ::a3s_boot::OpenApiSchema::reference("MacroCatDto")
+                )
+            )],
+            ["items"]
+        ),
+        ::a3s_boot::OpenApiSchema::object()
+            .with_property("next_cursor", ::a3s_boot::OpenApiSchema::string().nullable())
+            .with_property("status", ::a3s_boot::OpenApiSchema::string_enum(["fresh", "stale"]))
+    ])
+)]
+#[api_extension(
+    name = "x-controller-default",
+    value = json!({ "source": "controller" })
+)]
 #[metadata("resource", "cats")]
 impl MacroCatsController {
     #[get("/{id}", raw)]
@@ -376,7 +397,11 @@ impl MacroCatsController {
     #[operation(
         summary = "Find macro cat details",
         description = "Returns a macro cat with query and header metadata.",
-        operation_id = "findMacroCatDetails"
+        operation_id = "findMacroCatDetails",
+        server_url = "https://edge.example.com",
+        server_description = "Edge",
+        external_docs_description = "Macro cat details guide",
+        external_docs_url = "https://docs.example.com/macro-cats/details"
     )]
     #[response(
         status = 200,
@@ -388,13 +413,29 @@ impl MacroCatsController {
         name = "include_toys",
         schema = bool,
         required = false,
-        description = "Include toy data"
+        description = "Include toy data",
+        deprecated = true,
+        allow_reserved = true,
+        style = "form",
+        explode = false,
+        example_name = "with_toys",
+        example = json!(true)
     )]
     #[a3s_boot::api_header(
         name = "x-request-id",
         schema = String,
         required = false,
         description = "Request correlation id"
+    )]
+    #[api_response_header(
+        status = 200,
+        name = "x-rate-limit-remaining",
+        schema = u16,
+        description = "Remaining requests"
+    )]
+    #[api_extension(
+        name = "x-codeSamples",
+        value = json!([{ "lang": "bash", "source": "curl /macro-cats/42/details" }])
     )]
     #[bearer_auth]
     async fn details(
@@ -529,12 +570,14 @@ impl MacroCatsController {
     #[request_body(
         schema = MacroCreateCatDto,
         description = "Cat creation payload",
+        example_name = "milo",
         example = json!({ "name": "Milo" })
     )]
     #[response(
         status = 201,
         description = "Cat created",
         schema = MacroCatDto,
+        example_name = "created",
         example = json!({ "id": "generated", "name": "Milo" })
     )]
     async fn create(&self, dto: MacroCreateCatDto) -> Result<MacroCatDto> {
@@ -676,6 +719,34 @@ struct MacroCatDetailsDto {
 )]
 #[derive(Debug)]
 struct MacroCatsModule;
+
+#[derive(Debug)]
+struct MacroHiddenOpenApiController;
+
+#[controller("/macro-hidden-openapi")]
+#[hide_from_openapi]
+impl MacroHiddenOpenApiController {
+    #[get("/")]
+    async fn hidden(&self) -> Result<MacroCatDto> {
+        Ok(MacroCatDto {
+            id: "hidden".to_string(),
+            name: "Hidden".to_string(),
+        })
+    }
+}
+
+#[derive(Debug)]
+struct MacroHiddenOpenApiModule;
+
+impl Module for MacroHiddenOpenApiModule {
+    fn name(&self) -> &'static str {
+        "macro-hidden-openapi"
+    }
+
+    fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
+        Ok(vec![Arc::new(MacroHiddenOpenApiController).controller()?])
+    }
+}
 
 #[derive(Debug)]
 struct MacroValidationController;
@@ -1657,8 +1728,34 @@ async fn macros_register_injectable_services_and_controller_routes() {
         json!("Find macro cat details")
     );
     assert_eq!(
+        details_operation["servers"],
+        json!([{ "url": "https://edge.example.com", "description": "Edge" }])
+    );
+    assert_eq!(
+        details_operation["externalDocs"],
+        json!({
+            "description": "Macro cat details guide",
+            "url": "https://docs.example.com/macro-cats/details"
+        })
+    );
+    assert_eq!(
+        details_operation["x-controller-default"],
+        json!({ "source": "controller" })
+    );
+    assert_eq!(
+        details_operation["x-codeSamples"][0],
+        json!({ "lang": "bash", "source": "curl /macro-cats/42/details" })
+    );
+    assert_eq!(
         details_operation["responses"]["200"]["content"]["application/json"]["schema"],
         json!({ "$ref": "#/components/schemas/MacroCatDetailsDto" })
+    );
+    assert_eq!(
+        details_operation["responses"]["200"]["headers"]["x-rate-limit-remaining"],
+        json!({
+            "schema": { "type": "integer" },
+            "description": "Remaining requests"
+        })
     );
     assert_eq!(details_operation["security"][0]["bearerAuth"], json!([]));
     assert!(has_openapi_parameter(
@@ -1699,6 +1796,12 @@ async fn macros_register_injectable_services_and_controller_routes() {
             .and_then(|parameter| parameter["description"].as_str()),
         Some("Include toy data")
     );
+    let include_toys = find_openapi_parameter(details_operation, "include_toys", "query").unwrap();
+    assert_eq!(include_toys["deprecated"], true);
+    assert_eq!(include_toys["allowReserved"], true);
+    assert_eq!(include_toys["style"], "form");
+    assert_eq!(include_toys["explode"], false);
+    assert_eq!(include_toys["examples"]["with_toys"]["value"], true);
     assert_eq!(
         find_openapi_parameter(details_operation, "x-request-id", "header")
             .and_then(|parameter| parameter["description"].as_str()),
@@ -1739,7 +1842,7 @@ async fn macros_register_injectable_services_and_controller_routes() {
         json!({ "$ref": "#/components/schemas/MacroCreateCatDto" })
     );
     assert_eq!(
-        create_operation["requestBody"]["content"]["application/json"]["example"],
+        create_operation["requestBody"]["content"]["application/json"]["examples"]["milo"]["value"],
         json!({ "name": "Milo" })
     );
     assert_eq!(
@@ -1747,7 +1850,8 @@ async fn macros_register_injectable_services_and_controller_routes() {
         json!({ "$ref": "#/components/schemas/MacroCatDto" })
     );
     assert_eq!(
-        create_operation["responses"]["201"]["content"]["application/json"]["example"],
+        create_operation["responses"]["201"]["content"]["application/json"]["examples"]["created"]
+            ["value"],
         json!({ "id": "generated", "name": "Milo" })
     );
 
@@ -1774,6 +1878,28 @@ async fn macros_register_injectable_services_and_controller_routes() {
     assert_eq!(
         import_operation["responses"]["202"]["content"]["application/vnd.a3s.cat+json"]["example"],
         json!({ "id": "imported", "name": "Milo" })
+    );
+    assert_eq!(
+        document["components"]["schemas"]["MacroCatPageDto"]["allOf"],
+        json!([
+            {
+                "type": "object",
+                "properties": {
+                    "items": {
+                        "type": "array",
+                        "items": { "$ref": "#/components/schemas/MacroCatDto" }
+                    }
+                },
+                "required": ["items"]
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "next_cursor": { "type": "string", "nullable": true },
+                    "status": { "type": "string", "enum": ["fresh", "stale"] }
+                }
+            }
+        ])
     );
     assert!(!document["paths"]
         .as_object()
@@ -2062,6 +2188,36 @@ async fn macro_pipeline_decorators_register_controller_and_route_hooks() {
         .await
         .unwrap_err();
     assert!(matches!(unfiltered, BootError::Unauthorized(message) if message == "macro private"));
+}
+
+#[tokio::test]
+async fn controller_level_hide_from_openapi_macro_hides_routes() {
+    let app = BootApplication::builder()
+        .import(MacroHiddenOpenApiModule)
+        .build()
+        .unwrap();
+
+    let response = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-hidden-openapi",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.body_json::<MacroCatDto>().unwrap(),
+        MacroCatDto {
+            id: "hidden".to_string(),
+            name: "Hidden".to_string(),
+        }
+    );
+
+    let document = app.openapi(OpenApiInfo::new("Hidden", "1.0.0"));
+    let document = serde_json::to_value(document).unwrap();
+    assert!(!document["paths"]
+        .as_object()
+        .unwrap()
+        .contains_key("/macro-hidden-openapi"));
 }
 
 #[test]

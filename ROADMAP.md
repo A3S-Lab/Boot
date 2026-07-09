@@ -386,17 +386,42 @@ Tasks:
 - Preserve adapter neutrality. (Implemented)
 - Add Nest-style OpenAPI macros such as `#[tag]`, `#[operation]`,
   `#[api_param]`, `#[api_query]`, `#[api_header]`, `#[response]`,
-  request/response examples, request/response media types, `#[bearer_auth]`,
-  `#[api_security]`, `#[api_cookie_auth]`, `#[api_key_auth]`, and auth
-  metadata attributes. (Implemented)
+  single and named request/response examples, request/response media types,
+  response header documentation, `#[bearer_auth]`, `#[api_security]`,
+  `#[api_cookie_auth]`, `#[api_key_auth]`, `#[oauth2_auth]`,
+  `#[open_id_connect_auth]`, `#[api_extra_model]`, and auth metadata
+  attributes. (Implemented)
+- Add advanced schema helpers for extra model registration, `allOf` / `oneOf` /
+  `anyOf` composition, string enums, nullable fields, formats, descriptions,
+  required object properties, additional properties, and mapped-type-style
+  partial/pick/omit object schema transforms. (Implemented)
+- Add document-level OpenAPI metadata for servers, external docs, and described
+  tags. (Implemented)
+- Add operation-level server/external docs metadata and schema discriminator
+  helpers for polymorphic OpenAPI schemas. (Implemented)
+- Add OpenAPI vendor extension support for operations, controller defaults,
+  macros, and schema objects. (Implemented)
+- Add advanced parameter metadata for style/explode serialization hints,
+  deprecated and allowReserved flags, and single or named parameter examples.
+  (Implemented)
+- Add route-level and controller-level OpenAPI exclusion support.
+  (Implemented)
+- Add reusable OpenAPI components beyond schemas, including responses,
+  parameters, examples, request bodies, and headers, with operation-level `$ref`
+  helpers. (Implemented)
 - Add optional schema component generation from `schemars`. (Implemented)
 
 Acceptance:
 
 - A sample controller can generate a valid OpenAPI 3 document.
 - The generated document includes paths, methods, inferred and explicit params,
-  request body, responses, request/response examples, non-JSON media types,
-  tags, security requirements, and generated security schemes.
+  request body, responses, single and named request/response examples,
+  response headers, non-JSON media types, tags, described tags, servers,
+  external docs, operation-level servers/external docs, security requirements,
+  generated security schemes, extra schema components, composed schemas,
+  discriminator mappings, vendor extensions, advanced parameter metadata,
+  route/controller exclusions, OAuth2 flows, and OpenID Connect discovery
+  schemes.
 - A generated Swagger UI route can load the generated JSON document.
 - JSON examples in README are generated from tested code paths.
 - OpenAPI tests validate a representative document with `serde_json`.

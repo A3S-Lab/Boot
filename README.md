@@ -358,18 +358,28 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@UploadedFiles()` with `FilesInterceptor("photos")` | `#[uploaded_files("photos")]` on a `Vec<UploadedFile>` argument |
 | `@ApiTags("cats")` | `#[tag("cats")]` below `#[controller]` |
 | `@ApiOperation(...)` | `#[operation(summary = "...", operation_id = "...")]` on a route method |
+| Operation servers and external docs | `#[operation(server_url = "...", external_docs_description = "...", external_docs_url = "...")]` |
 | `@ApiParam(...)` | `#[api_param(name = "id", schema = String, description = "...")]` |
-| `@ApiQuery(...)` | `#[api_query(name = "page", schema = u16, required = false)]` |
+| `@ApiQuery(...)` | `#[api_query(name = "page", schema = u16, required = false, style = "form", explode = false)]` |
 | `@ApiHeader(...)` | `#[api_header(name = "x-request-id", required = false)]` |
 | `@ApiResponse(...)` | `#[response(status = 200, description = "...", schema = CatDto)]` |
+| `@ApiExcludeController()` / `@ApiExcludeEndpoint()` | `#[hide_from_openapi]` on a controller impl block or route method |
+| Response headers in `@ApiResponse(...)` | `#[api_response_header(status = 200, name = "x-rate-limit-remaining", schema = u16)]` |
 | `@ApiResponse({ example: ... })` | `#[response(status = 200, schema = CatDto, example = serde_json::json!(...))]` |
+| Named OpenAPI examples | `#[response(status = 200, schema = CatDto, example_name = "milo", example = serde_json::json!(...))]` |
 | `@ApiBody({ example: ... })` | `#[request_body(schema = CreateCatDto, example = serde_json::json!(...))]` |
 | `@ApiConsumes("multipart/form-data")` | `#[request_body(content_type = "multipart/form-data", schema = UploadDto)]` |
 | `@ApiProduces("text/csv")` | `#[response(status = 200, content_type = "text/csv", schema = String)]` |
+| `@ApiExtraModels(...)` | `#[api_extra_model(name = "CatPageDto", schema = OpenApiSchema::all_of([...]))]` |
+| `PartialType` / `PickType` / `OmitType` | `OpenApiSchema::object_with_properties(...).partial()`, `.pick_properties([...])`, or `.omit_properties([...])` |
+| Reusable OpenAPI components | `with_response_component(...)`, `with_request_body_ref(...)`, `with_parameter_component(...)` |
+| `@ApiExtension("x-name", value)` | `#[api_extension(name = "x-name", value = serde_json::json!(...))]` |
 | `@ApiBearerAuth()` | `#[bearer_auth]` or `#[bearer_auth("accessToken")]` on a route method |
 | `@ApiSecurity("apiKey")` | `#[api_security("apiKey")]` or `#[api_security("oauth2", scopes = ["read"])]` |
 | `@ApiCookieAuth()` | `#[api_cookie_auth(name = "sid")]` |
 | API key security scheme | `#[api_key_auth(name = "x-api-key")]` or `#[api_key_auth(name = "api_key", location = "query")]` |
+| OAuth2 security scheme | `#[oauth2_auth(name = "oauth2", flow = "authorization_code", authorization_url = "...", token_url = "...", scopes = ["read"])]` |
+| OpenID Connect security scheme | `#[open_id_connect_auth(name = "openId", url = "https://issuer/.well-known/openid-configuration")]` |
 | Constructor injection | `#[injectable]` fields such as `cats: Arc<CatsService>` plus `CatsController::provider()` |
 | `@Inject("TOKEN")` | `#[inject("token")]` on an `Arc<T>`, `Option<Arc<T>>`, or `ProviderRef<T>` field |
 | `@Optional()` | `Option<Arc<T>>` or `Option<ProviderRef<T>>` on an injectable field |
@@ -1110,9 +1120,16 @@ Boot can generate an OpenAPI 3 document from resolved routes. Route metadata is
 adapter-neutral and can be added with builder methods or Nest-style metadata
 macros. `serve_openapi(...)` mounts a generated JSON document, and
 `serve_openapi_ui(...)` mounts both that JSON document and a Swagger UI page
-without including either helper route in its own output. Schema components can
-be registered manually, or generated from `schemars::JsonSchema` when the
-`openapi-schemas` feature is enabled.
+without including either helper route in its own output. Reusable OpenAPI
+components can be registered for schemas, responses, parameters, examples,
+request bodies, headers, and security schemes. Schema components can also be
+generated from `schemars::JsonSchema` when the `openapi-schemas` feature is
+enabled. `OpenApiSchema` includes helpers for composition (`all_of`, `one_of`,
+`any_of`), discriminators, enums, nullable fields, formats, additional
+properties, object property construction, and mapped-type-style schema
+transforms (`partial`, `pick_properties`, `omit_properties`).
+Operation and schema objects can also carry OpenAPI vendor extensions such as
+`x-codeSamples` for downstream Swagger UI plugins or code generators.
 
 ```rust
 use a3s_boot::{
@@ -1155,6 +1172,32 @@ let document = app.openapi(OpenApiInfo::new("Cats API", "1.0.0"));
 let json = serde_json::to_value(document)?;
 ```
 
+`OpenApiInfo` can add document-level server URLs, external docs, and tag
+descriptions:
+
+```rust
+let document = app.openapi(
+    OpenApiInfo::new("Cats API", "1.0.0")
+        .with_server_description("https://api.example.com", "Production")
+        .with_external_docs("Cats guide", "https://docs.example.com/cats")
+        .with_tag_description("cats", "Cat operations")
+        .with_tag_external_docs("cats", "Cat tag guide", "https://docs.example.com/tags/cats"),
+);
+```
+
+Routes can also override servers or external documentation at the operation
+level:
+
+```rust
+let route = route
+    .with_openapi_server_description("https://edge.example.com", "Edge")
+    .with_openapi_external_docs("Find cat guide", "https://docs.example.com/cats/find")
+    .try_with_openapi_extension(
+        "x-codeSamples",
+        serde_json::json!([{ "lang": "bash", "source": "curl /cats/1" }]),
+    )?;
+```
+
 Use `serve_openapi_ui("/docs", "/docs/openapi.json", info)` for a Swagger UI
 route backed by the generated JSON document:
 
@@ -1178,21 +1221,121 @@ controllers, `#[param("id")]`, `#[query("name")]`, `#[header("name")]`, and
 Use `#[api_param(...)]`, `#[api_query(...)]`, and `#[api_header(...)]` when a
 route needs explicit Swagger metadata without adding a request extractor, or
 when the inferred parameter needs a description or a more precise schema.
+Parameter metadata can include `deprecated`, `allow_reserved`, `style`,
+`explode`, `example`, and named `example_name` values for OpenAPI generators
+that care about query serialization and documented parameter samples.
 Use `try_with_json_request_body_example(...)`,
 `try_with_json_response_example(...)`, `#[request_body(example = ...)]`, and
 `#[response(example = ...)]` to mirror Nest Swagger request and response
-examples. Use `with_request_body_content_type(...)`,
+examples. Use `try_with_json_request_body_named_example(...)`,
+`try_with_json_response_named_example(...)`, and `example_name = "..."` on
+`#[request_body]` or `#[response]` when an OpenAPI media type should expose a
+named `examples` map instead of a single `example`. Use
+`with_openapi_response_header(...)` or `#[api_response_header(...)]` to document
+response headers without changing the runtime response pipeline. Use
+`with_request_body_content_type(...)`,
 `with_response_content_type(...)`, `#[request_body(content_type = "...")]`, and
 `#[response(content_type = "...")]` for non-JSON media types such as
 `multipart/form-data`, vendor JSON, or CSV.
+
+Use `with_schema_component(...)`, `ControllerDefinition::with_schema_component(...)`,
+or `#[api_extra_model(...)]` to register extra component schemas that are only
+referenced through composition, similar to Nest Swagger's `@ApiExtraModels`:
+
+```rust
+#[controller("/cats")]
+#[api_extra_model(
+    name = "CatPageDto",
+    schema = OpenApiSchema::all_of([
+        OpenApiSchema::object_with_properties(
+            [("items", OpenApiSchema::array(OpenApiSchema::reference("CatDto")))],
+            ["items"],
+        ),
+        OpenApiSchema::object()
+            .with_property("next_cursor", OpenApiSchema::string().nullable())
+            .with_property("status", OpenApiSchema::string_enum(["fresh", "stale"])),
+    ])
+)]
+impl CatsController {
+    #[get("/page")]
+    #[response(status = 200, description = "Cat page", schema = CatPageDto)]
+    async fn page(&self) -> Result<Vec<CatDto>> {
+        Ok(self.cats.page())
+    }
+}
+```
+
+Reusable component helpers are available when multiple operations share the
+same parameter, request body, response, header, or named example:
+
+```rust
+let create_cat_body = OpenApiRequestBody::json(OpenApiSchema::reference("CreateCatDto"))
+    .with_json_named_example_ref("milo", "CreateCatExample");
+let created_cat = OpenApiResponse::json("Cat created", OpenApiSchema::reference("CatDto"))
+    .with_header_ref("x-trace-id", "TraceId")
+    .with_json_named_example_ref("created", "CreatedCatExample");
+
+let route = RouteDefinition::post_json_with_status("/cats/{id}", 201, create_cat)?
+    .with_parameter_component(
+        "CatId",
+        OpenApiParameter::path("id", OpenApiSchema::string()).with_description("Cat identifier"),
+    )
+    .with_header_component(
+        "TraceId",
+        OpenApiHeader::new(OpenApiSchema::string()).with_description("Trace identifier"),
+    )
+    .try_with_example_component("CreateCatExample", serde_json::json!({ "name": "Milo" }))?
+    .try_with_example_component(
+        "CreatedCatExample",
+        serde_json::json!({ "id": "cat-1", "name": "Milo" }),
+    )?
+    .with_request_body_component("CreateCatBody", create_cat_body)
+    .with_response_component("CreatedCat", created_cat)
+    .with_path_parameter_ref("id", "CatId")
+    .with_request_body_ref("CreateCatBody")
+    .with_response_ref(201, "CreatedCat");
+```
+
+Mapped schema helpers transform inline object schemas, which is useful for
+documenting DTO variants without introducing new Rust types for every Swagger
+view:
+
+```rust
+let create_cat = OpenApiSchema::object_with_properties(
+    [
+        ("id", OpenApiSchema::string().with_format("uuid")),
+        ("name", OpenApiSchema::string()),
+        ("kind", OpenApiSchema::string_enum(["house", "feral"])),
+    ],
+    ["id", "name"],
+);
+
+let update_cat = create_cat.clone().omit_properties(["id"]).partial();
+let cat_summary = create_cat.pick_properties(["id", "name"]);
+
+let pet = OpenApiSchema::one_of([
+    OpenApiSchema::reference("CatDto"),
+    OpenApiSchema::reference("DogDto"),
+])
+.with_discriminator_mapping(
+    "kind",
+    [
+        ("cat", "#/components/schemas/CatDto"),
+        ("dog", "#/components/schemas/DogDto"),
+    ],
+)
+.with_extension_value("x-rust-type", serde_json::json!("PetDto"));
+```
 
 OpenAPI security metadata mirrors the common Nest Swagger decorators. Builder
 routes can call `with_bearer_auth()`,
 `with_bearer_auth_named("accessToken")`,
 `with_header_api_key_auth("apiKeyAuth", "x-api-key")`,
 `with_query_api_key_auth("queryKeyAuth", "api_key")`, or
-`with_cookie_auth("cookieAuth", "sid")`. These helpers add both an operation
-security requirement and the matching `components.securitySchemes` entry.
+`with_cookie_auth("cookieAuth", "sid")`. OAuth2 and OpenID Connect can be
+registered with `with_oauth2_auth(...)` and `with_open_id_connect_auth(...)`.
+These helpers add both an operation security requirement and the matching
+`components.securitySchemes` entry.
 Use `with_api_security("oauth2", ["cats:read"])` or
 `#[api_security("oauth2", scopes = ["cats:read"])]` when the route should
 reference a custom scheme that is managed by surrounding OpenAPI tooling.
@@ -1205,6 +1348,18 @@ impl CatsController {
     #[api_key_auth(name = "x-api-key")]
     #[api_cookie_auth(name = "sid")]
     #[api_security("oauth2", scopes = ["cats:read"])]
+    #[oauth2_auth(
+        name = "oauth2",
+        flow = "authorization_code",
+        authorization_url = "https://auth.example.com/oauth/authorize",
+        token_url = "https://auth.example.com/oauth/token",
+        scopes = ["cats:read"],
+    )]
+    #[open_id_connect_auth(
+        name = "openId",
+        url = "https://auth.example.com/.well-known/openid-configuration",
+        scopes = ["openid", "profile"],
+    )]
     async fn find_one(&self, #[param("id")] id: String) -> Result<CatDto> {
         Ok(self.cats.find_one(&id))
     }
