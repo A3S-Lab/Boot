@@ -5009,7 +5009,14 @@ src/
 ├── cache.rs      # Optional typed cache module and in-memory store
 ├── compression.rs # Optional gzip response compression interceptor
 ├── config.rs     # Optional ACL-backed typed configuration module
-├── cqrs.rs       # Optional command, query, and event buses
+├── cqrs/         # Optional command, query, and event buses
+│   ├── bus.rs         # Command, query, and event bus dispatch
+│   ├── context.rs     # Handler context and module provider access
+│   ├── definitions.rs # Type-erased handler registration definitions
+│   ├── erased.rs      # Internal typed-to-erased handler adapters
+│   ├── handlers.rs    # Public handler traits
+│   ├── messages.rs    # Public command, query, and event marker traits
+│   └── module.rs      # Provider-backed CQRS module
 ├── database.rs   # Optional provider-backed database facade and backend traits
 ├── discovery.rs  # Runtime discovery snapshots and metadata reflector
 ├── events.rs     # Optional in-process application event emitter module
@@ -5039,7 +5046,15 @@ src/
 │   ├── http_methods.rs # Shared HTTP method collection helpers
 │   └── rate_limit.rs  # In-memory rate limiting guard
 ├── serialization.rs # Adapter-neutral JSON response shaping interceptor
-├── session.rs    # Optional provider-backed session store and cookie pipeline
+├── session/      # Optional provider-backed session store and cookie pipeline
+│   ├── handle.rs      # Request-bound session handle
+│   ├── id.rs          # Session id generation
+│   ├── interceptor.rs # Session cookie persistence
+│   ├── manager.rs     # Session manager facade
+│   ├── middleware.rs  # Session binding middleware
+│   ├── module.rs      # Session module providers
+│   ├── options.rs     # Session cookie and store options
+│   └── store.rs       # Session store trait and in-memory store
 ├── static_files.rs # Optional provider-backed static file module
 ├── testing.rs    # Nest-style test module builder and compiled testing module
 ├── transport/    # Adapter-neutral microservice message patterns and transports
