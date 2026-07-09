@@ -3,7 +3,9 @@ use crate::{
     BootApplication, BootApplicationBuilder, BootError, BootRequest, BootResponse,
     ControllerDefinition, DynamicModule, ExceptionFilter, Guard, Interceptor,
     MessagePatternDefinition, Module, ModuleRef, Pipe, ProviderDefinition, ProviderToken, Result,
-    RouteDefinition, WebSocketGatewayDefinition,
+    RouteDefinition, TransportExceptionFilter, TransportGuard, TransportInterceptor, TransportPipe,
+    WebSocketExceptionFilter, WebSocketGatewayDefinition, WebSocketGuard, WebSocketInterceptor,
+    WebSocketPipe,
 };
 use std::sync::Arc;
 
@@ -160,6 +162,23 @@ impl TestingModuleBuilder {
         self
     }
 
+    pub fn override_module<M>(mut self, target_name: impl Into<String>, module: M) -> Self
+    where
+        M: Module,
+    {
+        self.app = self.app.override_module(target_name, module);
+        self
+    }
+
+    pub fn override_module_arc(
+        mut self,
+        target_name: impl Into<String>,
+        module: Arc<dyn Module>,
+    ) -> Self {
+        self.app = self.app.override_module_arc(target_name, module);
+        self
+    }
+
     pub fn override_guard<T, G>(mut self, guard: G) -> Self
     where
         T: Guard,
@@ -197,6 +216,86 @@ impl TestingModuleBuilder {
         self
     }
 
+    pub fn override_websocket_pipe<T, P>(mut self, pipe: P) -> Self
+    where
+        T: WebSocketPipe,
+        P: WebSocketPipe,
+    {
+        self.pipeline_overrides
+            .override_websocket_pipe::<T, P>(pipe);
+        self
+    }
+
+    pub fn override_websocket_guard<T, G>(mut self, guard: G) -> Self
+    where
+        T: WebSocketGuard,
+        G: WebSocketGuard,
+    {
+        self.pipeline_overrides
+            .override_websocket_guard::<T, G>(guard);
+        self
+    }
+
+    pub fn override_websocket_interceptor<T, I>(mut self, interceptor: I) -> Self
+    where
+        T: WebSocketInterceptor,
+        I: WebSocketInterceptor,
+    {
+        self.pipeline_overrides
+            .override_websocket_interceptor::<T, I>(interceptor);
+        self
+    }
+
+    pub fn override_websocket_filter<T, F>(mut self, filter: F) -> Self
+    where
+        T: WebSocketExceptionFilter,
+        F: WebSocketExceptionFilter,
+    {
+        self.pipeline_overrides
+            .override_websocket_filter::<T, F>(filter);
+        self
+    }
+
+    pub fn override_transport_pipe<T, P>(mut self, pipe: P) -> Self
+    where
+        T: TransportPipe,
+        P: TransportPipe,
+    {
+        self.pipeline_overrides
+            .override_transport_pipe::<T, P>(pipe);
+        self
+    }
+
+    pub fn override_transport_guard<T, G>(mut self, guard: G) -> Self
+    where
+        T: TransportGuard,
+        G: TransportGuard,
+    {
+        self.pipeline_overrides
+            .override_transport_guard::<T, G>(guard);
+        self
+    }
+
+    pub fn override_transport_interceptor<T, I>(mut self, interceptor: I) -> Self
+    where
+        T: TransportInterceptor,
+        I: TransportInterceptor,
+    {
+        self.pipeline_overrides
+            .override_transport_interceptor::<T, I>(interceptor);
+        self
+    }
+
+    pub fn override_transport_filter<T, F>(mut self, filter: F) -> Self
+    where
+        T: TransportExceptionFilter,
+        F: TransportExceptionFilter,
+    {
+        self.pipeline_overrides
+            .override_transport_filter::<T, F>(filter);
+        self
+    }
+
     pub fn compile(self) -> Result<TestingModule> {
         let mut app = self.app.import(self.module).build()?;
         if !self.pipeline_overrides.is_empty() {
@@ -204,6 +303,16 @@ impl TestingModuleBuilder {
                 .routes
                 .into_iter()
                 .map(|route| route.with_pipeline_overrides(&self.pipeline_overrides))
+                .collect();
+            app.gateways = app
+                .gateways
+                .into_iter()
+                .map(|gateway| gateway.with_pipeline_overrides(&self.pipeline_overrides))
+                .collect();
+            app.message_patterns = app
+                .message_patterns
+                .into_iter()
+                .map(|pattern| pattern.with_pipeline_overrides(&self.pipeline_overrides))
                 .collect();
         }
         Ok(TestingModule { app })
@@ -216,6 +325,16 @@ impl TestingModuleBuilder {
                 .routes
                 .into_iter()
                 .map(|route| route.with_pipeline_overrides(&self.pipeline_overrides))
+                .collect();
+            app.gateways = app
+                .gateways
+                .into_iter()
+                .map(|gateway| gateway.with_pipeline_overrides(&self.pipeline_overrides))
+                .collect();
+            app.message_patterns = app
+                .message_patterns
+                .into_iter()
+                .map(|pattern| pattern.with_pipeline_overrides(&self.pipeline_overrides))
                 .collect();
         }
         Ok(TestingModule { app })

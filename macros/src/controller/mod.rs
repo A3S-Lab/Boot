@@ -1,4 +1,4 @@
-mod attrs;
+pub(crate) mod attrs;
 mod handler_arguments;
 mod handlers;
 mod input;
@@ -7,7 +7,7 @@ mod route_openapi;
 mod route_validation;
 mod routing;
 
-pub(crate) use input::{MethodArg, RouteMethodInput};
+pub(crate) use input::{MethodArg, ProtocolExtractor, ProtocolPayloadExtractor, RouteMethodInput};
 
 use quote::quote;
 use syn::{Attribute, ImplItem, ImplItemFn, ItemImpl, LitInt, LitStr, Result};
@@ -26,8 +26,9 @@ use handlers::{
     json_body_handler, raw_or_json_request_handler, rendered_view_handler,
 };
 use route_definition::{
-    host_route_definition, metadata_route_definition, pipeline_route_definition,
-    response_route_definition, serialization_route_definition, version_route_definition,
+    cache_route_definition, host_route_definition, metadata_route_definition,
+    pipeline_route_definition, response_route_definition, serialization_route_definition,
+    version_route_definition,
 };
 use route_openapi::openapi_route_definition;
 use route_validation::validation_route_definition;
@@ -57,6 +58,8 @@ pub(crate) fn expand_controller(
         take_controller_openapi_attrs(&clean_impl_attrs);
     let (clean_impl_attrs, controller_metadata, controller_metadata_errors) =
         take_controller_metadata_attrs(&clean_impl_attrs);
+    let (clean_impl_attrs, controller_cache, controller_cache_errors) =
+        take_controller_cache_attrs(&clean_impl_attrs);
     let (clean_impl_attrs, controller_pipeline, controller_pipeline_errors) =
         take_controller_pipeline_attrs(&clean_impl_attrs);
     let (clean_impl_attrs, controller_host, controller_host_errors) =
@@ -75,6 +78,9 @@ pub(crate) fn expand_controller(
     for error in controller_metadata_errors {
         push_error(&mut errors, error);
     }
+    for error in controller_cache_errors {
+        push_error(&mut errors, error);
+    }
     for error in controller_pipeline_errors {
         push_error(&mut errors, error);
     }
@@ -89,6 +95,7 @@ pub(crate) fn expand_controller(
     }
     let controller_openapi = controller_openapi.tokens();
     let controller_metadata = controller_metadata.tokens();
+    let controller_cache = controller_cache.tokens();
     let controller_pipeline = controller_pipeline.tokens();
     let controller_host = controller_host.tokens();
     let controller_version = controller_version.tokens();
@@ -109,6 +116,7 @@ pub(crate) fn expand_controller(
         let (clean_attrs, openapi_specs, openapi_errors) = take_route_openapi_attrs(&clean_attrs);
         let (clean_attrs, metadata_specs, metadata_errors) =
             take_route_metadata_attrs(&clean_attrs);
+        let (clean_attrs, cache_specs, cache_errors) = take_route_cache_attrs(&clean_attrs);
         let (clean_attrs, http_code, http_code_errors) = take_route_http_code_attrs(&clean_attrs);
         let (clean_attrs, response_specs, response_errors) =
             take_route_response_attrs(&clean_attrs);
@@ -130,6 +138,9 @@ pub(crate) fn expand_controller(
             push_error(&mut errors, error);
         }
         for error in metadata_errors {
+            push_error(&mut errors, error);
+        }
+        for error in cache_errors {
             push_error(&mut errors, error);
         }
         for error in http_code_errors {
@@ -234,6 +245,15 @@ pub(crate) fn expand_controller(
                 ),
             );
         }
+        if method_routes.is_empty() && !cache_specs.is_empty() {
+            push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &method.sig.ident,
+                    "cache route attributes must be used on route methods",
+                ),
+            );
+        }
         if method_routes.is_empty() && route_validation.is_present() {
             push_error(
                 &mut errors,
@@ -269,6 +289,7 @@ pub(crate) fn expand_controller(
                 validation_options,
                 validation_skipped,
                 &metadata_specs,
+                &cache_specs,
                 http_code.as_ref(),
                 &response_specs,
                 render_spec.as_ref(),
@@ -302,6 +323,9 @@ pub(crate) fn expand_controller(
                 )*
                 #(
                     __a3s_boot_controller = __a3s_boot_controller.#controller_metadata?;
+                )*
+                #(
+                    __a3s_boot_controller = __a3s_boot_controller.#controller_cache;
                 )*
                 #(
                     __a3s_boot_controller = __a3s_boot_controller.#controller_pipeline;
@@ -351,6 +375,7 @@ fn route_registration(
     validation_options: Option<ValidationAttrOptions>,
     validation_skipped: bool,
     metadata_specs: &[MetadataSpec],
+    cache_specs: &[CacheSpec],
     http_code: Option<&LitInt>,
     response_specs: &[RouteResponseSpec],
     render_spec: Option<&RenderSpec>,
@@ -515,6 +540,8 @@ fn route_registration(
     )?;
 
     let route_definition = metadata_route_definition(route_definition, metadata_specs);
+
+    let route_definition = cache_route_definition(route_definition, cache_specs);
 
     let route_definition = pipeline_route_definition(route_definition, pipeline_specs);
 

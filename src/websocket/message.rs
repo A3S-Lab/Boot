@@ -1,4 +1,5 @@
-use crate::{BootError, BoxFuture, Result};
+use crate::{validate_value, BootError, BoxFuture, Result, Validate};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::future::Future;
@@ -28,6 +29,67 @@ impl WebSocketMessage {
         &self.data
     }
 
+    pub fn data_as<T>(&self) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        serde_json::from_value(self.data.clone())
+            .map_err(|err| BootError::BadRequest(err.to_string()))
+    }
+
+    pub fn data_field(&self, name: &str) -> Result<Option<Value>> {
+        let Value::Object(fields) = &self.data else {
+            return Err(BootError::BadRequest(
+                "expected JSON object websocket data".to_string(),
+            ));
+        };
+
+        Ok(fields.get(name).filter(|value| !value.is_null()).cloned())
+    }
+
+    pub fn data_field_as<T>(&self, name: &str) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        let Some(value) = self.data_field(name)? else {
+            return Err(BootError::BadRequest(format!(
+                "missing websocket data field: {name}"
+            )));
+        };
+        deserialize_data_field("websocket data field", name, value)
+    }
+
+    pub fn optional_data_field_as<T>(&self, name: &str) -> Result<Option<T>>
+    where
+        T: DeserializeOwned,
+    {
+        self.data_field(name)?
+            .map(|value| deserialize_data_field("websocket data field", name, value))
+            .transpose()
+    }
+
+    pub fn data_field_string(&self, name: &str) -> Result<String> {
+        let Some(value) = self.data_field(name)? else {
+            return Err(BootError::BadRequest(format!(
+                "missing websocket data field: {name}"
+            )));
+        };
+        data_field_value_to_string(value)
+    }
+
+    pub fn optional_data_field_string(&self, name: &str) -> Result<Option<String>> {
+        self.data_field(name)?
+            .map(data_field_value_to_string)
+            .transpose()
+    }
+
+    pub fn validated_data<T>(&self) -> Result<T>
+    where
+        T: DeserializeOwned + Validate,
+    {
+        validate_value(self.data_as::<T>()?)
+    }
+
     pub fn text(event: impl Into<String>, data: impl Into<String>) -> Self {
         Self::new(event, Value::String(data.into()))
     }
@@ -40,6 +102,26 @@ impl WebSocketMessage {
             event,
             serde_json::to_value(data).map_err(|err| BootError::Internal(err.to_string()))?,
         ))
+    }
+}
+
+fn deserialize_data_field<T>(label: &str, name: &str, value: Value) -> Result<T>
+where
+    T: DeserializeOwned,
+{
+    serde_json::from_value(value)
+        .map_err(|error| BootError::BadRequest(format!("invalid {label} {name}: {error}")))
+}
+
+fn data_field_value_to_string(value: Value) -> Result<String> {
+    match value {
+        Value::String(value) => Ok(value),
+        Value::Bool(value) => Ok(value.to_string()),
+        Value::Number(value) => Ok(value.to_string()),
+        Value::Array(_) | Value::Object(_) => {
+            serde_json::to_string(&value).map_err(|error| BootError::BadRequest(error.to_string()))
+        }
+        Value::Null => Ok("null".to_string()),
     }
 }
 

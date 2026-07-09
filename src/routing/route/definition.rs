@@ -8,6 +8,8 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+#[cfg(feature = "cache")]
+use std::time::Duration;
 
 use crate::routing::handler::{RequestScopedRouteHandler, RouteHandler};
 use crate::routing::host::{
@@ -249,6 +251,24 @@ impl RouteDefinition {
     pub fn with_metadata_value(mut self, key: impl Into<String>, value: Value) -> Self {
         self.metadata.insert(key.into(), value);
         self
+    }
+
+    #[cfg(feature = "cache")]
+    pub fn with_cache_key(self, key: impl Into<String>) -> Self {
+        self.with_metadata_value(crate::CACHE_KEY_METADATA, Value::String(key.into()))
+    }
+
+    #[cfg(feature = "cache")]
+    pub fn with_cache_ttl(self, ttl: Duration) -> Self {
+        self.with_metadata_value(
+            crate::CACHE_TTL_METADATA,
+            Value::Number(serde_json::Number::from(ttl.as_millis() as u64)),
+        )
+    }
+
+    #[cfg(feature = "cache")]
+    pub fn without_cache(self) -> Self {
+        self.with_metadata_value(crate::CACHE_DISABLED_METADATA, Value::Bool(true))
     }
 
     pub(crate) fn with_metadata_defaults(mut self, metadata: &BTreeMap<String, Value>) -> Self {

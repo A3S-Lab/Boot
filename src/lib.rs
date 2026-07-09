@@ -70,13 +70,15 @@ pub use a3s_boot_macros::{
     all, api_cookie_auth, api_header, api_key_auth, api_param, api_query, api_security,
     apply_decorators, bearer_auth, body, catch, controller, cookie, cookies, delete, delete_json,
     event_pattern, extract, get, get_json, head, header, headers, hide_from_openapi, host,
-    host_param, http_code, injectable, ip, message_controller, message_pattern, metadata, module,
-    on_gateway_connection, on_gateway_disconnect, on_gateway_init, operation, options, param,
-    params, patch, patch_json, post, post_json, put, put_json, query, redirect, render, request,
-    request_body, res, response, serialize, skip_validation, sse, subscribe_message, tag,
-    use_filter, use_guard, use_interceptor, use_pipe, validate, version, version_neutral, versions,
-    websocket_gateway, ValidationSchema,
+    host_param, http_code, injectable, ip, message_body, message_controller, message_pattern,
+    metadata, module, on_gateway_connection, on_gateway_disconnect, on_gateway_init, operation,
+    options, param, params, patch, patch_json, payload, post, post_json, put, put_json, query,
+    redirect, render, request, request_body, res, response, serialize, skip_validation, sse,
+    subscribe_message, tag, use_filter, use_guard, use_interceptor, use_pipe, validate, version,
+    version_neutral, versions, websocket_gateway, ValidationSchema,
 };
+#[cfg(all(feature = "macros", feature = "cache"))]
+pub use a3s_boot_macros::{cache_key, cache_ttl};
 #[cfg(all(feature = "macros", feature = "schedule"))]
 pub use a3s_boot_macros::{cron, interval, schedule, timeout};
 #[cfg(all(feature = "macros", feature = "events"))]
@@ -98,7 +100,10 @@ pub use auth::{
     AUTH_ROLES_METADATA, AUTH_SCOPES_METADATA, AUTH_STRATEGY_METADATA,
 };
 #[cfg(feature = "cache")]
-pub use cache::{Cache, CacheModule, CacheOptions, CacheStore, InMemoryCacheStore};
+pub use cache::{
+    Cache, CacheInterceptor, CacheModule, CacheOptions, CacheStore, InMemoryCacheStore,
+    CACHE_DISABLED_METADATA, CACHE_KEY_METADATA, CACHE_TTL_METADATA,
+};
 #[cfg(feature = "compression")]
 pub use compression::{CompressionInterceptor, CompressionOptions};
 #[cfg(feature = "config")]
@@ -162,8 +167,9 @@ pub use openapi_security::{
 pub use pipeline::{
     catch_errors, CatchFilter, ExceptionFilter, ExecutionContext, ExecutionInterceptor,
     ExecutionProtocol, ExecutionTransportKind, Guard, Interceptor, Middleware, MiddlewareConsumer,
-    MiddlewareConsumerBuilder, MiddlewareOutcome, MiddlewareRoute, Pipe, TransportExecutionContext,
-    WebSocketExecutionContext,
+    MiddlewareConsumerBuilder, MiddlewareOutcome, MiddlewareRoute, Pipe, TransportExceptionFilter,
+    TransportExceptionResponse, TransportExecutionContext, WebSocketExceptionFilter,
+    WebSocketExceptionResponse, WebSocketExecutionContext,
 };
 pub use provider::{
     FromModuleRef, ModuleRef, ProviderBeforeApplicationShutdown, ProviderDefinition,
@@ -173,8 +179,8 @@ pub use provider::{
 #[cfg(feature = "queue")]
 pub use queue::{
     InProcessQueueBackend, Queue, QueueBackend, QueueContext, QueueJob, QueueJobFailure,
-    QueueJobInfo, QueueJobReceipt, QueueJobState, QueueModule, QueueOptions, QueueProcessor,
-    QueueStats,
+    QueueJobInfo, QueueJobOptions, QueueJobPriority, QueueJobReceipt, QueueJobState, QueueModule,
+    QueueOptions, QueueProcessor, QueueRetryPolicy, QueueStats,
 };
 #[cfg(feature = "request-context")]
 pub use request_context::RequestContext;
@@ -229,8 +235,9 @@ pub use view::{StringTemplateViewEngine, ViewEngine, ViewModule, ViewRenderer};
 pub use websocket::{
     IntoWebSocketReply, WebSocketConnection, WebSocketContext, WebSocketGatewayConnection,
     WebSocketGatewayConnectionHook, WebSocketGatewayDefinition, WebSocketGatewayDisconnectHook,
-    WebSocketGatewayInitContext, WebSocketGatewayInitHook, WebSocketGuard, WebSocketInterceptor,
-    WebSocketMessage, WebSocketOutbound, WebSocketPipe,
+    WebSocketGatewayInitContext, WebSocketGatewayInitHook, WebSocketGatewayServer, WebSocketGuard,
+    WebSocketInterceptor, WebSocketMessage, WebSocketOutbound, WebSocketPipe,
+    WebSocketSubscriptionDefinition,
 };
 
 /// Result type used by A3S Boot.

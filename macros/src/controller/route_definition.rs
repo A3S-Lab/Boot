@@ -1,5 +1,6 @@
 use super::attrs::{
-    HostSpec, MetadataSpec, PipelineSpec, RouteResponseSpec, SerializationSpec, VersionSpec,
+    CacheSpec, HostSpec, MetadataSpec, PipelineSpec, RouteResponseSpec, SerializationSpec,
+    VersionSpec,
 };
 use quote::quote;
 use syn::Result;
@@ -13,6 +14,19 @@ pub(super) fn metadata_route_definition(
         let value = &spec.value;
         route_definition = quote! {
             (#route_definition).with_metadata(#key, #value)?
+        };
+    }
+    route_definition
+}
+
+pub(super) fn cache_route_definition(
+    mut route_definition: proc_macro2::TokenStream,
+    cache_specs: &[CacheSpec],
+) -> proc_macro2::TokenStream {
+    for spec in cache_specs {
+        let token = spec.token();
+        route_definition = quote! {
+            (#route_definition).#token
         };
     }
     route_definition

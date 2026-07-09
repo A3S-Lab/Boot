@@ -2,7 +2,13 @@ use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::{Attribute, Ident, ImplItem, ImplItemFn, ItemImpl, LitStr, Result, Token};
 
-use crate::controller::{MethodArg, RouteMethodInput};
+use crate::controller::attrs::{
+    take_controller_metadata_attrs, take_controller_pipeline_attrs, take_route_metadata_attrs,
+    take_route_pipeline_attrs, MetadataSpec, PipelineSpec,
+};
+use crate::controller::{MethodArg, ProtocolExtractor, ProtocolPayloadExtractor, RouteMethodInput};
+use crate::decorators::expand_apply_decorators_attrs;
+use crate::protocol::json_payload_binding_tokens;
 use crate::validation::{
     take_controller_validation_attrs, take_route_validation_attrs,
     AttrOptions as ValidationAttrOptions,
@@ -22,26 +28,56 @@ pub(crate) fn expand_message_controller(
     let self_ty = item_impl.self_ty.clone();
     let mut patterns = Vec::new();
     let mut errors: Option<syn::Error> = None;
+    let (impl_attrs, impl_decorator_errors) = expand_apply_decorators_attrs(&item_impl.attrs);
+    for error in impl_decorator_errors {
+        push_error(&mut errors, error);
+    }
     let (clean_impl_attrs, controller_validation, controller_validation_errors) =
-        take_controller_validation_attrs(&item_impl.attrs);
+        take_controller_validation_attrs(&impl_attrs);
+    let (clean_impl_attrs, controller_metadata, controller_metadata_errors) =
+        take_controller_metadata_attrs(&clean_impl_attrs);
+    let (clean_impl_attrs, controller_pipeline, controller_pipeline_errors) =
+        take_controller_pipeline_attrs(&clean_impl_attrs);
     item_impl.attrs = clean_impl_attrs;
     for error in controller_validation_errors {
         push_error(&mut errors, error);
     }
+    for error in controller_metadata_errors {
+        push_error(&mut errors, error);
+    }
+    for error in controller_pipeline_errors {
+        push_error(&mut errors, error);
+    }
+    let controller_metadata = controller_metadata.tokens();
+    let controller_pipeline = controller_pipeline.tokens();
 
     for item in &mut item_impl.items {
         let ImplItem::Fn(method) = item else {
             continue;
         };
 
-        let (clean_attrs, specs, pattern_errors) = take_message_pattern_attrs(&method.attrs);
+        let (method_attrs, decorator_errors) = expand_apply_decorators_attrs(&method.attrs);
+        for error in decorator_errors {
+            push_error(&mut errors, error);
+        }
+        let (clean_attrs, specs, pattern_errors) = take_message_pattern_attrs(&method_attrs);
         let (clean_attrs, route_validation, validation_errors) =
             take_route_validation_attrs(&clean_attrs);
+        let (clean_attrs, metadata_specs, metadata_errors) =
+            take_route_metadata_attrs(&clean_attrs);
+        let (clean_attrs, pipeline_specs, pipeline_errors) =
+            take_route_pipeline_attrs(&clean_attrs);
         method.attrs = clean_attrs;
         for error in pattern_errors {
             push_error(&mut errors, error);
         }
         for error in validation_errors {
+            push_error(&mut errors, error);
+        }
+        for error in metadata_errors {
+            push_error(&mut errors, error);
+        }
+        for error in pipeline_errors {
             push_error(&mut errors, error);
         }
         if specs.is_empty() && route_validation.is_present() {
@@ -50,6 +86,24 @@ pub(crate) fn expand_message_controller(
                 syn::Error::new_spanned(
                     &method.sig.ident,
                     "validation attributes must be used on message pattern methods",
+                ),
+            );
+        }
+        if specs.is_empty() && !pipeline_specs.is_empty() {
+            push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &method.sig.ident,
+                    "pipeline attributes must be used on message pattern methods",
+                ),
+            );
+        }
+        if specs.is_empty() && !metadata_specs.is_empty() {
+            push_error(
+                &mut errors,
+                syn::Error::new_spanned(
+                    &method.sig.ident,
+                    "metadata attributes must be used on message pattern methods",
                 ),
             );
         }
@@ -78,7 +132,16 @@ pub(crate) fn expand_message_controller(
 
         let validation_options = route_validation.enabled_options(controller_validation);
         for spec in specs {
-            match message_pattern_registration(method, input.clone(), spec, validation_options) {
+            match message_pattern_registration(
+                method,
+                input.clone(),
+                spec,
+                validation_options,
+                &controller_metadata,
+                &metadata_specs,
+                &controller_pipeline,
+                &pipeline_specs,
+            ) {
                 Ok(pattern) => patterns.push(pattern),
                 Err(error) => push_error(&mut errors, error),
             }
@@ -142,80 +205,80 @@ fn message_pattern_registration(
     input: RouteMethodInput,
     spec: MessagePatternSpec,
     validation_options: Option<ValidationAttrOptions>,
+    controller_metadata: &[proc_macro2::TokenStream],
+    metadata_specs: &[MetadataSpec],
+    controller_pipeline: &[proc_macro2::TokenStream],
+    pipeline_specs: &[PipelineSpec],
 ) -> Result<proc_macro2::TokenStream> {
     let method_ident = &method.sig.ident;
     let pattern = spec.args.pattern;
     let raw = spec.args.raw.is_some();
+    let args = message_handler_args(input)?;
     let definition = match spec.kind {
         MessagePatternAttrKind::Message => {
-            let handler = message_request_handler(method_ident, input.clone(), raw)?;
+            let handler = message_request_handler(method_ident, raw, args.clone());
             quote! {
                 ::a3s_boot::MessagePatternDefinition::request(#pattern, #handler)?
             }
         }
         MessagePatternAttrKind::Event => {
-            let handler = message_event_handler(method_ident, input.clone())?;
+            let handler = message_event_handler(method_ident, args.clone());
             quote! {
                 ::a3s_boot::MessagePatternDefinition::event(#pattern, #handler)?
             }
         }
     };
 
-    let definition = message_validation_definition(definition, input, validation_options)?;
+    let definition = message_validation_definition(definition, &args, validation_options)?;
+    let definition = message_metadata_definition(definition, controller_metadata, metadata_specs);
+    let pipeline_specs = pipeline_specs.iter().map(PipelineSpec::token);
+    let definition = quote! {
+        (#definition)#(.#controller_pipeline)*#(.#pipeline_specs)*
+    };
     Ok(definition)
+}
+
+fn message_metadata_definition(
+    mut definition: proc_macro2::TokenStream,
+    controller_metadata: &[proc_macro2::TokenStream],
+    metadata_specs: &[MetadataSpec],
+) -> proc_macro2::TokenStream {
+    for metadata in controller_metadata {
+        definition = quote! {
+            (#definition).#metadata?
+        };
+    }
+    for spec in metadata_specs {
+        let key = &spec.key;
+        let value = &spec.value;
+        definition = quote! {
+            (#definition).with_metadata(#key, #value)?
+        };
+    }
+    definition
 }
 
 fn message_request_handler(
     method_ident: &Ident,
-    input: RouteMethodInput,
     raw: bool,
-) -> Result<proc_macro2::TokenStream> {
+    args: MessageHandlerArgs,
+) -> proc_macro2::TokenStream {
     let controller_name = format_ident!("__a3s_boot_message_{}", method_ident);
-    Ok(match input.into_legacy_arg()? {
-        Some(arg) if is_type_ident(&arg.ty, "TransportMessage") => {
-            let MethodArg { ident, ty, .. } = arg;
-            let call = message_request_call(method_ident, &controller_name, raw, quote!(#ident));
-            quote! {
-                {
-                    let #controller_name = ::std::sync::Arc::clone(&self);
-                    move |__a3s_boot_message: ::a3s_boot::TransportMessage| {
-                        let #controller_name = ::std::sync::Arc::clone(&#controller_name);
-                        async move {
-                            let #ident: #ty = __a3s_boot_message;
-                            #call
-                        }
-                    }
+    let bindings = args.bindings();
+    let call_args = args.call_args();
+    let call = message_request_call(method_ident, &controller_name, raw, quote!(#(#call_args),*));
+    quote! {
+        {
+            let #controller_name = ::std::sync::Arc::clone(&self);
+            move |__a3s_boot_message: ::a3s_boot::TransportMessage| {
+                let #controller_name = ::std::sync::Arc::clone(&#controller_name);
+                async move {
+                    #(#bindings)*
+                    #call
                 }
             }
         }
-        Some(MethodArg { ident, ty, .. }) => {
-            let call = message_request_call(method_ident, &controller_name, raw, quote!(#ident));
-            quote! {
-                {
-                    let #controller_name = ::std::sync::Arc::clone(&self);
-                    move |__a3s_boot_message: ::a3s_boot::TransportMessage| {
-                        let #controller_name = ::std::sync::Arc::clone(&#controller_name);
-                        async move {
-                            let #ident: #ty = __a3s_boot_message.data_as::<#ty>()?;
-                            #call
-                        }
-                    }
-                }
-            }
-        }
-        None => {
-            let call = message_request_call(method_ident, &controller_name, raw, quote!());
-            quote! {
-                {
-                    let #controller_name = ::std::sync::Arc::clone(&self);
-                    move |_message: ::a3s_boot::TransportMessage| {
-                        let #controller_name = ::std::sync::Arc::clone(&#controller_name);
-                        async move { #call }
-                    }
-                }
-            }
-        }
-    })
+    }
 }
 
 fn message_request_call(
@@ -240,78 +303,50 @@ fn message_request_call(
 
 fn message_event_handler(
     method_ident: &Ident,
-    input: RouteMethodInput,
-) -> Result<proc_macro2::TokenStream> {
+    args: MessageHandlerArgs,
+) -> proc_macro2::TokenStream {
     let controller_name = format_ident!("__a3s_boot_event_{}", method_ident);
-    Ok(match input.into_legacy_arg()? {
-        Some(arg) if is_type_ident(&arg.ty, "TransportMessage") => {
-            let MethodArg { ident, ty, .. } = arg;
-            quote! {
-                {
-                    let #controller_name = ::std::sync::Arc::clone(&self);
-                    move |__a3s_boot_message: ::a3s_boot::TransportMessage| {
-                        let #controller_name = ::std::sync::Arc::clone(&#controller_name);
-                        async move {
-                            let #ident: #ty = __a3s_boot_message;
-                            let _ = #controller_name.#method_ident(#ident).await?;
-                            Ok(())
-                        }
-                    }
+    let bindings = args.bindings();
+    let call_args = args.call_args();
+    quote! {
+        {
+            let #controller_name = ::std::sync::Arc::clone(&self);
+            move |__a3s_boot_message: ::a3s_boot::TransportMessage| {
+                let #controller_name = ::std::sync::Arc::clone(&#controller_name);
+                async move {
+                    #(#bindings)*
+                    let _ = #controller_name.#method_ident(#(#call_args),*).await?;
+                    Ok(())
                 }
             }
         }
-        Some(MethodArg { ident, ty, .. }) => quote! {
-            {
-                let #controller_name = ::std::sync::Arc::clone(&self);
-                move |__a3s_boot_message: ::a3s_boot::TransportMessage| {
-                    let #controller_name = ::std::sync::Arc::clone(&#controller_name);
-                    async move {
-                        let #ident: #ty = __a3s_boot_message.data_as::<#ty>()?;
-                        let _ = #controller_name.#method_ident(#ident).await?;
-                        Ok(())
-                    }
-                }
-            }
-        },
-        None => quote! {
-            {
-                let #controller_name = ::std::sync::Arc::clone(&self);
-                move |_message: ::a3s_boot::TransportMessage| {
-                    let #controller_name = ::std::sync::Arc::clone(&#controller_name);
-                    async move {
-                        let _ = #controller_name.#method_ident().await?;
-                        Ok(())
-                    }
-                }
-            }
-        },
-    })
+    }
 }
 
 fn message_validation_definition(
     definition: proc_macro2::TokenStream,
-    input: RouteMethodInput,
+    args: &MessageHandlerArgs,
     validation_options: Option<ValidationAttrOptions>,
 ) -> Result<proc_macro2::TokenStream> {
     let Some(options) = validation_options else {
         return Ok(definition);
     };
 
-    let Some(arg) = input.into_legacy_arg()? else {
+    let Some(arg) = args.whole_payload_arg() else {
         return Err(syn::Error::new(
             proc_macro2::Span::call_site(),
-            "message validation requires one typed payload argument",
+            "message validation requires one whole typed payload argument",
         ));
     };
 
     if is_type_ident(&arg.ty, "TransportMessage") {
         return Err(syn::Error::new_spanned(
-            arg.ident,
+            arg.ident.clone(),
             "message validation requires a DTO payload argument, not TransportMessage",
         ));
     }
 
-    let ty = arg.ty;
+    let ty = &arg.ty;
     if options.is_empty() {
         Ok(quote! {
             (#definition).with_payload_validation::<#ty>()
@@ -322,6 +357,166 @@ fn message_validation_definition(
             (#definition).with_payload_validation_options::<#ty>(#options)
         })
     }
+}
+
+#[derive(Clone)]
+struct MessageHandlerArgs {
+    args: Vec<MessageHandlerArg>,
+}
+
+impl MessageHandlerArgs {
+    fn bindings(&self) -> Vec<proc_macro2::TokenStream> {
+        self.args
+            .iter()
+            .map(|arg| {
+                let MethodArg { ident, ty, .. } = &arg.arg;
+                match &arg.kind {
+                    MessageHandlerArgKind::Message => quote! {
+                        let #ident: #ty = __a3s_boot_message.clone();
+                    },
+                    MessageHandlerArgKind::Payload(extractor) => json_payload_binding_tokens(
+                        ident.clone(),
+                        ty.clone(),
+                        extractor.clone(),
+                        |value_ty| quote!(__a3s_boot_message.data_as::<#value_ty>()),
+                        |value_ty, name| {
+                            quote!(__a3s_boot_message.data_field_as::<#value_ty>(#name))
+                        },
+                        |value_ty, name| {
+                            quote!(__a3s_boot_message.optional_data_field_as::<#value_ty>(#name))
+                        },
+                        |name| quote!(__a3s_boot_message.data_field_string(#name)),
+                        |name| quote!(__a3s_boot_message.optional_data_field_string(#name)),
+                    ),
+                }
+            })
+            .collect()
+    }
+
+    fn call_args(&self) -> Vec<Ident> {
+        self.args.iter().map(|arg| arg.arg.ident.clone()).collect()
+    }
+
+    fn whole_payload_arg(&self) -> Option<&MethodArg> {
+        self.args.iter().find_map(|arg| match &arg.kind {
+            MessageHandlerArgKind::Payload(ProtocolPayloadExtractor::Whole) => Some(&arg.arg),
+            MessageHandlerArgKind::Payload(ProtocolPayloadExtractor::Field(_))
+            | MessageHandlerArgKind::Message => None,
+        })
+    }
+}
+
+#[derive(Clone)]
+struct MessageHandlerArg {
+    arg: MethodArg,
+    kind: MessageHandlerArgKind,
+}
+
+#[derive(Clone)]
+enum MessageHandlerArgKind {
+    Message,
+    Payload(ProtocolPayloadExtractor),
+}
+
+fn message_handler_args(input: RouteMethodInput) -> Result<MessageHandlerArgs> {
+    if input.has_extractors() {
+        return Err(syn::Error::new_spanned(
+            input
+                .args
+                .iter()
+                .find(|arg| arg.extractor.is_some())
+                .map(|arg| arg.ident.clone())
+                .unwrap_or_else(|| format_ident!("argument")),
+            "message pattern methods do not support route extractor attributes",
+        ));
+    }
+
+    if !input.has_protocol_extractors() {
+        if input.args.len() > 1 {
+            return Err(syn::Error::new_spanned(
+                input.args[1].ident.clone(),
+                "message pattern methods without #[payload] can accept at most one argument after &self",
+            ));
+        }
+
+        return Ok(MessageHandlerArgs {
+            args: input
+                .args
+                .into_iter()
+                .map(|arg| {
+                    let kind = if is_type_ident(&arg.ty, "TransportMessage") {
+                        MessageHandlerArgKind::Message
+                    } else {
+                        MessageHandlerArgKind::Payload(ProtocolPayloadExtractor::Whole)
+                    };
+                    MessageHandlerArg { arg, kind }
+                })
+                .collect(),
+        });
+    }
+
+    let mut whole_payload_arg = None;
+    let mut field_payload_arg = None;
+    let mut args = Vec::new();
+
+    for arg in input.args {
+        let Some(extractor) = arg.protocol_extractor.clone() else {
+            return Err(syn::Error::new_spanned(
+                arg.ident,
+                "message pattern methods must use #[payload] on every argument when any protocol payload extractor is used",
+            ));
+        };
+
+        let payload = match extractor {
+            ProtocolExtractor::Payload(payload) => payload,
+            ProtocolExtractor::MessageBody(_) => {
+                return Err(syn::Error::new_spanned(
+                    arg.ident,
+                    "message pattern methods support #[payload], not #[message_body]",
+                ));
+            }
+        };
+
+        match &payload {
+            ProtocolPayloadExtractor::Whole => {
+                if is_type_ident(&arg.ty, "TransportMessage") {
+                    return Err(syn::Error::new_spanned(
+                        arg.ident,
+                        "whole #[payload] arguments must be DTOs; use an undecorated TransportMessage argument for raw access",
+                    ));
+                }
+                if let Some(existing) = whole_payload_arg {
+                    return Err(syn::Error::new_spanned(
+                        existing,
+                        "message pattern methods can accept at most one whole #[payload] argument",
+                    ));
+                }
+                if let Some(existing) = &field_payload_arg {
+                    return Err(syn::Error::new_spanned(
+                        existing,
+                        "message pattern methods cannot combine whole #[payload] arguments with #[payload(\"field\")] arguments",
+                    ));
+                }
+                whole_payload_arg = Some(arg.ident.clone());
+            }
+            ProtocolPayloadExtractor::Field(_) => {
+                if let Some(existing) = &whole_payload_arg {
+                    return Err(syn::Error::new_spanned(
+                        existing,
+                        "message pattern methods cannot combine whole #[payload] arguments with #[payload(\"field\")] arguments",
+                    ));
+                }
+                field_payload_arg.get_or_insert_with(|| arg.ident.clone());
+            }
+        }
+
+        args.push(MessageHandlerArg {
+            arg,
+            kind: MessageHandlerArgKind::Payload(payload),
+        });
+    }
+
+    Ok(MessageHandlerArgs { args })
 }
 
 #[derive(Clone, Copy)]

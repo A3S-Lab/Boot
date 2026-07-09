@@ -3,8 +3,9 @@ use quote::quote;
 
 pub(crate) fn route_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
     let item = proc_macro2::TokenStream::from(item);
-    let message =
-        format!("#[{name}] must be used inside an impl block annotated with #[controller]");
+    let message = format!(
+        "#[{name}] must be used inside an impl block annotated with #[controller], #[message_controller], or #[websocket_gateway]"
+    );
     quote! {
         compile_error!(#message);
         #item
@@ -15,6 +16,18 @@ pub(crate) fn route_attribute_outside_controller(name: &str, item: TokenStream) 
 pub(crate) fn extractor_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
     let item = proc_macro2::TokenStream::from(item);
     let message = format!("#[{name}] must be used on a route method argument inside #[controller]");
+    quote! {
+        compile_error!(#message);
+        #item
+    }
+    .into()
+}
+
+pub(crate) fn protocol_extractor_attribute_outside(name: &str, item: TokenStream) -> TokenStream {
+    let item = proc_macro2::TokenStream::from(item);
+    let message = format!(
+        "#[{name}] must be used on a protocol handler argument inside #[message_controller] or #[websocket_gateway]"
+    );
     quote! {
         compile_error!(#message);
         #item
@@ -79,8 +92,9 @@ pub(crate) fn http_code_attribute_outside_controller(name: &str, item: TokenStre
 
 pub(crate) fn metadata_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
     let item = proc_macro2::TokenStream::from(item);
-    let message =
-        format!("#[{name}] must be used inside an impl block annotated with #[controller]");
+    let message = format!(
+        "#[{name}] must be used inside an impl block annotated with #[controller], #[message_controller], or #[websocket_gateway]"
+    );
     quote! {
         compile_error!(#message);
         #item
@@ -147,8 +161,9 @@ pub(crate) fn validation_attribute_outside_controller(
 
 pub(crate) fn pipeline_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
     let item = proc_macro2::TokenStream::from(item);
-    let message =
-        format!("#[{name}] must be used inside an impl block annotated with #[controller]");
+    let message = format!(
+        "#[{name}] must be used inside an impl block annotated with #[controller], #[message_controller], or #[websocket_gateway]"
+    );
     quote! {
         compile_error!(#message);
         #item
@@ -182,6 +197,17 @@ pub(crate) fn serialization_attribute_outside_controller(
     name: &str,
     item: TokenStream,
 ) -> TokenStream {
+    let item = proc_macro2::TokenStream::from(item);
+    let message =
+        format!("#[{name}] must be used inside an impl block annotated with #[controller]");
+    quote! {
+        compile_error!(#message);
+        #item
+    }
+    .into()
+}
+
+pub(crate) fn cache_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
     let item = proc_macro2::TokenStream::from(item);
     let message =
         format!("#[{name}] must be used inside an impl block annotated with #[controller]");

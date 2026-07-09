@@ -103,7 +103,7 @@ a3s-boot = { version = "0.1", features = ["schedule"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-Enable the optional in-process queue module when the application needs
+Enable the optional Lane-backed queue module when the application needs
 provider-backed background job processing:
 
 ```toml
@@ -320,16 +320,19 @@ write Rust attributes that feel close to Nest.js decorators:
 | `@WebSocketGateway()` | `#[websocket_gateway("/ws")]` on an inherent `impl` block |
 | `@WebSocketGateway({ namespace: "/cats" })` | `#[websocket_gateway("/ws", namespace = "/cats")]` |
 | `@SubscribeMessage("cat.find")` | `#[subscribe_message("cat.find")]` on an async gateway method |
+| `@MessageBody()` / `@MessageBody("id")` | A typed WebSocket gateway method argument or `#[message_body("id")]` field argument deserialized from `WebSocketMessage::data` |
+| `@ConnectedSocket()` | `WebSocketGatewayConnection` as a `#[subscribe_message]` method argument |
+| `@WebSocketServer()` | `WebSocketGatewayServer` as a gateway handler or lifecycle-hook method argument |
 | `client.join("room")` / `server.to("room").emit(...)` | `connection.join("room")?` / `connection.broadcast_to_room("room", message).await?` |
 | `OnGatewayInit` / `OnGatewayConnection` / `OnGatewayDisconnect` | `#[on_gateway_init]`, `#[on_gateway_connection]`, and `#[on_gateway_disconnect]` |
 | Microservice controller | `#[message_controller]` on an inherent `impl` block |
 | `@MessagePattern("cat.find")` | `#[message_pattern("cat.find")]` on an async message method |
 | `@EventPattern("cat.created")` | `#[event_pattern("cat.created")]` on an async event method |
-| `@Payload()` | A typed message method argument deserialized from `TransportMessage::data` |
+| `@Payload()` / `@Payload("id")` | A typed message method argument or `#[payload("id")]` field argument deserialized from `TransportMessage::data` |
 | `@OnEvent("cat.created")` | `#[on_event("cat.created")]` inside `#[event_listener]` |
-| `@UseGuards(AuthGuard)` | `#[use_guard(AuthGuard)]` on a controller impl or route method |
-| `@UseInterceptors(TraceInterceptor)` | `#[use_interceptor(TraceInterceptor)]` on a controller impl or route method |
-| `@UseFilters(HttpErrorFilter)` | `#[use_filter(HttpErrorFilter)]` on a controller impl or route method |
+| `@UseGuards(AuthGuard)` | `#[use_guard(AuthGuard)]` on controller, WebSocket gateway, message controller, route, subscription, or pattern scope |
+| `@UseInterceptors(TraceInterceptor)` | `#[use_interceptor(TraceInterceptor)]` on controller, WebSocket gateway, message controller, route, subscription, or pattern scope |
+| `@UseFilters(HttpErrorFilter)` | `#[use_filter(ErrorFilter)]` on controller, WebSocket gateway, message controller, route, subscription, or pattern scope |
 | `@Catch(BadRequestException)` | `#[catch(BadRequest)]` on a filter struct, used through `BadRequestFilter::catch_filter()` |
 | `BadRequestException` / `ConflictException` | `BootError::bad_request("...")` / `BootError::conflict("...")` |
 | `new HttpException("...", status)` | `BootError::http_exception(status, "...")?` |
@@ -338,8 +341,8 @@ write Rust attributes that feel close to Nest.js decorators:
 | `new ValidationPipe({ transform: true })` | `#[validate(transform)]` or `ValidationOptions::new().transform(true)` |
 | `new ValidationPipe({ whitelist: true })` | `#[validate(whitelist)]` or `ValidationOptions::new().whitelist(true)` with `ValidationSchema` |
 | `new ValidationPipe({ forbidNonWhitelisted: true })` | `#[validate(forbidNonWhitelisted)]` or `ValidationOptions::new().forbid_non_whitelisted(true)` |
-| `applyDecorators(...)` | `#[apply_decorators(...)]` below `#[controller]` or on a route method |
-| `@SetMetadata("roles", ["admin"])` | `#[metadata("roles", ["admin"])]` below `#[controller]` or on a route method |
+| `applyDecorators(...)` | `#[apply_decorators(...)]` below HTTP, WebSocket, or message impl macros, or on their handler methods |
+| `@SetMetadata("roles", ["admin"])` | `#[metadata("roles", ["admin"])]` on HTTP, WebSocket, or message impl macros, or on their handler methods |
 | `@Version("1")` | `#[version("1")]` below `#[controller]` or on a route method |
 | `@Version(["1", "2"])` | `#[versions("1", "2")]` below `#[controller]` or on a route method |
 | `VERSION_NEUTRAL` | `#[version_neutral]` below `#[controller]` or on a route method |
@@ -389,11 +392,11 @@ generate ordinary `ProviderDefinition`, `ControllerDefinition`, and
 compile time. The explicit API remains available and is what the macros expand
 into:
 
-`#[apply_decorators(...)]` mirrors Nest's `applyDecorators(...)` for controller
-and route metadata. It expands to the same attributes that could have been
-written separately, so it works with route methods, pipeline hooks, metadata,
-OpenAPI decorators, response decorators, versioning, serialization, and
-validation:
+`#[apply_decorators(...)]` mirrors Nest's `applyDecorators(...)` for controller,
+gateway, and message-handler metadata. It expands to the same attributes that
+could have been written separately, so it works with route methods, WebSocket
+subscriptions, message patterns, pipeline hooks, metadata, OpenAPI decorators,
+response decorators, versioning, serialization, and validation:
 
 ```rust
 #[controller("/cats")]
@@ -894,9 +897,9 @@ validated unless they register validators explicitly, for example with
 
 For Nest-style transform and whitelist policies, derive or implement
 `ValidationSchema` on the DTO and register validation options. `transform(true)`
-rewrites body, query, path, or transport payload data from the validated DTO
-shape before the handler runs, so serde defaults and rename rules are visible
-downstream. `whitelist(true)` strips unknown fields, and
+rewrites body, query, path, WebSocket message data, or transport payload data
+from the validated DTO shape before the handler runs, so serde defaults and
+rename rules are visible downstream. `whitelist(true)` strips unknown fields, and
 `forbid_non_whitelisted(true)` rejects them instead. In macro controllers, use
 `#[validate(transform)]`, `#[validate(whitelist)]`, or
 `#[validate(forbidNonWhitelisted)]`:
@@ -944,8 +947,15 @@ let route = RouteDefinition::post("/", |request: BootRequest| async move {
 The same options can be applied at controller or application scope with
 `ControllerDefinition::with_validation_options(...)` and
 `BootApplication::builder().use_global_validation_options(...)`. Global options
-apply to routes that have registered `ValidationSchema`-aware validators, for
-example routes created with `with_body_validation_options::<T>(...)`.
+apply to handlers that have registered `ValidationSchema`-aware validators, for
+example routes created with `with_body_validation_options::<T>(...)`,
+WebSocket subscriptions created with
+`WebSocketSubscriptionDefinition::with_payload_validation_options::<T>(...)`,
+or message patterns created with
+`MessagePatternDefinition::with_payload_validation_options::<T>(...)`. Protocol
+payload validators are enabled by default when they are registered; use
+`without_validation()` on the subscription or message pattern to opt out of an
+inherited global validation policy.
 
 ## Server-Sent Events
 
@@ -1227,17 +1237,26 @@ WebSocket gateways mirror Nest's `@WebSocketGateway()` and
 `@SubscribeMessage()` style while keeping the runtime adapter-neutral. Gateway
 lifecycle hooks mirror Nest's `OnGatewayInit`, `OnGatewayConnection`, and
 `OnGatewayDisconnect` interfaces. Messages are JSON objects with an `event`
-string and optional `data` value. The Axum adapter registers gateway paths as
-WebSocket upgrade routes behind the `axum` feature.
+string and optional `data` value; subscription methods can accept the whole
+`WebSocketMessage`, one typed DTO decoded from `data`, and optionally the
+`WebSocketGatewayConnection` for `@ConnectedSocket()`-style connection access.
+Gateway handlers and lifecycle hooks can also accept `WebSocketGatewayServer`
+for `@WebSocketServer()`-style gateway-wide emits, room broadcasts, and
+connection/room inspection.
+Use `#[message_body("field")]` to bind a single field from `data`; it supports
+the same `pipe = ...` and `default = ...` options as HTTP single-value
+extractors.
+The Axum adapter registers gateway paths as WebSocket upgrade routes behind the
+`axum` feature.
 
 ```rust
 use std::sync::Arc;
 
 use a3s_boot::{
-    injectable, on_gateway_connection, on_gateway_disconnect, on_gateway_init,
+    injectable, message_body, on_gateway_connection, on_gateway_disconnect, on_gateway_init,
     subscribe_message, websocket_gateway, Module, ModuleRef, ProviderDefinition,
     Result, WebSocketGatewayConnection, WebSocketGatewayDefinition,
-    WebSocketGatewayInitContext, WebSocketMessage,
+    WebSocketGatewayInitContext, WebSocketGatewayServer, WebSocketMessage,
 };
 use serde::Serialize;
 
@@ -1287,6 +1306,25 @@ impl CatsGateway {
         WebSocketMessage::json("cat.found", &self.cats.find_one(id))
     }
 
+    #[subscribe_message("cat.find-by-id")]
+    async fn find_by_id(
+        &self,
+        #[message_body("id")] id: String,
+    ) -> Result<WebSocketMessage> {
+        WebSocketMessage::json("cat.found", &self.cats.find_one(&id))
+    }
+
+    #[subscribe_message("cat.broadcast")]
+    async fn broadcast(
+        &self,
+        server: WebSocketGatewayServer,
+    ) -> Result<WebSocketMessage> {
+        let sent = server
+            .broadcast(WebSocketMessage::text("cat.notice", "refresh"))
+            .await?;
+        Ok(WebSocketMessage::new("cat.broadcasted", serde_json::json!({ "sent": sent })))
+    }
+
     #[on_gateway_disconnect]
     async fn handle_disconnect(&self, _connection: WebSocketGatewayConnection) -> Result<()> {
         Ok(())
@@ -1316,7 +1354,8 @@ The explicit API is available for tests, dynamic modules, and adapters:
 
 ```rust
 use a3s_boot::{
-    BootRequest, HttpMethod, Result, WebSocketGatewayDefinition, WebSocketMessage,
+    BootRequest, HttpMethod, Result, WebSocketGatewayDefinition, WebSocketGatewayServer,
+    WebSocketMessage,
 };
 use serde_json::json;
 
@@ -1324,6 +1363,18 @@ async fn dispatch() -> Result<()> {
     let gateway = WebSocketGatewayDefinition::new("/events")?
         .subscribe("ping", |message: WebSocketMessage| async move {
             Ok(WebSocketMessage::new("pong", message.data))
+        })?
+        .subscribe_with_connection("whoami", |connection, _message| async move {
+            Ok(WebSocketMessage::new(
+                "whoami.reply",
+                json!({ "connectionId": connection.id() }),
+            ))
+        })?
+        .subscribe_with_server("stats", |server: WebSocketGatewayServer, _message| async move {
+            Ok(WebSocketMessage::new(
+                "stats.reply",
+                json!({ "connections": server.active_connection_count()? }),
+            ))
         })?;
 
     let reply = gateway
@@ -1388,11 +1439,29 @@ async fn rooms() -> Result<()> {
 }
 ```
 
-Gateway-specific `WebSocketPipe`, `WebSocketGuard`, and `WebSocketInterceptor`
-hooks run in deterministic order: guards, interceptor `before`, pipes, handler,
-then interceptor `after` in reverse order. They are separate from HTTP
+Gateway-specific `WebSocketPipe`, `WebSocketGuard`, `WebSocketInterceptor`, and
+`WebSocketExceptionFilter` hooks run in deterministic order: guards,
+interceptor `before`, pipes, validation, handler, interceptor `after` in reverse
+order, and then filters for uncaught errors. They are separate from HTTP
 middleware because WebSocket message dispatch is event-based rather than
-request/response-based, but they follow the same Nest-style pipeline order.
+request/response-based, but they follow the same Nest-style pipeline order. Use
+`#[use_guard]`, `#[use_interceptor]`, `#[use_pipe]`, and `#[use_filter]` on a
+`#[websocket_gateway]` impl for gateway-wide hooks or on a
+`#[subscribe_message]` method for subscription-scoped hooks. Use
+`BootApplicationBuilder::use_global_websocket_guard(...)`,
+`use_global_websocket_interceptor(...)`, and `use_global_websocket_pipe(...)`
+for application-wide gateway policies and message transformation, and
+`BootApplicationBuilder::use_global_websocket_filter(...)` or
+`use_global_websocket_catch_filter(...)` for application-wide gateway filters.
+`BootApplicationBuilder::use_global_validation_options(...)` merges transform,
+whitelist, and forbid-non-whitelisted options into registered subscription
+payload validators.
+Use `#[validate]`, `#[validate(transform)]`, `#[validate(whitelist)]`, or
+`#[validate(forbidNonWhitelisted)]` on typed subscription methods for
+ValidationPipe-style message body validation.
+Return `WebSocketExceptionResponse::message(...)` when a filter should turn an
+error into an outbound event message, or `WebSocketExceptionResponse::empty()`
+when it should handle the error without a reply.
 `BootApplication::bootstrap()` runs gateway init hooks. Use
 `connect_async(...)` or `WebSocketGatewayConnection::open()` and `close()` when
 an adapter or in-process test wants connection and disconnect hooks; the Axum
@@ -1416,7 +1485,8 @@ use std::sync::Arc;
 
 use a3s_boot::{
     injectable, message_controller, event_pattern, message_pattern, InProcessTransport,
-    MessagePatternDefinition, MessageTransport, Module, ModuleRef, ProviderDefinition, Result,
+    MessagePatternDefinition, MessageTransport, Module, ModuleRef, payload, ProviderDefinition,
+    Result,
 };
 use serde::{Deserialize, Serialize};
 
@@ -1456,6 +1526,11 @@ impl CatsMessages {
         Ok(self.cats.find_one(&payload.id))
     }
 
+    #[message_pattern("cat.find-by-id")]
+    async fn find_by_id(&self, #[payload("id")] id: String) -> Result<CatDto> {
+        Ok(self.cats.find_one(&id))
+    }
+
     #[event_pattern("cat.created")]
     async fn created(&self, payload: FindCatMessage) -> Result<()> {
         let _ = self.cats.find_one(&payload.id);
@@ -1487,7 +1562,9 @@ impl Module for CatsModule {
 `#[message_pattern("cat.find", raw)]` when a handler should return
 `TransportReply` directly. Typed method arguments are deserialized from
 `TransportMessage::data`; use `TransportMessage` as the argument type when the
-handler needs raw access to the pattern and payload.
+handler needs raw access to the pattern and payload. Use `#[payload("field")]`
+to bind one payload field; it supports the same `pipe = ...` and `default = ...`
+options as HTTP single-value extractors.
 
 The explicit API is available for dynamic registration and validation:
 
@@ -1536,9 +1613,24 @@ async fn dispatch() -> Result<()> {
 }
 ```
 
-Transport-specific `TransportPipe`, `TransportGuard`, and
-`TransportInterceptor` hooks run in deterministic order: guards, interceptor
-`before`, pipes, validation, handler, then interceptor `after` in reverse order.
+Transport-specific `TransportPipe`, `TransportGuard`, `TransportInterceptor`,
+and `TransportExceptionFilter` hooks run in deterministic order: guards,
+interceptor `before`, pipes, validation, handler, interceptor `after` in
+reverse order, and then filters for uncaught errors. Use
+`#[use_guard]`, `#[use_interceptor]`, `#[use_pipe]`, and `#[use_filter]` on a
+`#[message_controller]` impl for controller-wide hooks or on
+`#[message_pattern]` / `#[event_pattern]` methods for pattern-scoped hooks. Use
+`BootApplicationBuilder::use_global_transport_guard(...)`,
+`use_global_transport_interceptor(...)`, and `use_global_transport_pipe(...)`
+for application-wide message policies and transformation, and
+`BootApplicationBuilder::use_global_transport_filter(...)` or
+`use_global_transport_catch_filter(...)` for application-wide message filters.
+`BootApplicationBuilder::use_global_validation_options(...)` merges transform,
+whitelist, and forbid-non-whitelisted options into registered transport payload
+validators.
+Return `TransportExceptionResponse::reply(...)` when a request-response filter
+should return a protocol reply, or `TransportExceptionResponse::empty()` when it
+should handle an event-pattern error without a reply.
 
 With `tcp-transport`, the same message patterns can be served over a network
 socket:
@@ -2509,10 +2601,10 @@ then close through the same signal-aware lifecycle phases.
 ## Testing Modules
 
 `TestingModule` mirrors Nest's test-module workflow: assemble a module graph,
-override providers before controllers are built, compile it, resolve providers
-from the compiled graph, override route pipeline components, and call the app
-in process without binding a socket. Use `compile_async()` when the test module
-contains async provider factories.
+override modules or providers before controllers are built, compile it, resolve
+providers from the compiled graph, override HTTP, WebSocket, and transport
+pipeline components, and call the app in process without binding a socket. Use
+`compile_async()` when the test module contains async provider factories.
 
 ```rust
 use std::sync::Arc;
@@ -2567,8 +2659,23 @@ assert_eq!(response.body_json::<String>()?, "test-cat");
 # }
 ```
 
+Module overrides mirror Nest's `overrideModule(...).useModule(...)` workflow.
+Use the original module name as the target and provide the replacement module;
+the replacement is used wherever that module appears in the import graph before
+providers, controllers, gateways, and message patterns are resolved.
+
+```rust
+let module = TestingModule::builder()
+    .import(CatsModule)
+    .override_module("CatsRepositoryModule", FakeCatsRepositoryModule)
+    .compile()?;
+```
+
 Pipeline overrides use the original component type as the first generic
-argument and the replacement value as the method argument:
+argument and the replacement value as the method argument. HTTP routes use
+`override_guard`, `override_interceptor`, `override_filter`, and
+`override_pipe`; WebSocket gateways and transport message patterns use the
+matching `override_websocket_*` and `override_transport_*` methods.
 
 ```rust
 let module = TestingModule::builder()
@@ -2577,6 +2684,8 @@ let module = TestingModule::builder()
     .override_interceptor::<TraceInterceptor, _>(NoopInterceptor)
     .override_filter::<HttpErrorFilter, _>(TestErrorFilter)
     .override_pipe::<ParseCatPipe, _>(PassThroughPipe)
+    .override_websocket_guard::<WsAuthGuard, _>(AllowWsGuard)
+    .override_transport_pipe::<ParseMessagePipe, _>(PassThroughMessagePipe)
     .compile()?;
 ```
 
@@ -2584,9 +2693,9 @@ let module = TestingModule::builder()
 
 `DiscoveryService` creates a read-only snapshot of a built application. It can
 inspect modules, local provider tokens, the resolved module graph, resolved
-HTTP routes, WebSocket gateways, and microservice message patterns. `Reflector`
-provides convenient route metadata lookups over the same snapshot, similar to
-Nest's reflector pattern.
+HTTP routes, WebSocket gateways, gateway events, and microservice message
+patterns. `Reflector` provides convenient metadata lookups over the same
+snapshot, similar to Nest's reflector pattern.
 
 ```rust
 use a3s_boot::{
@@ -2679,6 +2788,14 @@ let route = RouteDefinition::get("/admin", |_| async {
     Ok(roles.iter().any(|role| role == "admin"))
 });
 ```
+
+WebSocket gateway/event metadata and message-pattern metadata are copied into
+their protocol-specific `ExecutionContext` values too. Use
+`with_metadata_value(...)` in explicit builders, or `#[metadata(...)]` on
+`#[websocket_gateway]`, `#[subscribe_message]`, `#[message_controller]`,
+`#[message_pattern]`, and `#[event_pattern]` macros. `Reflector` exposes
+`gateway_metadata_value(...)`, `gateway_event_metadata_value(...)`, and
+`message_pattern_metadata_value(...)` for diagnostics and tests.
 
 `ExecutionContext` is protocol-neutral. HTTP guards receive it directly, and
 WebSocket gateways or microservice message patterns can reuse the same guard
@@ -3319,6 +3436,51 @@ module default TTL. Add `.named("token")` to `CacheModule` when a module needs
 multiple cache providers, or `.global()` to make one cache visible to every
 module scope after registration.
 
+`CacheInterceptor` adds Nest-style HTTP response caching for successful,
+non-streaming `GET` responses. By default it keys entries by method, path, and
+query string. Routes and controllers can set a shared cache key, override the
+TTL, or opt out of caching.
+
+```rust
+use std::time::Duration;
+
+use a3s_boot::{
+    BootApplication, BootRequest, BootResponse, Cache, CacheInterceptor, Result, RouteDefinition,
+};
+
+let cache = Cache::in_memory();
+let app = BootApplication::builder()
+    .route(
+        RouteDefinition::get("/cats", |request: BootRequest| async move {
+            Ok(BootResponse::text(format!(
+                "cats:{}",
+                request.query_param("page").unwrap_or("1")
+            )))
+        })?
+        .with_cache_key("cats:list")
+        .with_cache_ttl(Duration::from_secs(30))
+        .with_interceptor(CacheInterceptor::new(cache)),
+    )
+    .build()?;
+```
+
+Use `CacheInterceptor::from_provider()` when the route should resolve `Cache`
+from the request's module scope, or `CacheInterceptor::from_named_provider(...)`
+for named cache providers. With macros enabled, `#[cache_key("...")]` and
+`#[cache_ttl(...)]` map to the same metadata:
+
+```rust
+#[a3s_boot::controller("/cats")]
+#[a3s_boot::cache_ttl(seconds = 30)]
+impl CatsController {
+    #[a3s_boot::get("/", raw)]
+    #[a3s_boot::cache_key("cats:list")]
+    async fn list(&self) -> Result<BootResponse> {
+        Ok(BootResponse::text("cats"))
+    }
+}
+```
+
 ## Task Scheduling
 
 Enable the `schedule` feature to register `ScheduleModule` and inject a
@@ -3498,9 +3660,10 @@ visible to every module scope after registration.
 ## Queues
 
 Enable the `queue` feature to register `QueueModule` and inject a
-provider-backed `Queue`. The in-process backend is intended for tests,
-embedded single-process workers, and adapter development; durable or distributed
-backends can implement `QueueBackend` without changing service code.
+provider-backed `Queue`. Boot's built-in backend is powered by `a3s-lane` and
+is intended for tests, embedded single-process workers, and adapter
+development. Durable or distributed Lane job backends can be passed through
+`QueueModule::from_lane_backend_arc(...)` without changing service code.
 
 ```rust
 use std::sync::Arc;
@@ -3585,10 +3748,12 @@ Use `QueueModule::in_process("name").processor(...)` for processors that can
 be declared directly on the queue module. Use injected `Queue::process(...)`
 when a processor needs providers from the importing module. `Queue::enqueue(...)`
 serializes payloads through serde JSON; processors can call
-`QueueJob::data_as::<T>()` to decode typed payloads. Use `Queue::jobs()`,
-`stats()`, and `failures()` for test assertions and local diagnostics. Add
-`.named("token")` when a module needs multiple queue providers, or `.global()`
-to make one queue visible to every module scope after registration.
+`QueueJob::data_as::<T>()` to decode typed payloads. Use
+`Queue::enqueue_with_options(...)` with `QueueJobOptions` for Lane priority,
+retry, delay, and retention settings. Use `Queue::jobs()`, `stats()`, and
+`failures()` for test assertions and local diagnostics. Add `.named("token")`
+when a module needs multiple queue providers, or `.global()` to make one queue
+visible to every module scope after registration.
 
 ## Logging
 
@@ -4962,7 +5127,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | Configuration | Optional ACL-backed typed providers through `ConfigModule` |
 | Database | Optional provider-backed database facade through `DatabaseModule` |
 | HTTP client | Optional provider-backed outbound HTTP client through `HttpModule` |
-| Cache | Optional typed cache provider through `CacheModule` |
+| Cache | Optional typed cache provider through `CacheModule` plus HTTP response caching through `CacheInterceptor` |
 | Scheduler | Optional provider-backed task scheduling through `ScheduleModule` |
 | Queue | Optional provider-backed background jobs through `QueueModule` |
 | Logger | Optional provider-backed structured logging through `LoggingModule` |

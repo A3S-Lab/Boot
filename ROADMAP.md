@@ -42,9 +42,9 @@ Implemented today:
   auto-wired provider factories, named or optional dependency resolution,
   `ProviderRef<T>` lazy provider handles for forward-reference-style
   dependencies, fresh resolution contexts, and dynamic injectable creation.
-- `TestingModule` with provider overrides, async provider-aware
-  `compile_async`, and typed route pipeline overrides for guards,
-  interceptors, exception filters, and pipes.
+- `TestingModule` with module and provider overrides, async provider-aware
+  `compile_async`, and typed HTTP, WebSocket, and transport pipeline overrides
+  for guards, interceptors, exception filters, and pipes.
 - `ControllerDefinition` and `RouteDefinition` for HTTP route groups, including
   specificity-aware path params, catch-all route params, and Nest-style ALL
   method routes with exact-method precedence.
@@ -60,10 +60,11 @@ Implemented today:
   and `#[body("page", pipe = ParseIntPipe)]`, plus `#[host]` for
   host-scoped controllers and routes, `#[metadata]` for
   Nest-style custom route/controller metadata and `#[http_code]` for Nest-style
-  response status metadata, `#[header]` for response headers, and `#[redirect]`
-  for redirect responses. `#[injectable]` implements `FromModuleRef` for unit
-  structs and named-field structs whose dependencies are `Arc<T>` or
-  `Option<Arc<T>>`, with `#[inject("token")]` for named provider lookup.
+  response status metadata, `#[cache_key]` / `#[cache_ttl]` for cache response
+  metadata, `#[header]` for response headers, and `#[redirect]` for redirect
+  responses. `#[injectable]` implements `FromModuleRef` for unit structs and
+  named-field structs whose dependencies are `Arc<T>` or `Option<Arc<T>>`, with
+  `#[inject("token")]` for named provider lookup.
   `#[module]` implements `Module` from Nest-style metadata lists for imports,
   providers, controllers, routes, gateways, message controllers, exports,
   route prefixes, and global modules.
@@ -72,8 +73,9 @@ Implemented today:
   requirements and generated security schemes for bearer, cookie, header, and
   query API key authentication.
 - Nest-style decorator composition with `#[apply_decorators(...)]` for
-  grouping controller and route attributes such as routing, metadata, pipeline
-  hooks, validation, versioning, response metadata, and OpenAPI decorators.
+  grouping HTTP controller/route, WebSocket gateway/subscription, and message
+  controller/pattern attributes such as routing, metadata, pipeline hooks,
+  validation, versioning, response metadata, and OpenAPI decorators.
 - WebSocket lifecycle macros: `#[on_gateway_init]`,
   `#[on_gateway_connection]`, and `#[on_gateway_disconnect]`.
 - Host-scoped HTTP routes with `RouteDefinition::with_host(...)` and
@@ -83,10 +85,12 @@ Implemented today:
 - Serialization macros with `#[serialize(include = [...], exclude = [...],
   skip_null)]` at controller and route scope.
 - Nest-style generic pipeline macros: `#[use_guard]`, `#[use_interceptor]`,
-  `#[use_filter]`, and `#[use_pipe]` at controller and route scope.
+  `#[use_filter]`, and `#[use_pipe]` at HTTP controller/route,
+  WebSocket gateway/subscription, and message controller/pattern scope.
 - Nest-style catch-filter targeting with `#[catch]`, `BootErrorKind`,
   `catch_errors(...)`, `with_catch_filter(...)`, and
-  `use_global_catch_filter(...)`.
+  `use_global_catch_filter(...)`, plus protocol-specific global WebSocket and
+  transport pipes and catch filters.
 - Nest-style HTTP exception helpers with typed `BootError` constructors for
   common HTTP errors plus a generic `http_exception(status, message)` helper
   comparable to Nest's `HttpException`.
@@ -121,10 +125,11 @@ Implemented today:
   security requirements plus generated `components.securitySchemes`, and
   optional `serve_openapi(...)` JSON route registration plus
   `serve_openapi_ui(...)` Swagger UI route registration.
-- Custom route/controller metadata through builders and `#[metadata]`,
-  route-level override semantics, protocol-neutral `ExecutionContext` access
-  for HTTP, WebSocket, and transport guards/interceptors, and typed `Reflector`
-  lookup from discovery snapshots.
+- Custom route/controller, WebSocket gateway/subscription, and message
+  controller/pattern metadata through builders and `#[metadata]`, handler-level
+  override semantics, protocol-neutral `ExecutionContext` access for HTTP,
+  WebSocket, and transport guards/interceptors, and typed `Reflector` lookup
+  from discovery snapshots.
 - Nest-style response passthrough with `ResponsePassthrough` and `#[res]`,
   allowing controller methods to set status codes, headers, and cookies while
   still returning a typed DTO or adapter-neutral `BootResponse`.
@@ -175,21 +180,26 @@ Implemented today:
   include/exclude rules, filter integration for errors, and adapter validation
   before middleware execution.
 - WebSocket gateways with adapter-neutral messages and connections, gateway
-  init/connection/disconnect lifecycle hooks, pipes/guards/interceptors,
-  provider-backed handlers, logical namespaces, connection rooms, direct emits,
-  room or gateway-wide broadcasts, Nest-style gateway macros, and Axum
+  init/connection/disconnect lifecycle hooks, gateway- and subscription-scoped
+  pipes/guards/interceptors, application-wide protocol guards/interceptors/
+  pipes, local and global protocol exception filters, typed and validated
+  subscription message-body DTOs, provider-backed handlers, logical namespaces,
+  connection rooms, direct
+  emits, room or gateway-wide broadcasts, Nest-style gateway macros, and Axum
   WebSocket route registration.
 - Microservice transports with adapter-neutral `TransportMessage` /
   `TransportReply`, request-response and event-only message patterns,
   provider-backed handlers, validation helpers, transport pipes/guards/
-  interceptors, Nest-style message macros, an in-process transport, and an
-  optional TCP transport for newline-delimited JSON message frames plus an
-  optional Redis Pub/Sub transport and optional NATS request/reply and event
-  subjects plus optional MQTT request/reply and event topics plus optional
-  RabbitMQ request/reply and event queues plus optional Kafka request/reply and
-  event topics plus optional gRPC unary request/reply and event calls. Transport
-  error envelopes round-trip through the same `BootError` HTTP exception mapping
-  used by HTTP routes.
+  interceptors, application-wide protocol guards/interceptors/pipes, local and
+  global protocol exception filters, Nest-style message macros with controller-
+  and pattern-scoped pipeline decorators, an in-process transport, and an optional
+  TCP transport for newline-delimited JSON message frames plus an optional Redis
+  Pub/Sub transport and optional NATS request/reply and event subjects plus
+  optional MQTT request/reply and event topics plus optional RabbitMQ
+  request/reply and event queues plus optional Kafka request/reply and event
+  topics plus optional gRPC unary request/reply and event calls. Transport error
+  envelopes round-trip through the same `BootError` HTTP exception mapping used
+  by HTTP routes.
 - ACL-backed typed configuration modules with `ConfigModule`, named/global
   provider exports, environment/default function support, and validation hooks.
 - Provider-backed outbound HTTP clients with `HttpModule`, `HttpService`,
@@ -205,14 +215,16 @@ Implemented today:
   backend and transaction traits, adapter-neutral statements/rows/results,
   named/global provider exports, and an in-memory backend for tests.
 - Typed cache modules with `CacheModule`, `Cache`, in-memory storage,
-  default TTLs, named/global provider exports, and cache-store abstraction.
+  default TTLs, named/global provider exports, cache-store abstraction, and
+  Nest-style HTTP response caching through `CacheInterceptor`, `#[cache_key]`,
+  and `#[cache_ttl]`.
 - Provider-backed task scheduling with `ScheduleModule`, `Scheduler`,
   in-process timeout/interval/cron jobs, named/global provider exports,
   Nest-style `#[schedule]` / `#[cron]` / `#[interval]` / `#[timeout]` macros,
   and lifecycle-managed shutdown.
-- Provider-backed queues with `QueueModule`, `Queue`, in-process background
-  processors, typed serde JSON payloads, named/global provider exports, and
-  lifecycle-managed workers.
+- Provider-backed queues with `QueueModule`, `Queue`, `a3s-lane` backed job
+  storage and workers, typed serde JSON payloads, named/global provider
+  exports, and lifecycle-managed processors.
 - Provider-backed structured logging with `LoggingModule`, `Logger`, pluggable
   sinks, in-memory test capture, request middleware/interceptor helpers, and
   worker-friendly injection through the same provider graph.
@@ -427,14 +439,15 @@ Tasks:
 - Support Nest-style whitelist and forbid-non-whitelisted policies for body,
   query, and params validators. (Implemented with `ValidationOptions` and
   explicit `ValidationSchema` field metadata)
-- Support Nest-style transform policies for body, query, params, and transport
-  payload validators. (Implemented by rewriting downstream request/message data
-  from the validated DTO shape when `ValidationOptions::transform(true)` is
-  enabled)
+- Support Nest-style transform policies for body, query, params, WebSocket
+  message data, and transport payload validators. (Implemented by rewriting
+  downstream request/message data from the validated DTO shape when
+  `ValidationOptions::transform(true)` is enabled)
 - Support Nest-style validation option macros and scoped option APIs.
   (Implemented with `#[validate(...)]`,
   `ControllerDefinition::with_validation_options(...)`, and
-  `BootApplicationBuilder::use_global_validation_options(...)`)
+  `BootApplicationBuilder::use_global_validation_options(...)`, including
+  registered WebSocket and transport payload validators)
 - Reduce whitelist metadata boilerplate for common DTOs. (Implemented with
   `#[derive(ValidationSchema)]` for named structs)
 - Add consistent validation error response mapping. (Implemented through
@@ -448,12 +461,15 @@ Acceptance:
   handlers run, or reject those requests when forbid-non-whitelisted is enabled.
   (Covered)
 - Transform validation can expose serde defaults and renamed DTO fields to
-  downstream body, query, path, and transport payload handlers. (Covered)
+  downstream body, query, path, WebSocket message data, and transport payload
+  handlers. (Covered)
 - Validation options can be applied through Nest-style route/controller macros
-  and through global/controller builder APIs. (Covered)
+  and through global/controller builder APIs, including registered protocol
+  payload validators. (Covered)
 - Validation can be enabled globally, controller-level, and route-level.
   (Covered through `use_global_validation`, `ControllerDefinition::with_validation`,
-  `RouteDefinition::with_validation`, and `#[validate]`)
+  `RouteDefinition::with_validation`, protocol `with_validation()` APIs, and
+  `#[validate]`)
 - Validation does not run for raw handlers unless explicitly configured.
   (Covered)
 
@@ -626,6 +642,9 @@ Nest equivalent:
 - gateway namespaces
 - rooms and broadcasts
 - `@SubscribeMessage()`
+- `@MessageBody()` and `@MessageBody("field")`
+- `@ConnectedSocket()`
+- `@WebSocketServer()`
 - gateway lifecycle hooks
 - gateway guards/pipes/interceptors
 
@@ -635,6 +654,17 @@ Tasks:
 - Add gateway registration API. (Implemented through `WebSocketGatewayDefinition`,
   `Module::gateways`, `DynamicModule::gateway`, and application builder support)
 - Add `#[websocket_gateway]` and `#[subscribe_message]` macros. (Implemented)
+- Add typed message-body DTO binding and validation for subscription handlers
+  comparable to Nest `@MessageBody()` plus `ValidationPipe`. (Implemented)
+- Add field-level message body binding comparable to Nest
+  `@MessageBody("field")`. (Implemented with `#[message_body("field")]` and
+  `WebSocketMessage::data_field_as(...)` helpers)
+- Add connected-socket binding for subscription handlers comparable to Nest
+  `@ConnectedSocket()`. (Implemented with `WebSocketGatewayConnection` method
+  arguments and `subscribe_with_connection(...)`)
+- Add gateway server binding comparable to Nest `@WebSocketServer()`.
+  (Implemented with `WebSocketGatewayServer` method arguments,
+  `WebSocketGatewayDefinition::server()`, and `subscribe_with_server(...)`)
 - Add gateway lifecycle hooks comparable to Nest `OnGatewayInit`,
   `OnGatewayConnection`, and `OnGatewayDisconnect`. (Implemented with
   `#[on_gateway_init]`, `#[on_gateway_connection]`,
@@ -645,7 +675,8 @@ Tasks:
 - Implement Axum WebSocket adapter support behind the `axum` feature.
   (Implemented)
 - Reuse DI and pipeline concepts where possible. (Implemented with provider-backed
-  gateways and gateway-specific pipe/guard/interceptor hooks)
+  gateways and gateway- or subscription-specific pipe/guard/interceptor/filter
+  hooks)
 
 Acceptance:
 
@@ -654,8 +685,20 @@ Acceptance:
 - Gateway init, connection, and disconnect hooks run through explicit APIs,
   provider-backed macros, and application bootstrap. (Covered)
 - Gateway handlers can use providers. (Covered)
-- Gateway guards/interceptors/pipes run in Nest-style deterministic order.
+- Gateway handlers can accept typed message-body DTOs, validate them, and apply
+  transform/whitelist policies before handler invocation. (Covered)
+- Gateway handlers can bind individual message body fields, including optional
+  fields, defaults, and parse pipes. (Covered)
+- Gateway handlers can access the current connection alongside raw or typed
+  message bodies. (Covered)
+- Gateway handlers and lifecycle hooks can access a gateway-wide server handle
+  for connection inspection, direct emits, and broadcasts. (Covered)
+- Gateway and subscription guards/interceptors/pipes plus application-wide
+  gateway guards/interceptors/pipes run in Nest-style deterministic order.
   (Covered)
+- Gateway exception filters can handle matching message dispatch errors and map
+  them to outbound WebSocket messages, including application-wide WebSocket
+  filters. (Covered)
 - Gateways can track active connection ids, join/leave rooms, and deliver
   direct, room-scoped, or gateway-wide messages to adapter-backed connections.
   (Covered)
@@ -666,7 +709,8 @@ Acceptance:
 Nest equivalent:
 
 - TCP, Redis, NATS, MQTT, RabbitMQ, Kafka, gRPC, and custom transports.
-- message pattern handlers.
+- `@MessagePattern()` and `@EventPattern()` handlers.
+- `@Payload()` and `@Payload("field")`.
 
 Tasks:
 
@@ -676,9 +720,13 @@ Tasks:
   `MessagePatternDefinition`, `Module::message_patterns`,
   `BootApplicationBuilder::message_pattern`, `#[message_controller]`,
   `#[message_pattern]`, and `#[event_pattern]`)
+- Add field-level payload binding comparable to Nest `@Payload("field")`.
+  (Implemented with `#[payload("field")]` and
+  `TransportMessage::data_field_as(...)` helpers)
 - Reuse provider lookup and pipeline primitives. (Implemented with
   provider-backed module registration plus transport-specific guards,
-  interceptors, pipes, and payload validation)
+  interceptors, pipes, exception filters, payload validation, and
+  controller/pattern pipeline decorators)
 - Start with an in-process test transport before external brokers.
   (Implemented with `InProcessTransport`)
 - Add one production transport only after the core contract is stable.
@@ -691,10 +739,17 @@ Acceptance:
 - A module can register message handlers independently from HTTP routes.
   (Covered)
 - Message handlers can use providers and validation. (Covered)
+- Message handlers can bind individual payload fields, including optional
+  fields, defaults, and parse pipes. (Covered)
+- Application-wide transport guards/interceptors/pipes run before and around
+  pattern-scoped hooks in Nest-style deterministic order. (Covered)
 - Tests cover request-response and event-only patterns. (Covered)
 - Handler errors preserve `BootError` HTTP exception semantics across TCP,
   Redis, NATS, MQTT, RabbitMQ, Kafka, and gRPC request-response transports.
   (Covered)
+- Transport exception filters can handle matching message dispatch errors and
+  map them to request-response replies or handled event errors, including
+  application-wide transport filters. (Covered)
 
 ## Milestone 8: Technique Modules
 
@@ -756,14 +811,16 @@ Acceptance:
   interceptors, pipes, handlers, and called provider methods; expose request id,
   path params, query values, headers, metadata, pipeline-local values, and auth
   principal data when authentication is enabled. (Covered)
-- Cache can register typed providers, cache serde values with TTL, and
-  participate in module imports/exports. (Covered)
+- Cache can register typed providers, cache serde values with TTL, participate
+  in module imports/exports, and cache successful non-streaming GET responses
+  through `CacheInterceptor` with route/controller cache keys and TTL metadata.
+  (Covered)
 - Schedule can register typed providers, run timeout/interval/cron jobs through
   lifecycle-managed in-process tasks, expose Nest-style schedule macros, and
   participate in module imports/exports. (Covered)
-- Queue can register typed providers, enqueue serde JSON jobs, run named
-  processors through lifecycle-managed in-process workers, and participate in
-  module imports/exports. (Covered)
+- Queue can register typed providers, enqueue serde JSON jobs through
+  `a3s-lane`, run named processors through lifecycle-managed workers, and
+  participate in module imports/exports. (Covered)
 - Application events can register an in-process `EventEmitter` provider,
   dispatch typed JSON payloads to exact or wildcard listeners, expose
   Nest-style listener macros, and participate in module imports/exports.
@@ -817,9 +874,10 @@ Acceptance:
   through Nest-style `#[cookie]` and `#[cookies]` arguments. (Covered)
 - JSON body fields can be read through typed `BootRequest` helpers and bound
   through Nest-style `#[body("field")]` arguments. (Covered)
-- Testing utilities can compile Nest-style testing modules, override providers
-  before controllers are built, resolve providers, and dispatch in-process
-  requests. (Covered)
+- Testing utilities can compile Nest-style testing modules, override imported
+  modules and providers before controllers are built, override HTTP,
+  WebSocket, and transport pipeline components, resolve providers, and dispatch
+  in-process requests. (Covered)
 - Discovery and reflector utilities can snapshot modules, module graph edges,
   provider tokens, exports, HTTP route metadata, WebSocket gateways, and
   message patterns from a built application. (Covered)

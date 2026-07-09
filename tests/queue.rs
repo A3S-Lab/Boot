@@ -2,7 +2,7 @@
 
 use a3s_boot::{
     BootApplication, BootError, BoxFuture, Module, ModuleRef, ProviderDefinition, Queue,
-    QueueContext, QueueJob, QueueJobState, QueueModule, QueueOptions, Result,
+    QueueContext, QueueJob, QueueJobOptions, QueueJobState, QueueModule, QueueOptions, Result,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -174,6 +174,65 @@ async fn queued_jobs_wait_until_a_processor_is_registered() {
     wait_until(|| calls.load(Ordering::SeqCst) == 1).await;
     queue.shutdown().await.unwrap();
     assert_eq!(queue.stats().unwrap().completed, 1);
+}
+
+#[tokio::test]
+async fn queue_module_uses_lane_job_priority_ordering() {
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let processor_seen = Arc::clone(&seen);
+    let app = BootApplication::builder()
+        .import(
+            QueueModule::in_process_with_options(
+                "priority-queue",
+                QueueOptions::new()
+                    .with_worker_count(1)
+                    .with_poll_interval(Duration::from_millis(5)),
+            )
+            .processor(
+                "email.send",
+                move |job: QueueJob, _context: QueueContext| {
+                    let processor_seen = Arc::clone(&processor_seen);
+                    async move {
+                        let email = job.data_as::<EmailJob>()?;
+                        processor_seen.lock().unwrap().push(email.to);
+                        Ok(())
+                    }
+                },
+            ),
+        )
+        .build()
+        .unwrap();
+    let queue = app.get::<Queue>().unwrap();
+
+    queue
+        .enqueue_with_options(
+            "email.send",
+            &EmailJob {
+                to: "low@example.com".to_string(),
+            },
+            QueueJobOptions::new().with_priority(100),
+        )
+        .await
+        .unwrap();
+    queue
+        .enqueue_with_options(
+            "email.send",
+            &EmailJob {
+                to: "high@example.com".to_string(),
+            },
+            QueueJobOptions::new().with_priority(1),
+        )
+        .await
+        .unwrap();
+
+    app.bootstrap().await.unwrap();
+    wait_until(|| seen.lock().unwrap().len() == 2).await;
+    app.shutdown().await.unwrap();
+
+    assert_eq!(
+        seen.lock().unwrap().as_slice(),
+        ["high@example.com", "low@example.com"]
+    );
 }
 
 #[test]

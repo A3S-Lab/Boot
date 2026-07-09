@@ -9,9 +9,11 @@ use a3s_boot::{
     BootResponse, BoxFuture, ControllerDefinition, ExceptionFilter, ExecutionContext, Guard,
     Interceptor, Module, ModuleRef, OpenApiInfo, ParseArrayPipe, ParseBoolPipe, ParseEnumPipe,
     ParseFloatPipe, ParseIntPipe, ParseUuidPipe, Pipe, ProviderDefinition, ProviderRef,
-    ProviderToken, Result, SseEvent, SseStream, StringTemplateViewEngine, TransportMessage,
-    TransportReply, UuidVersion, Validate, ViewModule, WebSocketGatewayConnection,
-    WebSocketGatewayInitContext, WebSocketMessage,
+    ProviderToken, Result, SseEvent, SseStream, StringTemplateViewEngine, TransportContext,
+    TransportExceptionFilter, TransportExceptionResponse, TransportMessage, TransportReply,
+    UuidVersion, Validate, ViewModule, WebSocketContext, WebSocketExceptionFilter,
+    WebSocketExceptionResponse, WebSocketGatewayConnection, WebSocketGatewayInitContext,
+    WebSocketGatewayServer, WebSocketMessage,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -180,13 +182,19 @@ impl FromStr for MacroCatKind {
 }
 
 #[a3s_boot::websocket_gateway("/macro-cats/ws", namespace = "/macro-cats")]
+#[a3s_boot::metadata("resource", "macro-gateway")]
 impl MacroCatsGateway {
     #[a3s_boot::on_gateway_init]
-    async fn after_init(&self, context: WebSocketGatewayInitContext) -> Result<()> {
+    async fn after_init(
+        &self,
+        context: WebSocketGatewayInitContext,
+        server: WebSocketGatewayServer,
+    ) -> Result<()> {
         self.lifecycle_log.push(format!(
-            "init:{}:{}",
+            "init:{}:{}:{}",
             context.gateway_path,
-            context.events.join(",")
+            context.events.join(","),
+            server.active_connection_count()?
         ));
         Ok(())
     }
@@ -199,6 +207,7 @@ impl MacroCatsGateway {
     }
 
     #[a3s_boot::subscribe_message("cat.find")]
+    #[a3s_boot::metadata("action", "find")]
     async fn find(&self, message: WebSocketMessage) -> Result<WebSocketMessage> {
         let id = message
             .data()
@@ -207,6 +216,84 @@ impl MacroCatsGateway {
             .unwrap_or("unknown");
         let cat = self.cats.find_one(id);
         WebSocketMessage::json("cat.found", &cat)
+    }
+
+    #[a3s_boot::subscribe_message("cat.typed")]
+    async fn typed(&self, payload: MacroFindCatMessage) -> Result<WebSocketMessage> {
+        let cat = self.cats.find_one(&payload.id);
+        WebSocketMessage::json("cat.typed", &cat)
+    }
+
+    #[a3s_boot::subscribe_message("cat.server")]
+    async fn server(&self, server: WebSocketGatewayServer) -> Result<WebSocketMessage> {
+        Ok(WebSocketMessage::new(
+            "cat.server",
+            json!({
+                "path": server.path(),
+                "namespace": server.namespace(),
+                "connections": server.active_connection_count()?,
+            }),
+        ))
+    }
+
+    #[a3s_boot::subscribe_message("cat.field")]
+    async fn field(
+        &self,
+        #[a3s_boot::message_body("id")] id: String,
+        #[a3s_boot::message_body("page", default = 1, pipe = ParseIntPipe)] page: u16,
+        #[a3s_boot::message_body("tag")] tag: Option<String>,
+    ) -> Result<WebSocketMessage> {
+        Ok(WebSocketMessage::new(
+            "cat.field",
+            json!({
+                "id": id,
+                "page": page,
+                "tag": tag.unwrap_or_else(|| "none".to_string()),
+            }),
+        ))
+    }
+
+    #[a3s_boot::subscribe_message("cat.connection")]
+    async fn connection(
+        &self,
+        connection: WebSocketGatewayConnection,
+        payload: MacroFindCatMessage,
+    ) -> Result<WebSocketMessage> {
+        Ok(WebSocketMessage::new(
+            "cat.connection",
+            json!({
+                "connectionId": connection.id(),
+                "path": connection.request().path(),
+                "id": payload.id,
+            }),
+        ))
+    }
+
+    #[a3s_boot::subscribe_message("cat.create")]
+    #[a3s_boot::validate(transform)]
+    async fn create(&self, payload: MacroTransformCreateDto) -> Result<WebSocketMessage> {
+        Ok(WebSocketMessage::new(
+            "cat.created",
+            json!({
+                "name": payload.name,
+                "kind": payload.kind,
+            }),
+        ))
+    }
+
+    #[a3s_boot::subscribe_message("cat.validate")]
+    #[a3s_boot::validate]
+    async fn validate(&self, payload: MacroValidatedCreateDto) -> Result<WebSocketMessage> {
+        Ok(WebSocketMessage::new(
+            "cat.validated",
+            json!({ "name": payload.name }),
+        ))
+    }
+
+    #[a3s_boot::subscribe_message("cat.fail")]
+    #[a3s_boot::use_filter(MacroBadRequestFilter::catch_filter())]
+    async fn fail(&self) -> Result<WebSocketMessage> {
+        Err(BootError::BadRequest("macro websocket filter".to_string()))
     }
 
     #[a3s_boot::on_gateway_disconnect]
@@ -218,10 +305,25 @@ impl MacroCatsGateway {
 }
 
 #[a3s_boot::message_controller]
+#[a3s_boot::metadata("resource", "macro-messages")]
 impl MacroCatsMessages {
     #[a3s_boot::message_pattern("macro.cat.find")]
+    #[a3s_boot::metadata("action", "find")]
     async fn find(&self, payload: MacroFindCatMessage) -> Result<MacroCatDto> {
         Ok(self.cats.find_one(&payload.id))
+    }
+
+    #[a3s_boot::message_pattern("macro.cat.field")]
+    async fn field(
+        &self,
+        #[a3s_boot::payload("id")] id: String,
+        #[a3s_boot::payload("page", default = 1, pipe = ParseIntPipe)] page: u16,
+        #[a3s_boot::payload("tag")] tag: Option<String>,
+    ) -> Result<MacroCatDto> {
+        Ok(MacroCatDto {
+            id,
+            name: format!("{}:{}", page, tag.unwrap_or_else(|| "none".to_string())),
+        })
     }
 
     #[a3s_boot::message_pattern("macro.cat.raw", raw)]
@@ -231,6 +333,12 @@ impl MacroCatsMessages {
             message.pattern(),
             message.data()["id"].as_str().unwrap_or("unknown")
         )))
+    }
+
+    #[a3s_boot::message_pattern("macro.cat.fail")]
+    #[a3s_boot::use_filter(MacroBadRequestFilter::catch_filter())]
+    async fn fail(&self) -> Result<MacroCatDto> {
+        Err(BootError::BadRequest("macro message filter".to_string()))
     }
 
     #[a3s_boot::event_pattern("macro.cat.seen")]
@@ -766,6 +874,42 @@ impl ExceptionFilter for MacroBadRequestFilter {
     }
 }
 
+impl TransportExceptionFilter for MacroBadRequestFilter {
+    fn catch(
+        &self,
+        context: TransportContext,
+        error: BootError,
+    ) -> BoxFuture<'static, Result<Option<TransportExceptionResponse>>> {
+        Box::pin(async move {
+            let reply = TransportReply::json(&json!({
+                "pattern": context.pattern,
+                "message": error.to_string(),
+            }))?;
+            Ok(Some(TransportExceptionResponse::reply(reply)))
+        })
+    }
+}
+
+impl WebSocketExceptionFilter for MacroBadRequestFilter {
+    fn catch(
+        &self,
+        context: WebSocketContext,
+        error: BootError,
+    ) -> BoxFuture<'static, Result<Option<WebSocketExceptionResponse>>> {
+        Box::pin(async move {
+            Ok(Some(WebSocketExceptionResponse::message(
+                WebSocketMessage::new(
+                    "macro.error",
+                    json!({
+                        "event": context.event,
+                        "message": error.to_string(),
+                    }),
+                ),
+            )))
+        })
+    }
+}
+
 #[a3s_boot::catch(Conflict)]
 #[derive(Default)]
 struct MacroConflictFilter;
@@ -1024,7 +1168,7 @@ async fn macros_register_injectable_services_and_controller_routes() {
     assert_eq!(app.routes().len(), 20);
     assert_eq!(app.gateways().len(), 1);
     assert_eq!(app.gateways()[0].namespace(), Some("/macro-cats"));
-    assert_eq!(app.message_patterns().len(), 3);
+    assert_eq!(app.message_patterns().len(), 5);
     let exports = MacroCatsModule.exports().unwrap();
     assert!(exports.contains(&ProviderToken::of::<MacroCatsService>()));
     assert!(exports.contains(&ProviderToken::named("readonly-cats")));
@@ -1050,6 +1194,34 @@ async fn macros_register_injectable_services_and_controller_routes() {
             "resource"
         ),
         Some(&json!("cats"))
+    );
+    assert_eq!(
+        app.reflector().unwrap().gateway_event_metadata_value(
+            "/macro-cats/ws",
+            "cat.find",
+            "resource"
+        ),
+        Some(&json!("macro-gateway"))
+    );
+    assert_eq!(
+        app.reflector().unwrap().gateway_event_metadata_value(
+            "/macro-cats/ws",
+            "cat.find",
+            "action"
+        ),
+        Some(&json!("find"))
+    );
+    assert_eq!(
+        app.reflector()
+            .unwrap()
+            .message_pattern_metadata_value("macro.cat.find", "resource"),
+        Some(&json!("macro-messages"))
+    );
+    assert_eq!(
+        app.reflector()
+            .unwrap()
+            .message_pattern_metadata_value("macro.cat.find", "action"),
+        Some(&json!("find"))
     );
 
     let text = app
@@ -1622,14 +1794,102 @@ async fn macros_register_injectable_services_and_controller_routes() {
         .await
         .unwrap()
         .unwrap();
+    let ws_typed_reply = ws_connection
+        .dispatch(WebSocketMessage::new("cat.typed", json!({ "id": "43" })))
+        .await
+        .unwrap()
+        .unwrap();
+    let ws_field_reply = ws_connection
+        .dispatch(WebSocketMessage::new("cat.field", json!({ "id": "44" })))
+        .await
+        .unwrap()
+        .unwrap();
+    let ws_server_reply = ws_connection
+        .dispatch(WebSocketMessage::new("cat.server", json!({})))
+        .await
+        .unwrap()
+        .unwrap();
+    let ws_connection_reply = ws_connection
+        .dispatch(WebSocketMessage::new(
+            "cat.connection",
+            json!({ "id": "45" }),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let ws_create_reply = ws_connection
+        .dispatch(WebSocketMessage::new(
+            "cat.create",
+            json!({ "name": "Luna" }),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let ws_validation_error = ws_connection
+        .dispatch(WebSocketMessage::new(
+            "cat.validate",
+            json!({ "name": " " }),
+        ))
+        .await
+        .unwrap_err();
+    let ws_error = ws_connection
+        .dispatch(WebSocketMessage::new("cat.fail", json!({})))
+        .await
+        .unwrap()
+        .unwrap();
     ws_connection.close().await.unwrap();
     assert_eq!(ws_reply.event(), "cat.found");
     assert_eq!(ws_reply.data()["id"], json!("42"));
     assert_eq!(ws_reply.data()["name"], json!("Milo"));
+    assert_eq!(ws_typed_reply.event(), "cat.typed");
+    assert_eq!(ws_typed_reply.data()["id"], json!("43"));
+    assert_eq!(ws_typed_reply.data()["name"], json!("Milo"));
+    assert_eq!(ws_field_reply.event(), "cat.field");
+    assert_eq!(
+        ws_field_reply.data(),
+        &json!({
+            "id": "44",
+            "page": 1,
+            "tag": "none",
+        })
+    );
+    assert_eq!(ws_server_reply.event(), "cat.server");
+    assert_eq!(
+        ws_server_reply.data(),
+        &json!({
+            "path": "/macro-cats/ws",
+            "namespace": "/macro-cats",
+            "connections": 1,
+        })
+    );
+    assert_eq!(ws_connection_reply.event(), "cat.connection");
+    assert_eq!(
+        ws_connection_reply.data()["connectionId"],
+        json!(ws_connection.id())
+    );
+    assert_eq!(ws_connection_reply.data()["path"], json!("/macro-cats/ws"));
+    assert_eq!(ws_connection_reply.data()["id"], json!("45"));
+    assert_eq!(ws_create_reply.event(), "cat.created");
+    assert_eq!(ws_create_reply.data()["name"], json!("Luna"));
+    assert_eq!(ws_create_reply.data()["kind"], json!("cat"));
+    assert!(
+        matches!(&ws_validation_error, BootError::BadRequest(message) if message.contains("name is required")),
+        "{ws_validation_error:?}"
+    );
+    assert_eq!(
+        ws_error,
+        WebSocketMessage::new(
+            "macro.error",
+            json!({
+                "event": "cat.fail",
+                "message": "bad request: macro websocket filter",
+            }),
+        )
+    );
     assert_eq!(
         app.get::<MacroGatewayLifecycleLog>().unwrap().entries(),
         [
-            "init:/macro-cats/ws:cat.find",
+            "init:/macro-cats/ws:cat.connection,cat.create,cat.fail,cat.field,cat.find,cat.server,cat.typed,cat.validate:0",
             "connect:/macro-cats/ws",
             "disconnect:/macro-cats/ws"
         ]
@@ -1656,6 +1916,22 @@ async fn macros_register_injectable_services_and_controller_routes() {
         }
     );
 
+    let message_field_reply = app
+        .dispatch_message(TransportMessage::new(
+            "macro.cat.field",
+            json!({ "id": "field" }),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        message_field_reply.data_as::<MacroCatDto>().unwrap(),
+        MacroCatDto {
+            id: "field".to_string(),
+            name: "1:none".to_string(),
+        }
+    );
+
     let raw_reply = app
         .dispatch_message(TransportMessage::new(
             "macro.cat.raw",
@@ -1665,6 +1941,19 @@ async fn macros_register_injectable_services_and_controller_routes() {
         .unwrap()
         .unwrap();
     assert_eq!(raw_reply.data(), &json!("macro.cat.raw:raw"));
+
+    let message_error = app
+        .dispatch_message(TransportMessage::new("macro.cat.fail", json!({})))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        message_error.data(),
+        &json!({
+            "pattern": "macro.cat.fail",
+            "message": "bad request: macro message filter",
+        })
+    );
 
     let event_reply = app
         .dispatch_message(

@@ -46,11 +46,39 @@ impl RouteDefinition {
         self
     }
 
+    pub(crate) fn insert_middleware_prefix_at(
+        mut self,
+        index: usize,
+        middleware: Arc<dyn Middleware>,
+    ) -> Self {
+        self.middleware
+            .insert(index.min(self.middleware.len()), middleware);
+        self
+    }
+
     pub fn with_guard<G>(mut self, guard: G) -> Self
     where
         G: Guard,
     {
         self.guards.push(PipelineComponent::<dyn Guard>::new(guard));
+        self
+    }
+
+    pub(crate) fn insert_pipe_prefix_at(
+        mut self,
+        index: usize,
+        pipe: PipelineComponent<dyn Pipe>,
+    ) -> Self {
+        self.pipes.insert(index.min(self.pipes.len()), pipe);
+        self
+    }
+
+    pub(crate) fn insert_guard_prefix_at(
+        mut self,
+        index: usize,
+        guard: PipelineComponent<dyn Guard>,
+    ) -> Self {
+        self.guards.insert(index.min(self.guards.len()), guard);
         self
     }
 
@@ -60,6 +88,16 @@ impl RouteDefinition {
     {
         self.interceptors
             .push(PipelineComponent::<dyn Interceptor>::new(interceptor));
+        self
+    }
+
+    pub(crate) fn insert_interceptor_prefix_at(
+        mut self,
+        index: usize,
+        interceptor: PipelineComponent<dyn Interceptor>,
+    ) -> Self {
+        self.interceptors
+            .insert(index.min(self.interceptors.len()), interceptor);
         self
     }
 
@@ -84,6 +122,15 @@ impl RouteDefinition {
     {
         self.filters
             .push(PipelineComponent::<dyn ExceptionFilter>::new(filter));
+        self
+    }
+
+    pub(crate) fn insert_filter_prefix_at(
+        mut self,
+        index: usize,
+        filter: PipelineComponent<dyn ExceptionFilter>,
+    ) -> Self {
+        self.filters.insert(index.min(self.filters.len()), filter);
         self
     }
 

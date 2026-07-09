@@ -15,6 +15,7 @@ pub(super) struct ModuleRegistry {
     visiting: Vec<String>,
     global_ref: ModuleRef,
     provider_overrides: BTreeMap<ProviderToken, ProviderDefinition>,
+    module_overrides: BTreeMap<String, Arc<dyn Module>>,
 }
 
 pub(super) struct ModuleRegistrationSink<'a> {
@@ -35,6 +36,7 @@ impl ModuleRegistry {
     pub fn new(
         global_ref: ModuleRef,
         provider_overrides: BTreeMap<ProviderToken, ProviderDefinition>,
+        module_overrides: BTreeMap<String, Arc<dyn Module>>,
     ) -> Self {
         Self {
             registered: BTreeMap::new(),
@@ -42,6 +44,7 @@ impl ModuleRegistry {
             visiting: Vec::new(),
             global_ref,
             provider_overrides,
+            module_overrides,
         }
     }
 
@@ -61,6 +64,7 @@ impl ModuleRegistry {
         sink: &mut ModuleRegistrationSink<'_>,
         parent_route_prefix: &str,
     ) -> Result<RegisteredModule> {
+        let module = self.module_override_or(module);
         let name = module.name();
         if name.trim().is_empty() {
             return Err(BootError::EmptyModuleName);
@@ -100,6 +104,7 @@ impl ModuleRegistry {
         sink: &mut ModuleRegistrationSink<'_>,
         parent_route_prefix: &str,
     ) -> Result<RegisteredModule> {
+        let module = self.module_override_or(module);
         let name = module.name();
         if name.trim().is_empty() {
             return Err(BootError::EmptyModuleName);
@@ -132,6 +137,7 @@ impl ModuleRegistry {
         parent_route_prefix: &'a str,
     ) -> BoxFuture<'a, Result<RegisteredModule>> {
         Box::pin(async move {
+            let module = self.module_override_or(module);
             let name = module.name();
             if name.trim().is_empty() {
                 return Err(BootError::EmptyModuleName);
@@ -175,6 +181,7 @@ impl ModuleRegistry {
         parent_route_prefix: &'a str,
     ) -> BoxFuture<'a, Result<RegisteredModule>> {
         Box::pin(async move {
+            let module = self.module_override_or(module);
             let name = module.name();
             if name.trim().is_empty() {
                 return Err(BootError::EmptyModuleName);
@@ -483,6 +490,13 @@ impl ModuleRegistry {
             .get(provider.token())
             .cloned()
             .unwrap_or(provider)
+    }
+
+    fn module_override_or(&self, module: Arc<dyn Module>) -> Arc<dyn Module> {
+        self.module_overrides
+            .get(module.name())
+            .cloned()
+            .unwrap_or(module)
     }
 }
 

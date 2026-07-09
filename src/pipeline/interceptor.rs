@@ -8,6 +8,13 @@ pub trait Interceptor: Send + Sync + 'static {
         Box::pin(async { Ok(()) })
     }
 
+    fn short_circuit(
+        &self,
+        _context: ExecutionContext,
+    ) -> BoxFuture<'static, Result<Option<BootResponse>>> {
+        Box::pin(async { Ok(None) })
+    }
+
     fn after(
         &self,
         _context: ExecutionContext,

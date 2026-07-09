@@ -759,6 +759,62 @@ async fn global_and_controller_interceptors_wrap_route_in_order() {
 }
 
 #[derive(Debug)]
+struct LateControllerPipelineModule {
+    log: Arc<std::sync::Mutex<Vec<String>>>,
+}
+
+impl Module for LateControllerPipelineModule {
+    fn name(&self) -> &'static str {
+        "late-controller-pipeline"
+    }
+
+    fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
+        let log = Arc::clone(&self.log);
+        Ok(vec![ControllerDefinition::new("/late-pipeline")?
+            .get("/", move |_| {
+                let log = Arc::clone(&log);
+                async move {
+                    log.lock().unwrap().push("handler".to_string());
+                    Ok(BootResponse::text("ok"))
+                }
+            })?
+            .with_interceptor(TraceInterceptor::new("first", Arc::clone(&self.log)))
+            .with_interceptor(TraceInterceptor::new(
+                "second",
+                Arc::clone(&self.log),
+            ))])
+    }
+}
+
+#[tokio::test]
+async fn controller_pipeline_applies_to_existing_routes() {
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let app = BootApplication::builder()
+        .import(LateControllerPipelineModule {
+            log: Arc::clone(&log),
+        })
+        .build()
+        .unwrap();
+
+    let response = app
+        .call(BootRequest::new(HttpMethod::Get, "/late-pipeline"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.body, b"ok");
+    assert_eq!(
+        log.lock().unwrap().as_slice(),
+        [
+            "before:first",
+            "before:second",
+            "handler",
+            "after:second",
+            "after:first"
+        ]
+    );
+}
+
+#[derive(Debug)]
 struct MiddlewareOrderModule {
     log: Arc<std::sync::Mutex<Vec<String>>>,
 }

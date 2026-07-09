@@ -11,7 +11,10 @@ pub use context::{
     ExecutionContext, ExecutionProtocol, ExecutionTransportKind, TransportExecutionContext,
     WebSocketExecutionContext,
 };
-pub use filter::{catch_errors, CatchFilter, ExceptionFilter};
+pub use filter::{
+    catch_errors, CatchFilter, ExceptionFilter, TransportExceptionFilter,
+    TransportExceptionResponse, WebSocketExceptionFilter, WebSocketExceptionResponse,
+};
 pub use guard::Guard;
 pub(crate) use interceptor::ExecutionInterceptorAdapter;
 pub use interceptor::{ExecutionInterceptor, Interceptor};

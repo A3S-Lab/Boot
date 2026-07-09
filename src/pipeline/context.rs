@@ -98,6 +98,7 @@ impl ExecutionContext {
         event: String,
         namespace: Option<String>,
         module_name: Option<String>,
+        metadata: BTreeMap<String, Value>,
     ) -> Self {
         Self {
             protocol: ExecutionProtocol::WebSocket,
@@ -107,7 +108,7 @@ impl ExecutionContext {
             module_name,
             controller_prefix: None,
             serialization: SerializationOptions::default(),
-            metadata: BTreeMap::new(),
+            metadata,
             request,
             websocket: Some(WebSocketExecutionContext {
                 gateway_path,
@@ -122,6 +123,7 @@ impl ExecutionContext {
         pattern: String,
         kind: ExecutionTransportKind,
         module_name: Option<String>,
+        metadata: BTreeMap<String, Value>,
     ) -> Self {
         Self {
             protocol: ExecutionProtocol::Transport,
@@ -131,7 +133,7 @@ impl ExecutionContext {
             module_name,
             controller_prefix: None,
             serialization: SerializationOptions::default(),
-            metadata: BTreeMap::new(),
+            metadata,
             request: BootRequest::new(HttpMethod::Post, "/__transport"),
             websocket: None,
             transport: Some(TransportExecutionContext { pattern, kind }),

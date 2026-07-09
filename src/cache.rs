@@ -1,11 +1,18 @@
-use crate::{BootError, Module, ProviderDefinition, ProviderToken, Result};
+use crate::{
+    BootError, BootResponse, BoxFuture, ExecutionContext, HttpMethod, Interceptor, Module,
+    ProviderDefinition, ProviderToken, Result,
+};
 use serde::de::DeserializeOwned;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
+
+pub const CACHE_KEY_METADATA: &str = "cache.key";
+pub const CACHE_TTL_METADATA: &str = "cache.ttl_ms";
+pub const CACHE_DISABLED_METADATA: &str = "cache.disabled";
 
 /// Cache configuration shared by cache modules and cache instances.
 #[derive(Debug, Clone, Copy, Default)]
@@ -287,5 +294,177 @@ impl Module for CacheModule {
 
     fn is_global(&self) -> bool {
         self.global
+    }
+}
+
+/// Nest-style response cache interceptor for HTTP GET routes.
+#[derive(Clone)]
+pub struct CacheInterceptor {
+    source: CacheInterceptorSource,
+}
+
+impl fmt::Debug for CacheInterceptor {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CacheInterceptor")
+            .field("source", &self.source)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
+enum CacheInterceptorSource {
+    Cache(Arc<Cache>),
+    Provider,
+    NamedProvider(String),
+}
+
+impl fmt::Debug for CacheInterceptorSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Cache(_) => f.write_str("Cache"),
+            Self::Provider => f.write_str("Provider"),
+            Self::NamedProvider(token) => f.debug_tuple("NamedProvider").field(token).finish(),
+        }
+    }
+}
+
+impl CacheInterceptor {
+    pub fn new(cache: Cache) -> Self {
+        Self::from_cache_arc(Arc::new(cache))
+    }
+
+    pub fn from_cache_arc(cache: Arc<Cache>) -> Self {
+        Self {
+            source: CacheInterceptorSource::Cache(cache),
+        }
+    }
+
+    pub fn from_provider() -> Self {
+        Self {
+            source: CacheInterceptorSource::Provider,
+        }
+    }
+
+    pub fn from_named_provider(token: impl Into<String>) -> Self {
+        Self {
+            source: CacheInterceptorSource::NamedProvider(token.into()),
+        }
+    }
+
+    fn cache(&self, context: &ExecutionContext) -> Result<Arc<Cache>> {
+        match &self.source {
+            CacheInterceptorSource::Cache(cache) => Ok(Arc::clone(cache)),
+            CacheInterceptorSource::Provider => context.request.get::<Cache>(),
+            CacheInterceptorSource::NamedProvider(token) => {
+                context.request.get_named::<Cache>(token)
+            }
+        }
+    }
+}
+
+impl Interceptor for CacheInterceptor {
+    fn short_circuit(
+        &self,
+        context: ExecutionContext,
+    ) -> BoxFuture<'static, Result<Option<BootResponse>>> {
+        let cache = self.cache(&context);
+        Box::pin(async move {
+            let Some(key) = cache_key_for_context(&context)? else {
+                return Ok(None);
+            };
+            let Some(response) = cache?.get::<CachedHttpResponse>(&key)? else {
+                return Ok(None);
+            };
+            Ok(Some(response.into_response()))
+        })
+    }
+
+    fn after(
+        &self,
+        context: ExecutionContext,
+        response: BootResponse,
+    ) -> BoxFuture<'static, Result<BootResponse>> {
+        let cache = self.cache(&context);
+        Box::pin(async move {
+            let Some(key) = cache_key_for_context(&context)? else {
+                return Ok(response);
+            };
+            if !is_cacheable_response(&response) {
+                return Ok(response);
+            }
+
+            let cached = CachedHttpResponse::from_response(&response);
+            let cache = cache?;
+            if let Some(ttl) = cache_ttl_for_context(&context)? {
+                cache.set_with_ttl(key, &cached, Some(ttl))?;
+            } else {
+                cache.set(key, &cached)?;
+            }
+            Ok(response)
+        })
+    }
+}
+
+fn cache_key_for_context(context: &ExecutionContext) -> Result<Option<String>> {
+    if context.protocol != crate::ExecutionProtocol::Http || context.method != HttpMethod::Get {
+        return Ok(None);
+    }
+    if context
+        .metadata_as::<bool>(CACHE_DISABLED_METADATA)?
+        .unwrap_or(false)
+    {
+        return Ok(None);
+    }
+    if let Some(key) = context.metadata_as::<String>(CACHE_KEY_METADATA)? {
+        return Ok(Some(key));
+    }
+
+    let query = context
+        .request
+        .query_string()
+        .map(|query| format!("?{query}"))
+        .unwrap_or_default();
+    Ok(Some(format!(
+        "{}:{}{}",
+        context.method.as_str(),
+        context.request_path,
+        query
+    )))
+}
+
+fn cache_ttl_for_context(context: &ExecutionContext) -> Result<Option<Duration>> {
+    Ok(context
+        .metadata_as::<u64>(CACHE_TTL_METADATA)?
+        .map(Duration::from_millis))
+}
+
+fn is_cacheable_response(response: &BootResponse) -> bool {
+    (200..300).contains(&response.status()) && !response.is_streaming()
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct CachedHttpResponse {
+    status: u16,
+    headers: BTreeMap<String, String>,
+    appended_headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
+impl CachedHttpResponse {
+    fn from_response(response: &BootResponse) -> Self {
+        Self {
+            status: response.status,
+            headers: response.headers.clone(),
+            appended_headers: response.appended_headers.clone(),
+            body: response.body.clone(),
+        }
+    }
+
+    fn into_response(self) -> BootResponse {
+        let mut response = BootResponse::new(self.status, self.body).with_headers(self.headers);
+        for (name, value) in self.appended_headers {
+            response = response.append_header(name, value);
+        }
+        response
     }
 }

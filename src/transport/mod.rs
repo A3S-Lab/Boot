@@ -1,11 +1,13 @@
+use crate::pipeline::{PipelineComponent, PipelineOverrides};
 use crate::{
-    validate_json_value_with_options, validate_value, BootError, BoxFuture, ExecutionContext,
-    ExecutionInterceptor, ExecutionTransportKind, Guard, Result, Validate, ValidationOptions,
-    ValidationSchema,
+    catch_errors, validate_json_value_with_options, validate_value, BootError, BootErrorKind,
+    BoxFuture, ExecutionContext, ExecutionInterceptor, ExecutionTransportKind, Guard, Result,
+    TransportExceptionFilter, Validate, ValidationOptions, ValidationSchema,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -99,11 +101,77 @@ impl TransportMessage {
             .map_err(|err| BootError::BadRequest(err.to_string()))
     }
 
+    pub fn data_field(&self, name: &str) -> Result<Option<Value>> {
+        let Value::Object(fields) = &self.data else {
+            return Err(BootError::BadRequest(
+                "expected JSON object transport data".to_string(),
+            ));
+        };
+
+        Ok(fields.get(name).filter(|value| !value.is_null()).cloned())
+    }
+
+    pub fn data_field_as<T>(&self, name: &str) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        let Some(value) = self.data_field(name)? else {
+            return Err(BootError::BadRequest(format!(
+                "missing transport data field: {name}"
+            )));
+        };
+        deserialize_data_field("transport data field", name, value)
+    }
+
+    pub fn optional_data_field_as<T>(&self, name: &str) -> Result<Option<T>>
+    where
+        T: DeserializeOwned,
+    {
+        self.data_field(name)?
+            .map(|value| deserialize_data_field("transport data field", name, value))
+            .transpose()
+    }
+
+    pub fn data_field_string(&self, name: &str) -> Result<String> {
+        let Some(value) = self.data_field(name)? else {
+            return Err(BootError::BadRequest(format!(
+                "missing transport data field: {name}"
+            )));
+        };
+        data_field_value_to_string(value)
+    }
+
+    pub fn optional_data_field_string(&self, name: &str) -> Result<Option<String>> {
+        self.data_field(name)?
+            .map(data_field_value_to_string)
+            .transpose()
+    }
+
     pub fn validated_data<T>(&self) -> Result<T>
     where
         T: DeserializeOwned + Validate,
     {
         validate_value(self.data_as::<T>()?)
+    }
+}
+
+fn deserialize_data_field<T>(label: &str, name: &str, value: Value) -> Result<T>
+where
+    T: DeserializeOwned,
+{
+    serde_json::from_value(value)
+        .map_err(|error| BootError::BadRequest(format!("invalid {label} {name}: {error}")))
+}
+
+fn data_field_value_to_string(value: Value) -> Result<String> {
+    match value {
+        Value::String(value) => Ok(value),
+        Value::Bool(value) => Ok(value.to_string()),
+        Value::Number(value) => Ok(value.to_string()),
+        Value::Array(_) | Value::Object(_) => {
+            serde_json::to_string(&value).map_err(|error| BootError::BadRequest(error.to_string()))
+        }
+        Value::Null => Ok("null".to_string()),
     }
 }
 
@@ -209,10 +277,12 @@ impl TransportContext {
         let pattern = pattern.to_string();
         let kind = definition.kind;
         let module_name = definition.module_name.clone();
+        let metadata = definition.metadata.clone();
         let execution_context = ExecutionContext::transport(
             pattern.clone(),
             ExecutionTransportKind::from(kind),
             module_name.clone(),
+            metadata,
         );
         Self {
             pattern,
@@ -332,7 +402,8 @@ where
 }
 
 type TransportHandlerFuture = BoxFuture<'static, Result<Option<TransportReply>>>;
-type MessageValidator = Arc<dyn Fn(TransportMessage) -> Result<TransportMessage> + Send + Sync>;
+type MessageValidator =
+    Arc<dyn Fn(TransportMessage, ValidationOptions) -> Result<TransportMessage> + Send + Sync>;
 
 trait TransportMessageHandler: Send + Sync + 'static {
     fn call(&self, message: TransportMessage) -> TransportHandlerFuture;
@@ -360,10 +431,15 @@ pub struct MessagePatternDefinition {
     pattern: String,
     kind: MessagePatternKind,
     handler: Arc<dyn TransportMessageHandler>,
-    pipes: Vec<Arc<dyn TransportPipe>>,
-    guards: Vec<Arc<dyn TransportGuard>>,
-    interceptors: Vec<Arc<dyn TransportInterceptor>>,
+    pipes: Vec<PipelineComponent<dyn TransportPipe>>,
+    guards: Vec<PipelineComponent<dyn TransportGuard>>,
+    interceptors: Vec<PipelineComponent<dyn TransportInterceptor>>,
+    filters: Vec<PipelineComponent<dyn TransportExceptionFilter>>,
     validators: Vec<MessageValidator>,
+    validation_enabled: bool,
+    validation_disabled: bool,
+    validation_options: ValidationOptions,
+    metadata: BTreeMap<String, Value>,
     module_name: Option<String>,
 }
 
@@ -467,7 +543,12 @@ impl MessagePatternDefinition {
             pipes: Vec::new(),
             guards: Vec::new(),
             interceptors: Vec::new(),
+            filters: Vec::new(),
             validators: Vec::new(),
+            validation_enabled: false,
+            validation_disabled: false,
+            validation_options: ValidationOptions::default(),
+            metadata: BTreeMap::new(),
             module_name: None,
         })
     }
@@ -484,11 +565,38 @@ impl MessagePatternDefinition {
         self.module_name.as_deref()
     }
 
+    pub fn metadata(&self) -> &BTreeMap<String, Value> {
+        &self.metadata
+    }
+
+    pub fn metadata_value(&self, key: &str) -> Option<&Value> {
+        self.metadata.get(key)
+    }
+
+    pub fn with_metadata<V>(self, key: impl Into<String>, value: V) -> Result<Self>
+    where
+        V: Serialize,
+    {
+        let key = key.into();
+        let value = serde_json::to_value(value).map_err(|error| {
+            BootError::Internal(format!(
+                "failed to serialize message pattern metadata `{key}`: {error}"
+            ))
+        })?;
+        Ok(self.with_metadata_value(key, value))
+    }
+
+    pub fn with_metadata_value(mut self, key: impl Into<String>, value: Value) -> Self {
+        self.metadata.insert(key.into(), value);
+        self
+    }
+
     pub fn with_pipe<P>(mut self, pipe: P) -> Self
     where
         P: TransportPipe,
     {
-        self.pipes.push(Arc::new(pipe));
+        self.pipes
+            .push(PipelineComponent::<dyn TransportPipe>::new(pipe));
         self
     }
 
@@ -496,7 +604,8 @@ impl MessagePatternDefinition {
     where
         G: TransportGuard,
     {
-        self.guards.push(Arc::new(guard));
+        self.guards
+            .push(PipelineComponent::<dyn TransportGuard>::new(guard));
         self
     }
 
@@ -505,7 +614,9 @@ impl MessagePatternDefinition {
         G: Guard,
     {
         self.guards
-            .push(Arc::new(ExecutionTransportGuard { inner: guard }));
+            .push(PipelineComponent::<dyn TransportGuard>::new(
+                ExecutionTransportGuard { inner: guard },
+            ));
         self
     }
 
@@ -519,11 +630,64 @@ impl MessagePatternDefinition {
         self
     }
 
+    pub(crate) fn with_guard_prefix(mut self, guards: &[Arc<dyn TransportGuard>]) -> Self {
+        let mut merged = guards
+            .iter()
+            .cloned()
+            .map(PipelineComponent::<dyn TransportGuard>::from_arc)
+            .collect::<Vec<_>>();
+        merged.extend(self.guards);
+        self.guards = merged;
+        self
+    }
+
+    pub(crate) fn with_interceptor_prefix(
+        mut self,
+        interceptors: &[Arc<dyn TransportInterceptor>],
+    ) -> Self {
+        let mut merged = interceptors
+            .iter()
+            .cloned()
+            .map(PipelineComponent::<dyn TransportInterceptor>::from_arc)
+            .collect::<Vec<_>>();
+        merged.extend(self.interceptors);
+        self.interceptors = merged;
+        self
+    }
+
+    pub(crate) fn with_pipe_prefix(mut self, pipes: &[Arc<dyn TransportPipe>]) -> Self {
+        let mut merged = pipes
+            .iter()
+            .cloned()
+            .map(PipelineComponent::<dyn TransportPipe>::from_arc)
+            .collect::<Vec<_>>();
+        merged.extend(self.pipes);
+        self.pipes = merged;
+        self
+    }
+
+    pub(crate) fn with_filter_prefix(
+        mut self,
+        filters: &[Arc<dyn TransportExceptionFilter>],
+    ) -> Self {
+        let mut merged = filters
+            .iter()
+            .cloned()
+            .map(PipelineComponent::<dyn TransportExceptionFilter>::from_arc)
+            .collect::<Vec<_>>();
+        merged.extend(self.filters);
+        self.filters = merged;
+        self
+    }
+
     pub fn with_interceptor<I>(mut self, interceptor: I) -> Self
     where
         I: TransportInterceptor,
     {
-        self.interceptors.push(Arc::new(interceptor));
+        self.interceptors
+            .push(PipelineComponent::<dyn TransportInterceptor>::new(
+                interceptor,
+            ));
         self
     }
 
@@ -532,9 +696,67 @@ impl MessagePatternDefinition {
         I: ExecutionInterceptor,
     {
         self.interceptors
-            .push(Arc::new(ExecutionTransportInterceptor {
-                inner: interceptor,
-            }));
+            .push(PipelineComponent::<dyn TransportInterceptor>::new(
+                ExecutionTransportInterceptor { inner: interceptor },
+            ));
+        self
+    }
+
+    pub fn with_filter<F>(mut self, filter: F) -> Self
+    where
+        F: TransportExceptionFilter,
+    {
+        self.filters
+            .push(PipelineComponent::<dyn TransportExceptionFilter>::new(
+                filter,
+            ));
+        self
+    }
+
+    pub fn with_catch_filter<I, F>(self, kinds: I, filter: F) -> Self
+    where
+        I: IntoIterator<Item = BootErrorKind>,
+        F: TransportExceptionFilter,
+    {
+        self.with_filter(catch_errors(kinds, filter))
+    }
+
+    pub(crate) fn with_pipeline_overrides(mut self, overrides: &PipelineOverrides) -> Self {
+        overrides.apply_to_transport_pipes(&mut self.pipes);
+        overrides.apply_to_transport_guards(&mut self.guards);
+        overrides.apply_to_transport_interceptors(&mut self.interceptors);
+        overrides.apply_to_transport_filters(&mut self.filters);
+        self
+    }
+
+    pub fn with_validation(mut self) -> Self {
+        self.validation_enabled = true;
+        self.validation_disabled = false;
+        self
+    }
+
+    pub fn with_validation_options(mut self, options: ValidationOptions) -> Self {
+        self.validation_enabled = true;
+        self.validation_disabled = false;
+        self.validation_options = self.validation_options.merge(options);
+        self
+    }
+
+    pub fn without_validation(mut self) -> Self {
+        self.validation_enabled = false;
+        self.validation_disabled = true;
+        self
+    }
+
+    pub(crate) fn with_validation_prefix(
+        mut self,
+        validation_enabled: bool,
+        validation_options: ValidationOptions,
+    ) -> Self {
+        if !self.validation_disabled {
+            self.validation_enabled = validation_enabled || self.validation_enabled;
+            self.validation_options = validation_options.merge(self.validation_options);
+        }
         self
     }
 
@@ -542,31 +764,45 @@ impl MessagePatternDefinition {
     where
         T: DeserializeOwned + Validate + 'static,
     {
-        self.validators.push(Arc::new(|message| {
+        self.validators.push(Arc::new(|message, _| {
             message.validated_data::<T>().map(|_| message)
         }));
-        self
+        self.with_validation()
     }
 
     pub fn with_payload_validation_options<T>(mut self, options: ValidationOptions) -> Self
     where
         T: DeserializeOwned + Serialize + Validate + ValidationSchema + 'static,
     {
-        self.validators.push(Arc::new(move |mut message| {
-            let data = validate_json_value_with_options::<T>(
-                message.data.clone(),
-                options,
-                "message property",
-            )?;
-            if options.transform || options.whitelist {
-                message.data = data;
-            }
-            Ok(message)
-        }));
-        self
+        self.validators
+            .push(Arc::new(move |mut message, inherited_options| {
+                let options = inherited_options.merge(options);
+                let data = validate_json_value_with_options::<T>(
+                    message.data.clone(),
+                    options,
+                    "message property",
+                )?;
+                if options.transform || options.whitelist {
+                    message.data = data;
+                }
+                Ok(message)
+            }));
+        self.with_validation()
     }
 
-    pub async fn dispatch(&self, mut message: TransportMessage) -> Result<Option<TransportReply>> {
+    pub async fn dispatch(&self, message: TransportMessage) -> Result<Option<TransportReply>> {
+        let context = TransportContext::new(self, &message.pattern);
+        match self.dispatch_pipeline(message, context.clone()).await {
+            Ok(reply) => Ok(reply),
+            Err(error) => self.handle_error(context, error).await,
+        }
+    }
+
+    async fn dispatch_pipeline(
+        &self,
+        mut message: TransportMessage,
+        context: TransportContext,
+    ) -> Result<Option<TransportReply>> {
         if message.pattern != self.pattern {
             return Err(BootError::NotFound(format!(
                 "message pattern {}",
@@ -574,9 +810,8 @@ impl MessagePatternDefinition {
             )));
         }
 
-        let context = TransportContext::new(self, &message.pattern);
         for guard in &self.guards {
-            let can_activate = guard.can_activate(context.clone()).await?;
+            let can_activate = guard.inner().can_activate(context.clone()).await?;
             if !can_activate {
                 return Err(BootError::Forbidden(format!(
                     "message pattern {}",
@@ -586,15 +821,17 @@ impl MessagePatternDefinition {
         }
 
         for interceptor in &self.interceptors {
-            interceptor.before(context.clone()).await?;
+            interceptor.inner().before(context.clone()).await?;
         }
 
         for pipe in &self.pipes {
-            message = pipe.transform(message).await?;
+            message = pipe.inner().transform(message).await?;
         }
 
-        for validator in &self.validators {
-            message = validator(message)?;
+        if self.validation_enabled {
+            for validator in &self.validators {
+                message = validator(message, self.validation_options)?;
+            }
         }
 
         let mut reply = self.handler.call(message).await?;
@@ -603,9 +840,30 @@ impl MessagePatternDefinition {
         }
 
         for interceptor in self.interceptors.iter().rev() {
-            reply = interceptor.after(context.clone(), reply).await?;
+            reply = interceptor.inner().after(context.clone(), reply).await?;
         }
         Ok(reply)
+    }
+
+    async fn handle_error(
+        &self,
+        context: TransportContext,
+        error: BootError,
+    ) -> Result<Option<TransportReply>> {
+        for filter in self.filters.iter().rev() {
+            if let Some(response) = filter
+                .inner()
+                .catch(context.clone(), error.clone_for_filter())
+                .await?
+            {
+                return Ok(if self.kind == MessagePatternKind::Event {
+                    None
+                } else {
+                    response.into_reply()
+                });
+            }
+        }
+        Err(error)
     }
 
     pub(crate) fn with_module_name(mut self, module_name: &str) -> Self {
@@ -616,12 +874,14 @@ impl MessagePatternDefinition {
 
 fn prepend_execution_guards(
     prefix: &[Arc<dyn Guard>],
-    values: Vec<Arc<dyn TransportGuard>>,
-) -> Vec<Arc<dyn TransportGuard>> {
+    values: Vec<PipelineComponent<dyn TransportGuard>>,
+) -> Vec<PipelineComponent<dyn TransportGuard>> {
     let mut merged = prefix
         .iter()
         .cloned()
-        .map(|guard| Arc::new(ExecutionTransportGuard { inner: guard }) as Arc<dyn TransportGuard>)
+        .map(|guard| {
+            PipelineComponent::<dyn TransportGuard>::new(ExecutionTransportGuard { inner: guard })
+        })
         .collect::<Vec<_>>();
     merged.extend(values);
     merged
@@ -629,14 +889,15 @@ fn prepend_execution_guards(
 
 fn prepend_execution_interceptors(
     prefix: &[Arc<dyn ExecutionInterceptor>],
-    values: Vec<Arc<dyn TransportInterceptor>>,
-) -> Vec<Arc<dyn TransportInterceptor>> {
+    values: Vec<PipelineComponent<dyn TransportInterceptor>>,
+) -> Vec<PipelineComponent<dyn TransportInterceptor>> {
     let mut merged = prefix
         .iter()
         .cloned()
         .map(|interceptor| {
-            Arc::new(ExecutionTransportInterceptor { inner: interceptor })
-                as Arc<dyn TransportInterceptor>
+            PipelineComponent::<dyn TransportInterceptor>::new(ExecutionTransportInterceptor {
+                inner: interceptor,
+            })
         })
         .collect::<Vec<_>>();
     merged.extend(values);

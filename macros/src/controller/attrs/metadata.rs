@@ -5,7 +5,7 @@ use syn::{Attribute, Expr, LitStr, Result, Token};
 use super::is_attribute_named;
 use crate::parse_optional_comma;
 
-pub(in crate::controller) fn take_controller_metadata_attrs(
+pub(crate) fn take_controller_metadata_attrs(
     attrs: &[Attribute],
 ) -> (Vec<Attribute>, ControllerMetadataAttrs, Vec<syn::Error>) {
     let mut clean_attrs = Vec::new();
@@ -27,7 +27,7 @@ pub(in crate::controller) fn take_controller_metadata_attrs(
     (clean_attrs, metadata, errors)
 }
 
-pub(in crate::controller) fn take_route_metadata_attrs(
+pub(crate) fn take_route_metadata_attrs(
     attrs: &[Attribute],
 ) -> (Vec<Attribute>, Vec<MetadataSpec>, Vec<syn::Error>) {
     let mut clean_attrs = Vec::new();
@@ -50,12 +50,12 @@ pub(in crate::controller) fn take_route_metadata_attrs(
 }
 
 #[derive(Default)]
-pub(in crate::controller) struct ControllerMetadataAttrs {
+pub(crate) struct ControllerMetadataAttrs {
     specs: Vec<MetadataSpec>,
 }
 
 impl ControllerMetadataAttrs {
-    pub(in crate::controller) fn tokens(&self) -> Vec<proc_macro2::TokenStream> {
+    pub(crate) fn tokens(&self) -> Vec<proc_macro2::TokenStream> {
         self.specs
             .iter()
             .map(|spec| {
@@ -68,9 +68,9 @@ impl ControllerMetadataAttrs {
 }
 
 #[derive(Clone)]
-pub(in crate::controller) struct MetadataSpec {
-    pub(in crate::controller) key: LitStr,
-    pub(in crate::controller) value: Expr,
+pub(crate) struct MetadataSpec {
+    pub(crate) key: LitStr,
+    pub(crate) value: Expr,
 }
 
 impl Parse for MetadataSpec {

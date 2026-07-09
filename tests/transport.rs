@@ -1,9 +1,9 @@
 use a3s_boot::{
-    BootApplication, BootError, BoxFuture, ExecutionContext, ExecutionInterceptor,
+    BootApplication, BootError, BootErrorKind, BoxFuture, ExecutionContext, ExecutionInterceptor,
     ExecutionProtocol, ExecutionTransportKind, Guard, InProcessTransport, MessagePatternDefinition,
     MessageTransport, Module, ModuleRef, ProviderDefinition, Result, TransportContext,
-    TransportInterceptor, TransportMessage, TransportReply, Validate, ValidationOptions,
-    ValidationSchema,
+    TransportExceptionResponse, TransportInterceptor, TransportMessage, TransportReply, Validate,
+    ValidationOptions, ValidationSchema,
 };
 #[cfg(feature = "grpc-transport")]
 use a3s_boot::{GrpcTransport, GrpcTransportClient, GrpcTransportOptions};
@@ -52,6 +52,41 @@ use tokio::net::TcpListener;
     feature = "tcp-transport"
 ))]
 use tokio::time::sleep;
+
+#[test]
+fn transport_message_extracts_data_fields() {
+    let message = TransportMessage::new(
+        "cat.find",
+        json!({
+            "id": "42",
+            "page": 3,
+            "tag": null,
+        }),
+    );
+
+    assert_eq!(message.data_field_as::<String>("id").unwrap(), "42");
+    assert_eq!(message.data_field_as::<u16>("page").unwrap(), 3);
+    assert_eq!(
+        message.optional_data_field_as::<String>("tag").unwrap(),
+        None
+    );
+    assert_eq!(
+        message.optional_data_field_as::<String>("missing").unwrap(),
+        None
+    );
+    assert_eq!(message.data_field_string("page").unwrap(), "3");
+
+    let missing = message.data_field_as::<String>("missing").unwrap_err();
+    assert!(
+        matches!(missing, BootError::BadRequest(message) if message == "missing transport data field: missing")
+    );
+
+    let non_object = TransportMessage::new("cat.find", json!("42"));
+    let error = non_object.data_field_as::<String>("id").unwrap_err();
+    assert!(
+        matches!(error, BootError::BadRequest(message) if message == "expected JSON object transport data")
+    );
+}
 
 #[derive(Debug)]
 struct TransportCatsService;
@@ -292,6 +327,61 @@ async fn message_patterns_transform_payload_properties() {
 }
 
 #[tokio::test]
+async fn global_validation_options_merge_into_transport_payload_validators() {
+    let app = BootApplication::builder()
+        .use_global_validation_options(ValidationOptions::new().transform(true).whitelist(true))
+        .message_pattern(
+            MessagePatternDefinition::request(
+                "cat.create",
+                |message: TransportMessage| async move { Ok(message.data) },
+            )
+            .unwrap()
+            .with_payload_validation_options::<CreateTransportCat>(ValidationOptions::default()),
+        )
+        .build()
+        .unwrap();
+
+    let reply = app
+        .dispatch_message(TransportMessage::new(
+            "cat.create",
+            json!({ "name": "Milo", "role": "admin" }),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(reply.data, json!({ "kind": "cat", "name": "Milo" }));
+}
+
+#[tokio::test]
+async fn transport_payload_validation_can_opt_out_of_global_validation() {
+    let app = BootApplication::builder()
+        .use_global_validation()
+        .message_pattern(
+            MessagePatternDefinition::request(
+                "cat.create",
+                |message: TransportMessage| async move { Ok(message.data) },
+            )
+            .unwrap()
+            .with_payload_validation::<CreateTransportCat>()
+            .without_validation(),
+        )
+        .build()
+        .unwrap();
+
+    let reply = app
+        .dispatch_message(TransportMessage::new(
+            "cat.create",
+            json!({ "name": "   ", "kind": "cat" }),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(reply.data, json!({ "name": "   ", "kind": "cat" }));
+}
+
+#[tokio::test]
 async fn transport_pipeline_runs_in_order() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let pipe_log = Arc::clone(&log);
@@ -351,6 +441,136 @@ async fn transport_pipeline_runs_in_order() {
 }
 
 #[tokio::test]
+async fn global_transport_pipes_apply_before_pattern_pipes() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let global_log = Arc::clone(&log);
+    let pattern_log = Arc::clone(&log);
+    let handler_log = Arc::clone(&log);
+
+    let app = BootApplication::builder()
+        .use_global_transport_pipe(move |mut message: TransportMessage| {
+            let global_log = Arc::clone(&global_log);
+            async move {
+                global_log.lock().unwrap().push(format!(
+                    "pipe:global:{}",
+                    message.data["stage"].as_str().unwrap()
+                ));
+                message.data = json!({ "stage": "global" });
+                Ok(message)
+            }
+        })
+        .message_pattern(
+            MessagePatternDefinition::request("ping", move |message: TransportMessage| {
+                let handler_log = Arc::clone(&handler_log);
+                async move {
+                    handler_log.lock().unwrap().push(format!(
+                        "handler:{}",
+                        message.data["stage"].as_str().unwrap()
+                    ));
+                    Ok(TransportReply::new(message.data))
+                }
+            })
+            .unwrap()
+            .with_pipe(move |mut message: TransportMessage| {
+                let pattern_log = Arc::clone(&pattern_log);
+                async move {
+                    pattern_log.lock().unwrap().push(format!(
+                        "pipe:pattern:{}",
+                        message.data["stage"].as_str().unwrap()
+                    ));
+                    message.data = json!({ "stage": "pattern" });
+                    Ok(message)
+                }
+            }),
+        )
+        .build()
+        .unwrap();
+
+    let reply = app
+        .dispatch_message(TransportMessage::new("ping", json!({ "stage": "client" })))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(reply.data(), &json!({ "stage": "pattern" }));
+    assert_eq!(
+        log.lock().unwrap().as_slice(),
+        [
+            "pipe:global:client",
+            "pipe:pattern:global",
+            "handler:pattern"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn global_transport_guards_and_interceptors_wrap_pattern_hooks() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let global_guard_log = Arc::clone(&log);
+    let pattern_guard_log = Arc::clone(&log);
+    let handler_log = Arc::clone(&log);
+
+    let app = BootApplication::builder()
+        .use_global_transport_guard(move |context: TransportContext| {
+            let global_guard_log = Arc::clone(&global_guard_log);
+            async move {
+                global_guard_log
+                    .lock()
+                    .unwrap()
+                    .push(format!("guard:global:{}", context.pattern));
+                Ok(true)
+            }
+        })
+        .use_global_transport_interceptor(TraceTransportInterceptor::new(
+            "global",
+            Arc::clone(&log),
+        ))
+        .message_pattern(
+            MessagePatternDefinition::request("ping", move |message: TransportMessage| {
+                let handler_log = Arc::clone(&handler_log);
+                async move {
+                    handler_log.lock().unwrap().push("handler".to_string());
+                    Ok(TransportReply::new(message.data))
+                }
+            })
+            .unwrap()
+            .with_guard(move |context: TransportContext| {
+                let pattern_guard_log = Arc::clone(&pattern_guard_log);
+                async move {
+                    pattern_guard_log
+                        .lock()
+                        .unwrap()
+                        .push(format!("guard:pattern:{}", context.pattern));
+                    Ok(true)
+                }
+            })
+            .with_interceptor(TraceTransportInterceptor::new("pattern", Arc::clone(&log))),
+        )
+        .build()
+        .unwrap();
+
+    let reply = app
+        .dispatch_message(TransportMessage::new("ping", json!({ "id": 1 })))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(reply.data(), &json!({ "id": 1 }));
+    assert_eq!(
+        log.lock().unwrap().as_slice(),
+        [
+            "guard:global:ping",
+            "guard:pattern:ping",
+            "before:global",
+            "before:pattern",
+            "handler",
+            "after:pattern",
+            "after:global"
+        ]
+    );
+}
+
+#[tokio::test]
 async fn transport_patterns_can_use_shared_execution_hooks() {
     let log = Arc::new(Mutex::new(Vec::new()));
     let pattern =
@@ -380,6 +600,180 @@ async fn transport_patterns_can_use_shared_execution_hooks() {
             "after:transport:ping"
         ]
     );
+}
+
+#[tokio::test]
+async fn transport_patterns_expose_metadata_to_execution_context() {
+    let log = Arc::new(Mutex::new(Vec::new()));
+    let guard_log = Arc::clone(&log);
+    let interceptor_log = Arc::clone(&log);
+    let pattern =
+        MessagePatternDefinition::request("cats.secure", |message: TransportMessage| async move {
+            Ok(TransportReply::new(message.data))
+        })
+        .unwrap()
+        .with_metadata_value("resource", json!("cats"))
+        .with_metadata_value("roles", json!(["admin"]))
+        .with_guard(move |context: TransportContext| {
+            let guard_log = Arc::clone(&guard_log);
+            async move {
+                guard_log.lock().unwrap().push(format!(
+                    "guard:{}:{}",
+                    context.pattern,
+                    context.metadata_as::<String>("resource")?.unwrap()
+                ));
+                Ok(context.metadata_as::<Vec<String>>("roles")? == Some(vec!["admin".to_string()]))
+            }
+        })
+        .with_execution_interceptor(move |context: ExecutionContext| {
+            let interceptor_log = Arc::clone(&interceptor_log);
+            async move {
+                interceptor_log.lock().unwrap().push(format!(
+                    "before:{}",
+                    context.metadata_as::<String>("resource")?.unwrap()
+                ));
+                Ok(())
+            }
+        });
+
+    let reply = pattern
+        .dispatch(TransportMessage::new("cats.secure", json!({ "ok": true })))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(reply.data(), &json!({ "ok": true }));
+    assert_eq!(
+        log.lock().unwrap().as_slice(),
+        ["guard:cats.secure:cats", "before:cats"]
+    );
+}
+
+#[tokio::test]
+async fn transport_exception_filters_can_handle_pipeline_errors() {
+    let pattern = MessagePatternDefinition::request("cats.fail", |_message| async {
+        Err::<TransportReply, BootError>(BootError::BadRequest("invalid cat payload".to_string()))
+    })
+    .unwrap()
+    .with_catch_filter(
+        [BootErrorKind::BadRequest],
+        |context: TransportContext, error: BootError| async move {
+            Ok(Some(TransportExceptionResponse::reply(
+                TransportReply::new(json!({
+                    "pattern": context.pattern,
+                    "message": error.to_string(),
+                })),
+            )))
+        },
+    );
+
+    let reply = pattern
+        .dispatch(TransportMessage::new("cats.fail", json!({ "id": 1 })))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        reply.data(),
+        &json!({
+            "pattern": "cats.fail",
+            "message": "bad request: invalid cat payload",
+        })
+    );
+}
+
+#[tokio::test]
+async fn transport_exception_filters_only_handle_matching_error_kinds() {
+    let pattern = MessagePatternDefinition::request("cats.fail", |_message| async {
+        Err::<TransportReply, BootError>(BootError::Unauthorized("missing token".to_string()))
+    })
+    .unwrap()
+    .with_catch_filter(
+        [BootErrorKind::BadRequest],
+        |_context: TransportContext, _error: BootError| async move {
+            Ok(Some(TransportExceptionResponse::empty()))
+        },
+    );
+
+    let error = pattern
+        .dispatch(TransportMessage::new("cats.fail", json!({})))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, BootError::Unauthorized(message) if message == "missing token"));
+}
+
+#[tokio::test]
+async fn global_transport_filters_apply_to_message_dispatch_errors() {
+    let app = BootApplication::builder()
+        .use_global_transport_catch_filter(
+            [BootErrorKind::BadRequest],
+            |context: TransportContext, error: BootError| async move {
+                Ok(Some(TransportExceptionResponse::reply(
+                    TransportReply::new(json!({
+                        "pattern": context.pattern,
+                        "message": error.to_string(),
+                    })),
+                )))
+            },
+        )
+        .message_pattern(
+            MessagePatternDefinition::request("cats.fail", |_message| async {
+                Err::<TransportReply, BootError>(BootError::BadRequest(
+                    "invalid cat payload".to_string(),
+                ))
+            })
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+
+    let reply = app
+        .dispatch_message(TransportMessage::new("cats.fail", json!({ "id": 1 })))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        reply.data(),
+        &json!({
+            "pattern": "cats.fail",
+            "message": "bad request: invalid cat payload",
+        })
+    );
+}
+
+#[tokio::test]
+async fn transport_pattern_filters_take_precedence_over_global_filters() {
+    let app = BootApplication::builder()
+        .use_global_transport_filter(|_context: TransportContext, _error: BootError| async move {
+            Ok(Some(TransportExceptionResponse::reply(
+                TransportReply::text("global"),
+            )))
+        })
+        .message_pattern(
+            MessagePatternDefinition::request("cats.fail", |_message| async {
+                Err::<TransportReply, BootError>(BootError::BadRequest(
+                    "invalid cat payload".to_string(),
+                ))
+            })
+            .unwrap()
+            .with_filter(|_context: TransportContext, _error: BootError| async move {
+                Ok(Some(TransportExceptionResponse::reply(
+                    TransportReply::text("local"),
+                )))
+            }),
+        )
+        .build()
+        .unwrap();
+
+    let reply = app
+        .dispatch_message(TransportMessage::new("cats.fail", json!({ "id": 1 })))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(reply.data(), &json!("local"));
 }
 
 #[tokio::test]

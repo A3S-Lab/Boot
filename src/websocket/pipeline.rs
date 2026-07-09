@@ -1,5 +1,6 @@
 use super::context::WebSocketContext;
 use super::message::WebSocketMessage;
+use crate::pipeline::PipelineComponent;
 use crate::{BoxFuture, ExecutionInterceptor, Guard, Result};
 use std::future::Future;
 use std::sync::Arc;
@@ -89,12 +90,14 @@ where
 
 pub(crate) fn prepend_execution_guards(
     prefix: &[Arc<dyn Guard>],
-    values: Vec<Arc<dyn WebSocketGuard>>,
-) -> Vec<Arc<dyn WebSocketGuard>> {
+    values: Vec<PipelineComponent<dyn WebSocketGuard>>,
+) -> Vec<PipelineComponent<dyn WebSocketGuard>> {
     let mut merged = prefix
         .iter()
         .cloned()
-        .map(|guard| Arc::new(ExecutionWebSocketGuard { inner: guard }) as Arc<dyn WebSocketGuard>)
+        .map(|guard| {
+            PipelineComponent::<dyn WebSocketGuard>::new(ExecutionWebSocketGuard { inner: guard })
+        })
         .collect::<Vec<_>>();
     merged.extend(values);
     merged
@@ -102,14 +105,15 @@ pub(crate) fn prepend_execution_guards(
 
 pub(crate) fn prepend_execution_interceptors(
     prefix: &[Arc<dyn ExecutionInterceptor>],
-    values: Vec<Arc<dyn WebSocketInterceptor>>,
-) -> Vec<Arc<dyn WebSocketInterceptor>> {
+    values: Vec<PipelineComponent<dyn WebSocketInterceptor>>,
+) -> Vec<PipelineComponent<dyn WebSocketInterceptor>> {
     let mut merged = prefix
         .iter()
         .cloned()
         .map(|interceptor| {
-            Arc::new(ExecutionWebSocketInterceptor { inner: interceptor })
-                as Arc<dyn WebSocketInterceptor>
+            PipelineComponent::<dyn WebSocketInterceptor>::new(ExecutionWebSocketInterceptor {
+                inner: interceptor,
+            })
         })
         .collect::<Vec<_>>();
     merged.extend(values);

@@ -44,6 +44,10 @@ impl RouteMethodInput {
         self.args.iter().any(|arg| arg.extractor.is_some())
     }
 
+    pub(crate) fn has_protocol_extractors(&self) -> bool {
+        self.args.iter().any(|arg| arg.protocol_extractor.is_some())
+    }
+
     pub(crate) fn into_legacy_arg(self) -> Result<Option<MethodArg>> {
         if self.has_extractors() {
             return Err(syn::Error::new_spanned(
@@ -53,6 +57,17 @@ impl RouteMethodInput {
                     .map(|arg| arg.ident.clone())
                     .unwrap_or_else(|| format_ident!("argument")),
                 "route methods with extractor attributes must use extractor attributes on every argument",
+            ));
+        }
+
+        if self.has_protocol_extractors() {
+            return Err(syn::Error::new_spanned(
+                self.args
+                    .iter()
+                    .find(|arg| arg.protocol_extractor.is_some())
+                    .map(|arg| arg.ident.clone())
+                    .unwrap_or_else(|| format_ident!("argument")),
+                "protocol payload extractor attributes are only supported on message pattern and websocket subscription methods",
             ));
         }
 
@@ -72,6 +87,7 @@ pub(crate) struct MethodArg {
     pub(crate) ident: Ident,
     pub(crate) ty: Box<Type>,
     pub(crate) extractor: Option<Extractor>,
+    pub(crate) protocol_extractor: Option<ProtocolExtractor>,
 }
 
 impl MethodArg {
@@ -85,12 +101,13 @@ impl MethodArg {
                 ));
             }
         };
-        let extractor = take_extractor_attrs(input)?;
+        let (extractor, protocol_extractor) = take_extractor_attrs(input)?;
 
         Ok(Self {
             ident,
             ty: input.ty.clone(),
             extractor,
+            protocol_extractor,
         })
     }
 }
@@ -117,6 +134,18 @@ pub(crate) enum Extractor {
 
 #[derive(Clone)]
 pub(crate) enum BodyExtractor {
+    Whole,
+    Field(SingleValueExtractor),
+}
+
+#[derive(Clone)]
+pub(crate) enum ProtocolExtractor {
+    Payload(ProtocolPayloadExtractor),
+    MessageBody(ProtocolPayloadExtractor),
+}
+
+#[derive(Clone)]
+pub(crate) enum ProtocolPayloadExtractor {
     Whole,
     Field(SingleValueExtractor),
 }
@@ -193,6 +222,24 @@ impl Extractor {
     }
 }
 
+impl ProtocolExtractor {
+    fn from_attribute(attr: &Attribute) -> Result<Option<Self>> {
+        let Some(ident) = attr.path().segments.last().map(|segment| &segment.ident) else {
+            return Ok(None);
+        };
+
+        let extractor = if ident == "payload" {
+            Self::Payload(parse_protocol_payload_extractor(attr, "payload")?)
+        } else if ident == "message_body" {
+            Self::MessageBody(parse_protocol_payload_extractor(attr, "message_body")?)
+        } else {
+            return Ok(None);
+        };
+
+        Ok(Some(extractor))
+    }
+}
+
 fn parse_body_extractor(attr: &Attribute) -> Result<BodyExtractor> {
     match &attr.meta {
         syn::Meta::Path(_) => Ok(BodyExtractor::Whole),
@@ -200,27 +247,51 @@ fn parse_body_extractor(attr: &Attribute) -> Result<BodyExtractor> {
     }
 }
 
-fn take_extractor_attrs(input: &mut PatType) -> Result<Option<Extractor>> {
+fn parse_protocol_payload_extractor(
+    attr: &Attribute,
+    name: &str,
+) -> Result<ProtocolPayloadExtractor> {
+    match &attr.meta {
+        syn::Meta::Path(_) => Ok(ProtocolPayloadExtractor::Whole),
+        _ => parse_single_value_extractor(attr, name).map(ProtocolPayloadExtractor::Field),
+    }
+}
+
+fn take_extractor_attrs(
+    input: &mut PatType,
+) -> Result<(Option<Extractor>, Option<ProtocolExtractor>)> {
     let mut clean_attrs = Vec::new();
     let mut extractor = None;
+    let mut protocol_extractor = None;
 
     for attr in std::mem::take(&mut input.attrs) {
-        let Some(parsed) = Extractor::from_attribute(&attr)? else {
+        if let Some(parsed) = Extractor::from_attribute(&attr)? {
+            if extractor.is_some() || protocol_extractor.is_some() {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "route arguments can use at most one extractor attribute",
+                ));
+            }
+            extractor = Some(parsed);
+            continue;
+        }
+
+        let Some(parsed) = ProtocolExtractor::from_attribute(&attr)? else {
             clean_attrs.push(attr);
             continue;
         };
 
-        if extractor.is_some() {
+        if extractor.is_some() || protocol_extractor.is_some() {
             return Err(syn::Error::new_spanned(
                 attr,
                 "route arguments can use at most one extractor attribute",
             ));
         }
-        extractor = Some(parsed);
+        protocol_extractor = Some(parsed);
     }
 
     input.attrs = clean_attrs;
-    Ok(extractor)
+    Ok((extractor, protocol_extractor))
 }
 
 fn parse_extractor_expr(attr: &Attribute) -> Result<Expr> {

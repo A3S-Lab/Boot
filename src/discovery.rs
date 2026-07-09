@@ -30,21 +30,24 @@ pub struct DiscoveredRoute {
 }
 
 /// Snapshot of a resolved WebSocket gateway.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DiscoveredGateway {
     pub path: String,
     pub path_shape: String,
     pub namespace: Option<String>,
     pub module_name: Option<String>,
     pub events: Vec<String>,
+    pub metadata: BTreeMap<String, Value>,
+    pub event_metadata: BTreeMap<String, BTreeMap<String, Value>>,
 }
 
 /// Snapshot of a resolved microservice message pattern.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DiscoveredMessagePattern {
     pub pattern: String,
     pub kind: MessagePatternKind,
     pub module_name: Option<String>,
+    pub metadata: BTreeMap<String, Value>,
 }
 
 /// Read-only module graph snapshot for diagnostics and Nest-style devtools.
@@ -178,6 +181,16 @@ impl DiscoveryService {
             .collect()
     }
 
+    pub fn gateway(&self, path: &str) -> Option<&DiscoveredGateway> {
+        self.gateways.iter().find(|gateway| gateway.path == path)
+    }
+
+    pub fn message_pattern(&self, pattern: &str) -> Option<&DiscoveredMessagePattern> {
+        self.message_patterns
+            .iter()
+            .find(|message_pattern| message_pattern.pattern == pattern)
+    }
+
     pub fn reflector(&self) -> Reflector {
         Reflector::new(self.clone())
     }
@@ -266,6 +279,108 @@ impl Reflector {
             .iter()
             .filter(|route| route.metadata.get(key) == Some(value))
             .collect()
+    }
+
+    pub fn gateway(&self, path: &str) -> Option<&DiscoveredGateway> {
+        self.discovery.gateway(path)
+    }
+
+    pub fn gateway_metadata(&self, path: &str) -> Option<&BTreeMap<String, Value>> {
+        self.gateway(path).map(|gateway| &gateway.metadata)
+    }
+
+    pub fn gateway_metadata_value(&self, path: &str, key: &str) -> Option<&Value> {
+        self.gateway_metadata(path)
+            .and_then(|metadata| metadata.get(key))
+    }
+
+    pub fn gateway_metadata_as<T>(&self, path: &str, key: &str) -> Result<Option<T>>
+    where
+        T: DeserializeOwned,
+    {
+        let Some(value) = self.gateway_metadata_value(path, key) else {
+            return Ok(None);
+        };
+
+        serde_json::from_value(value.clone())
+            .map(Some)
+            .map_err(|error| {
+                BootError::Internal(format!(
+                    "failed to deserialize websocket gateway metadata `{key}`: {error}"
+                ))
+            })
+    }
+
+    pub fn gateway_event_metadata(
+        &self,
+        path: &str,
+        event: &str,
+    ) -> Option<&BTreeMap<String, Value>> {
+        self.gateway(path)
+            .and_then(|gateway| gateway.event_metadata.get(event))
+    }
+
+    pub fn gateway_event_metadata_value(
+        &self,
+        path: &str,
+        event: &str,
+        key: &str,
+    ) -> Option<&Value> {
+        self.gateway_event_metadata(path, event)
+            .and_then(|metadata| metadata.get(key))
+    }
+
+    pub fn gateway_event_metadata_as<T>(
+        &self,
+        path: &str,
+        event: &str,
+        key: &str,
+    ) -> Result<Option<T>>
+    where
+        T: DeserializeOwned,
+    {
+        let Some(value) = self.gateway_event_metadata_value(path, event, key) else {
+            return Ok(None);
+        };
+
+        serde_json::from_value(value.clone())
+            .map(Some)
+            .map_err(|error| {
+                BootError::Internal(format!(
+                    "failed to deserialize websocket event metadata `{key}`: {error}"
+                ))
+            })
+    }
+
+    pub fn message_pattern(&self, pattern: &str) -> Option<&DiscoveredMessagePattern> {
+        self.discovery.message_pattern(pattern)
+    }
+
+    pub fn message_pattern_metadata(&self, pattern: &str) -> Option<&BTreeMap<String, Value>> {
+        self.message_pattern(pattern)
+            .map(|message_pattern| &message_pattern.metadata)
+    }
+
+    pub fn message_pattern_metadata_value(&self, pattern: &str, key: &str) -> Option<&Value> {
+        self.message_pattern_metadata(pattern)
+            .and_then(|metadata| metadata.get(key))
+    }
+
+    pub fn message_pattern_metadata_as<T>(&self, pattern: &str, key: &str) -> Result<Option<T>>
+    where
+        T: DeserializeOwned,
+    {
+        let Some(value) = self.message_pattern_metadata_value(pattern, key) else {
+            return Ok(None);
+        };
+
+        serde_json::from_value(value.clone())
+            .map(Some)
+            .map_err(|error| {
+                BootError::Internal(format!(
+                    "failed to deserialize message pattern metadata `{key}`: {error}"
+                ))
+            })
     }
 
     pub fn routes_for_module(&self, module_name: &str) -> Vec<&DiscoveredRoute> {
@@ -360,6 +475,16 @@ fn discover_gateways(app: &BootApplication) -> Vec<DiscoveredGateway> {
             namespace: gateway.namespace().map(str::to_string),
             module_name: gateway.module_name().map(str::to_string),
             events: gateway.events().into_iter().map(str::to_string).collect(),
+            metadata: gateway.metadata().clone(),
+            event_metadata: gateway
+                .events()
+                .into_iter()
+                .filter_map(|event| {
+                    gateway
+                        .event_metadata(event)
+                        .map(|metadata| (event.to_string(), metadata.clone()))
+                })
+                .collect(),
         })
         .collect()
 }
@@ -371,6 +496,7 @@ fn discover_message_patterns(app: &BootApplication) -> Vec<DiscoveredMessagePatt
             pattern: pattern.pattern().to_string(),
             kind: pattern.kind(),
             module_name: pattern.module_name().map(str::to_string),
+            metadata: pattern.metadata().clone(),
         })
         .collect()
 }

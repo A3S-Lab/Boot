@@ -84,19 +84,27 @@ impl Module for DiscoveryModuleFixture {
 
     fn gateways(&self, _module_ref: &ModuleRef) -> Result<Vec<WebSocketGatewayDefinition>> {
         Ok(vec![WebSocketGatewayDefinition::new("/ws")?
+            .with_metadata_value("resource", json!("gateway"))
             .with_namespace("cats")?
             .subscribe("cat.created", |_| async {
                 Ok(WebSocketMessage::text("ack", "ok"))
             })?
-            .subscribe("cat.deleted", |_| async { Ok(()) })?])
+            .subscribe_definition(
+                "cat.deleted",
+                a3s_boot::WebSocketSubscriptionDefinition::new(|_| async { Ok(()) })
+                    .with_metadata_value("policy", json!("cat:delete")),
+            )?])
     }
 
     fn message_patterns(&self, _module_ref: &ModuleRef) -> Result<Vec<MessagePatternDefinition>> {
         Ok(vec![
             MessagePatternDefinition::request("cat.find", |_| async {
                 Ok(TransportReply::text("found"))
-            })?,
-            MessagePatternDefinition::event("cat.created", |_| async { Ok(()) })?,
+            })?
+            .with_metadata_value("resource", json!("messages"))
+            .with_metadata_value("policy", json!("cat:read")),
+            MessagePatternDefinition::event("cat.created", |_| async { Ok(()) })?
+                .with_metadata_value("resource", json!("events")),
         ])
     }
 }
@@ -174,14 +182,36 @@ fn discovery_service_snapshots_modules_routes_gateways_and_message_patterns() {
     assert_eq!(gateways[0].path, "/api/ws");
     assert_eq!(gateways[0].namespace.as_deref(), Some("/cats"));
     assert_eq!(gateways[0].events, ["cat.created", "cat.deleted"]);
+    assert_eq!(
+        gateways[0].metadata.get("resource"),
+        Some(&json!("gateway"))
+    );
+    assert_eq!(
+        gateways[0]
+            .event_metadata
+            .get("cat.created")
+            .and_then(|metadata| metadata.get("resource")),
+        Some(&json!("gateway"))
+    );
+    assert_eq!(
+        gateways[0]
+            .event_metadata
+            .get("cat.deleted")
+            .and_then(|metadata| metadata.get("policy")),
+        Some(&json!("cat:delete"))
+    );
 
     let patterns = discovery.message_patterns_for_module("discovery");
     assert_eq!(patterns.len(), 2);
     assert!(patterns.iter().any(|pattern| pattern.pattern == "cat.find"
-        && pattern.kind == MessagePatternKind::RequestResponse));
-    assert!(patterns.iter().any(
-        |pattern| pattern.pattern == "cat.created" && pattern.kind == MessagePatternKind::Event
-    ));
+        && pattern.kind == MessagePatternKind::RequestResponse
+        && pattern.metadata.get("resource") == Some(&json!("messages"))
+        && pattern.metadata.get("policy") == Some(&json!("cat:read"))));
+    assert!(patterns
+        .iter()
+        .any(|pattern| pattern.pattern == "cat.created"
+            && pattern.kind == MessagePatternKind::Event
+            && pattern.metadata.get("resource") == Some(&json!("events"))));
 }
 
 #[test]
@@ -243,6 +273,36 @@ fn reflector_queries_route_metadata_from_discovery_snapshot() {
             .module_name
             .as_deref(),
         Some("discovery")
+    );
+    assert_eq!(
+        reflector.gateway_metadata_value("/ws", "resource"),
+        Some(&json!("gateway"))
+    );
+    assert_eq!(
+        reflector
+            .gateway_metadata_as::<String>("/ws", "resource")
+            .unwrap(),
+        Some("gateway".to_string())
+    );
+    assert_eq!(
+        reflector.gateway_event_metadata_value("/ws", "cat.deleted", "policy"),
+        Some(&json!("cat:delete"))
+    );
+    assert_eq!(
+        reflector
+            .gateway_event_metadata_as::<String>("/ws", "cat.deleted", "policy")
+            .unwrap(),
+        Some("cat:delete".to_string())
+    );
+    assert_eq!(
+        reflector.message_pattern_metadata_value("cat.find", "policy"),
+        Some(&json!("cat:read"))
+    );
+    assert_eq!(
+        reflector
+            .message_pattern_metadata_as::<String>("cat.find", "policy")
+            .unwrap(),
+        Some("cat:read".to_string())
     );
     assert!(app
         .reflector()

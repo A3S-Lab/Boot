@@ -102,10 +102,25 @@ impl RouteDefinition {
             }
         }
 
-        for interceptor in &self.interceptors {
+        for (index, interceptor) in self.interceptors.iter().enumerate() {
             if let Err(error) = interceptor.inner().before(context.clone()).await {
                 return self.handle_error(context.clone(), error).await;
             }
+
+            let mut response = match interceptor.inner().short_circuit(context.clone()).await {
+                Ok(Some(response)) => response,
+                Ok(None) => continue,
+                Err(error) => return self.handle_error(context.clone(), error).await,
+            };
+
+            for interceptor in self.interceptors[..index].iter().rev() {
+                response = match interceptor.inner().after(context.clone(), response).await {
+                    Ok(response) => response,
+                    Err(error) => return self.handle_error(context.clone(), error).await,
+                };
+            }
+
+            return Ok(response);
         }
 
         for pipe in &self.pipes {

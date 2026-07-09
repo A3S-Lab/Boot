@@ -11,6 +11,7 @@ mod messaging;
 mod openapi;
 mod openapi_security;
 mod outside;
+mod protocol;
 mod schedule;
 mod util;
 mod validation;
@@ -216,6 +217,16 @@ pub fn message_pattern(_attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn event_pattern(_attr: TokenStream, item: TokenStream) -> TokenStream {
     message_attribute_outside_controller("event_pattern", item)
+}
+
+#[proc_macro_attribute]
+pub fn payload(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    protocol_extractor_attribute_outside("payload", item)
+}
+
+#[proc_macro_attribute]
+pub fn message_body(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    protocol_extractor_attribute_outside("message_body", item)
 }
 
 #[proc_macro_attribute]
@@ -514,4 +525,14 @@ pub fn use_filter(_attr: TokenStream, item: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn use_pipe(_attr: TokenStream, item: TokenStream) -> TokenStream {
     pipeline_attribute_outside_controller("use_pipe", item)
+}
+
+#[proc_macro_attribute]
+pub fn cache_key(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    cache_attribute_outside_controller("cache_key", item)
+}
+
+#[proc_macro_attribute]
+pub fn cache_ttl(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    cache_attribute_outside_controller("cache_ttl", item)
 }

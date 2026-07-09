@@ -1,7 +1,7 @@
 use quote::quote;
 use syn::{Attribute, Expr};
 
-pub(in crate::controller) fn take_controller_pipeline_attrs(
+pub(crate) fn take_controller_pipeline_attrs(
     attrs: &[Attribute],
 ) -> (Vec<Attribute>, ControllerPipelineAttrs, Vec<syn::Error>) {
     let mut clean_attrs = Vec::new();
@@ -23,7 +23,7 @@ pub(in crate::controller) fn take_controller_pipeline_attrs(
     (clean_attrs, pipeline, errors)
 }
 
-pub(in crate::controller) fn take_route_pipeline_attrs(
+pub(crate) fn take_route_pipeline_attrs(
     attrs: &[Attribute],
 ) -> (Vec<Attribute>, Vec<PipelineSpec>, Vec<syn::Error>) {
     let mut clean_attrs = Vec::new();
@@ -46,24 +46,24 @@ pub(in crate::controller) fn take_route_pipeline_attrs(
 }
 
 #[derive(Default)]
-pub(in crate::controller) struct ControllerPipelineAttrs {
+pub(crate) struct ControllerPipelineAttrs {
     specs: Vec<PipelineSpec>,
 }
 
 impl ControllerPipelineAttrs {
-    pub(in crate::controller) fn tokens(&self) -> Vec<proc_macro2::TokenStream> {
+    pub(crate) fn tokens(&self) -> Vec<proc_macro2::TokenStream> {
         self.specs.iter().map(PipelineSpec::token).collect()
     }
 }
 
 #[derive(Clone)]
-pub(in crate::controller) struct PipelineSpec {
+pub(crate) struct PipelineSpec {
     kind: PipelineAttrKind,
     expr: Expr,
 }
 
 impl PipelineSpec {
-    pub(in crate::controller) fn token(&self) -> proc_macro2::TokenStream {
+    pub(crate) fn token(&self) -> proc_macro2::TokenStream {
         let expr = &self.expr;
         match self.kind {
             PipelineAttrKind::Guard => quote!(with_guard(#expr)),

@@ -3,8 +3,11 @@
 use std::sync::Arc;
 
 use a3s_boot::{
-    controller, BootApplication, BootRequest, BoxFuture, ControllerDefinition, ExecutionContext,
-    Guard, HttpMethod, Module, ModuleRef, OpenApiInfo, Result,
+    controller, BootApplication, BootError, BootRequest, BoxFuture, ControllerDefinition,
+    ExecutionContext, Guard, HttpMethod, MessagePatternDefinition, Module, ModuleRef, OpenApiInfo,
+    Result, TransportContext, TransportExceptionFilter, TransportExceptionResponse,
+    TransportMessage, TransportReply, WebSocketContext, WebSocketExceptionFilter,
+    WebSocketExceptionResponse, WebSocketGatewayDefinition, WebSocketMessage,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -28,6 +31,50 @@ impl Guard for ComposedMetadataGuard {
                 .unwrap_or_default();
 
             Ok(resource == "cats" && roles == ["admin".to_string()])
+        })
+    }
+}
+
+struct ComposedTransportFilter(&'static str);
+
+impl TransportExceptionFilter for ComposedTransportFilter {
+    fn catch(
+        &self,
+        context: TransportContext,
+        error: BootError,
+    ) -> BoxFuture<'static, Result<Option<TransportExceptionResponse>>> {
+        let source = self.0;
+        Box::pin(async move {
+            let reply = TransportReply::json(&json!({
+                "source": source,
+                "pattern": context.pattern,
+                "message": error.to_string(),
+            }))?;
+            Ok(Some(TransportExceptionResponse::reply(reply)))
+        })
+    }
+}
+
+struct ComposedWebSocketFilter(&'static str);
+
+impl WebSocketExceptionFilter for ComposedWebSocketFilter {
+    fn catch(
+        &self,
+        context: WebSocketContext,
+        error: BootError,
+    ) -> BoxFuture<'static, Result<Option<WebSocketExceptionResponse>>> {
+        let source = self.0;
+        Box::pin(async move {
+            Ok(Some(WebSocketExceptionResponse::message(
+                WebSocketMessage::new(
+                    "composed.error",
+                    json!({
+                        "source": source,
+                        "event": context.event,
+                        "message": error.to_string(),
+                    }),
+                ),
+            )))
         })
     }
 }
@@ -61,6 +108,48 @@ impl ComposedController {
 }
 
 #[derive(Debug)]
+struct ComposedMessages;
+
+#[a3s_boot::message_controller]
+#[a3s_boot::apply_decorators(use_filter(ComposedTransportFilter("controller")))]
+impl ComposedMessages {
+    #[a3s_boot::apply_decorators(message_pattern("composed.message.controller"))]
+    async fn controller_filter(&self) -> Result<ComposedCatDto> {
+        Err(BootError::BadRequest(
+            "composed controller filter".to_string(),
+        ))
+    }
+
+    #[a3s_boot::apply_decorators(
+        message_pattern("composed.message.method"),
+        use_filter(ComposedTransportFilter("method"))
+    )]
+    async fn method_filter(&self) -> Result<ComposedCatDto> {
+        Err(BootError::BadRequest("composed method filter".to_string()))
+    }
+}
+
+#[derive(Debug)]
+struct ComposedGateway;
+
+#[a3s_boot::websocket_gateway("/composed/ws")]
+#[a3s_boot::apply_decorators(use_filter(ComposedWebSocketFilter("gateway")))]
+impl ComposedGateway {
+    #[a3s_boot::apply_decorators(subscribe_message("composed.gateway"))]
+    async fn gateway_filter(&self) -> Result<WebSocketMessage> {
+        Err(BootError::BadRequest("composed gateway filter".to_string()))
+    }
+
+    #[a3s_boot::apply_decorators(
+        subscribe_message("composed.method"),
+        use_filter(ComposedWebSocketFilter("method"))
+    )]
+    async fn method_filter(&self) -> Result<WebSocketMessage> {
+        Err(BootError::BadRequest("composed method filter".to_string()))
+    }
+}
+
+#[derive(Debug)]
 struct ComposedModule;
 
 impl Module for ComposedModule {
@@ -70,6 +159,14 @@ impl Module for ComposedModule {
 
     fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
         Ok(vec![Arc::new(ComposedController).controller()?])
+    }
+
+    fn gateways(&self, _module_ref: &ModuleRef) -> Result<Vec<WebSocketGatewayDefinition>> {
+        Ok(vec![Arc::new(ComposedGateway).gateway()?])
+    }
+
+    fn message_patterns(&self, _module_ref: &ModuleRef) -> Result<Vec<MessagePatternDefinition>> {
+        Arc::new(ComposedMessages).message_patterns()
     }
 }
 
@@ -128,6 +225,86 @@ async fn apply_decorators_composes_controller_and_route_attributes() {
             "type": "apiKey",
             "in": "header",
             "name": "x-api-key"
+        })
+    );
+}
+
+#[tokio::test]
+async fn apply_decorators_composes_protocol_attributes() {
+    let app = BootApplication::builder()
+        .import(ComposedModule)
+        .build()
+        .unwrap();
+
+    let gateway = &app.gateways()[0];
+    let gateway_reply = gateway
+        .dispatch(
+            BootRequest::new(HttpMethod::Get, "/composed/ws"),
+            WebSocketMessage::new("composed.gateway", json!({})),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let method_reply = gateway
+        .dispatch(
+            BootRequest::new(HttpMethod::Get, "/composed/ws"),
+            WebSocketMessage::new("composed.method", json!({})),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        gateway_reply,
+        WebSocketMessage::new(
+            "composed.error",
+            json!({
+                "source": "gateway",
+                "event": "composed.gateway",
+                "message": "bad request: composed gateway filter",
+            }),
+        )
+    );
+    assert_eq!(
+        method_reply,
+        WebSocketMessage::new(
+            "composed.error",
+            json!({
+                "source": "method",
+                "event": "composed.method",
+                "message": "bad request: composed method filter",
+            }),
+        )
+    );
+
+    let controller_reply = app
+        .dispatch_message(TransportMessage::new(
+            "composed.message.controller",
+            json!({}),
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    let method_reply = app
+        .dispatch_message(TransportMessage::new("composed.message.method", json!({})))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        controller_reply.data(),
+        &json!({
+            "source": "controller",
+            "pattern": "composed.message.controller",
+            "message": "bad request: composed controller filter",
+        })
+    );
+    assert_eq!(
+        method_reply.data(),
+        &json!({
+            "source": "method",
+            "pattern": "composed.message.method",
+            "message": "bad request: composed method filter",
         })
     );
 }

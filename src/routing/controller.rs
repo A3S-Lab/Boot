@@ -2,7 +2,7 @@ use super::handler::RouteHandler;
 use super::host::validate_host_pattern;
 use super::path::normalize_prefix;
 use super::route::RouteDefinition;
-use crate::pipeline::PipelineComponents;
+use crate::pipeline::{PipelineComponent, PipelineComponents};
 use crate::{
     BootErrorKind, BootRequest, ExceptionFilter, ExecutionInterceptor, Guard, Interceptor,
     Middleware, ModuleRef, Pipe, Result, RouteVersioning, SerializationOptions, SseEvent, Validate,
@@ -14,6 +14,9 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::future::Future;
+use std::sync::Arc;
+#[cfg(feature = "cache")]
+use std::time::Duration;
 
 /// Group routes under a common HTTP prefix, similar to a Nest controller.
 #[derive(Clone)]
@@ -74,7 +77,14 @@ impl ControllerDefinition {
     where
         P: Pipe,
     {
-        self.pipeline.push_pipe(pipe);
+        let index = self.pipeline.pipes.len();
+        let component = PipelineComponent::<dyn Pipe>::new(pipe);
+        self.pipeline.pipes.push(component.clone());
+        self.routes = self
+            .routes
+            .into_iter()
+            .map(|route| route.insert_pipe_prefix_at(index, component.clone()))
+            .collect();
         self
     }
 
@@ -82,7 +92,14 @@ impl ControllerDefinition {
     where
         M: Middleware,
     {
-        self.pipeline.push_middleware(middleware);
+        let index = self.pipeline.middleware.len();
+        let middleware = Arc::new(middleware);
+        self.pipeline.middleware.push(middleware.clone());
+        self.routes = self
+            .routes
+            .into_iter()
+            .map(|route| route.insert_middleware_prefix_at(index, middleware.clone()))
+            .collect();
         self
     }
 
@@ -90,7 +107,14 @@ impl ControllerDefinition {
     where
         G: Guard,
     {
-        self.pipeline.push_guard(guard);
+        let index = self.pipeline.guards.len();
+        let component = PipelineComponent::<dyn Guard>::new(guard);
+        self.pipeline.guards.push(component.clone());
+        self.routes = self
+            .routes
+            .into_iter()
+            .map(|route| route.insert_guard_prefix_at(index, component.clone()))
+            .collect();
         self
     }
 
@@ -98,7 +122,14 @@ impl ControllerDefinition {
     where
         I: Interceptor,
     {
-        self.pipeline.push_interceptor(interceptor);
+        let index = self.pipeline.interceptors.len();
+        let component = PipelineComponent::<dyn Interceptor>::new(interceptor);
+        self.pipeline.interceptors.push(component.clone());
+        self.routes = self
+            .routes
+            .into_iter()
+            .map(|route| route.insert_interceptor_prefix_at(index, component.clone()))
+            .collect();
         self
     }
 
@@ -106,7 +137,9 @@ impl ControllerDefinition {
     where
         I: ExecutionInterceptor,
     {
-        self.pipeline.push_execution_interceptor(interceptor);
+        self = self.with_interceptor(crate::pipeline::ExecutionInterceptorAdapter::new(
+            interceptor,
+        ));
         self
     }
 
@@ -114,7 +147,14 @@ impl ControllerDefinition {
     where
         F: ExceptionFilter,
     {
-        self.pipeline.push_filter(filter);
+        let index = self.pipeline.filters.len();
+        let component = PipelineComponent::<dyn ExceptionFilter>::new(filter);
+        self.pipeline.filters.push(component.clone());
+        self.routes = self
+            .routes
+            .into_iter()
+            .map(|route| route.insert_filter_prefix_at(index, component.clone()))
+            .collect();
         self
     }
 
@@ -123,18 +163,37 @@ impl ControllerDefinition {
         I: IntoIterator<Item = BootErrorKind>,
         F: ExceptionFilter,
     {
-        self.pipeline.push_catch_filter(kinds, filter);
+        self = self.with_filter(crate::catch_errors(kinds, filter));
         self
     }
 
     pub fn with_validation(mut self) -> Self {
         self.pipeline.enable_validation();
+        let prefix = PipelineComponents {
+            validation_enabled: true,
+            ..PipelineComponents::default()
+        };
+        self.apply_pipeline_prefix(prefix);
         self
     }
 
     pub fn with_validation_options(mut self, options: ValidationOptions) -> Self {
         self.pipeline.enable_validation_with_options(options);
+        let prefix = PipelineComponents {
+            validation_enabled: true,
+            validation_options: options,
+            ..PipelineComponents::default()
+        };
+        self.apply_pipeline_prefix(prefix);
         self
+    }
+
+    fn apply_pipeline_prefix(&mut self, prefix: PipelineComponents) {
+        self.routes = self
+            .routes
+            .drain(..)
+            .map(|route| route.with_pipeline_prefix(&prefix))
+            .collect();
     }
 
     pub fn with_host(mut self, pattern: impl Into<String>) -> Result<Self> {
@@ -222,6 +281,24 @@ impl ControllerDefinition {
             .map(|route| route.with_metadata_default_value(key.clone(), value.clone()))
             .collect();
         self
+    }
+
+    #[cfg(feature = "cache")]
+    pub fn with_cache_key(self, key: impl Into<String>) -> Self {
+        self.with_metadata_value(crate::CACHE_KEY_METADATA, Value::String(key.into()))
+    }
+
+    #[cfg(feature = "cache")]
+    pub fn with_cache_ttl(self, ttl: Duration) -> Self {
+        self.with_metadata_value(
+            crate::CACHE_TTL_METADATA,
+            Value::Number(serde_json::Number::from(ttl.as_millis() as u64)),
+        )
+    }
+
+    #[cfg(feature = "cache")]
+    pub fn without_cache(self) -> Self {
+        self.with_metadata_value(crate::CACHE_DISABLED_METADATA, Value::Bool(true))
     }
 
     pub fn metadata(&self) -> &BTreeMap<String, Value> {
