@@ -129,6 +129,7 @@ pub use discovery::{
 pub use error::{BootError, BootErrorKind};
 #[cfg(feature = "events")]
 pub use events::{
+    A3sEvent, A3sEventBus, A3sEventProvider, A3sMemoryEventConfig, A3sMemoryEventProvider,
     EventContext, EventEmitter, EventEnvelope, EventListener, EventListenerDefinition, EventModule,
 };
 #[cfg(feature = "file-upload")]

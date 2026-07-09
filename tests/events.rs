@@ -1,6 +1,11 @@
 #![cfg(feature = "events")]
 
-use a3s_boot::{BootApplication, EventContext, EventEmitter, EventEnvelope, EventModule, Result};
+#[cfg(feature = "macros")]
+use a3s_boot::Result;
+use a3s_boot::{
+    A3sEventBus, A3sMemoryEventProvider, BootApplication, EventContext, EventEmitter,
+    EventEnvelope, EventModule,
+};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
@@ -103,6 +108,19 @@ async fn event_module_exports_emitter_and_dispatches_registered_listeners() {
 
     assert_eq!(count, 1);
     assert_eq!(observed.lock().unwrap().as_slice(), ["Milo"]);
+
+    let bus = app.get::<A3sEventBus>().unwrap();
+    let emitter_bus = emitter.event_bus();
+    assert!(Arc::ptr_eq(&bus, &emitter_bus));
+
+    let stored = emitter
+        .event_bus()
+        .list_events(Some("cat"), 10)
+        .await
+        .unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].event_type, "cat.created");
+    assert_eq!(stored[0].payload["name"], "Milo");
 }
 
 #[tokio::test]
@@ -175,10 +193,12 @@ async fn event_listener_context_can_resolve_the_emitter_provider() {
                 let observed = Arc::clone(&listener_observed);
                 async move {
                     let emitter = context.get::<EventEmitter>()?;
-                    observed
-                        .lock()
-                        .unwrap()
-                        .push(emitter.listener_count()?.to_string());
+                    let bus = context.get::<A3sEventBus>()?;
+                    observed.lock().unwrap().push(format!(
+                        "{}:{}",
+                        emitter.listener_count()?,
+                        bus.provider_name()
+                    ));
                     Ok(())
                 }
             },
@@ -197,7 +217,7 @@ async fn event_listener_context_can_resolve_the_emitter_provider() {
         .await
         .unwrap();
 
-    assert_eq!(observed.lock().unwrap().as_slice(), ["1"]);
+    assert_eq!(observed.lock().unwrap().as_slice(), ["1:memory"]);
 }
 
 #[test]
@@ -206,12 +226,33 @@ fn event_module_supports_named_and_global_exports() {
         .import(
             EventModule::in_process("events")
                 .named("application-events")
+                .named_event_bus("application-event-bus")
                 .global(),
         )
         .build()
         .unwrap();
 
     let emitter = app.get_named::<EventEmitter>("application-events").unwrap();
+    let bus = app
+        .get_named::<A3sEventBus>("application-event-bus")
+        .unwrap();
+    let emitter_bus = emitter.event_bus();
 
     assert_eq!(emitter.listener_count().unwrap(), 0);
+    assert!(Arc::ptr_eq(&bus, &emitter_bus));
+}
+
+#[test]
+fn event_module_can_wrap_a3s_event_providers() {
+    let app = BootApplication::builder()
+        .import(EventModule::from_provider(
+            "events",
+            A3sMemoryEventProvider::default(),
+        ))
+        .build()
+        .unwrap();
+
+    let emitter = app.get::<EventEmitter>().unwrap();
+
+    assert_eq!(emitter.event_bus().provider_name(), "memory");
 }

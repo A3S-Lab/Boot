@@ -1971,17 +1971,23 @@ async fn call_grpc_microservice() -> Result<()> {
 
 ## Application Events
 
-Enable the `events` feature to use an in-process `EventEmitter` provider,
-similar to Nest's event emitter module. `EventModule` can register exact
-listeners such as `cat.created`, prefix listeners such as `cat.*`, or a global
-`*` listener. Events are dispatched asynchronously and payloads are serialized
-through `serde_json`, so handlers can decode typed DTOs with `data_as::<T>()`.
+Enable the `events` feature to use an `EventEmitter` provider backed by
+`a3s-event`, similar to Nest's event emitter module. `EventModule::in_process`
+uses `a3s_event::MemoryProvider` by default, while `EventModule::from_provider`
+and `EventModule::from_event_bus` let applications plug in another
+`a3s-event` provider. `EventModule` exports both the Boot `EventEmitter` and
+the underlying `A3sEventBus` for services that want direct access to
+`a3s-event`. It can register exact listeners such as
+`cat.created`, prefix listeners such as `cat.*`, or a global `*` listener.
+Events are dispatched asynchronously and payloads are serialized through
+`serde_json`, so handlers can decode typed DTOs with `data_as::<T>()`.
 
 ```rust
 use std::sync::Arc;
 
 use a3s_boot::{
-    BootApplication, EventContext, EventEmitter, EventModule, ProviderDefinition, Result,
+    A3sEventBus, BootApplication, EventContext, EventEmitter, EventModule, ProviderDefinition,
+    Result,
 };
 use serde::{Deserialize, Serialize};
 
@@ -2045,6 +2051,7 @@ async fn app() -> Result<()> {
         .build()?;
 
     let emitter = app.get::<EventEmitter>()?;
+    let event_bus = app.get::<A3sEventBus>()?;
     emitter
         .emit(
             "cat.created",
@@ -2053,6 +2060,9 @@ async fn app() -> Result<()> {
             },
         )
         .await?;
+
+    let stored = event_bus.list_events(Some("cat"), 50).await?;
+    println!("{} cat events stored by a3s-event", stored.len());
     Ok(())
 }
 ```
@@ -2062,9 +2072,14 @@ the event JSON, an `EventEnvelope`, an `EventContext`, or one event argument
 plus `EventContext`. Use `EventModule::listener(...)` for inline listeners that
 do not need an impl-level macro.
 
-`EventModule::global()` exports the emitter across module boundaries, and
-`EventModule::named(...)` can register a named emitter provider when a service
-needs separate event channels.
+`EventModule::global()` exports the emitter and event bus across module
+boundaries, and `EventModule::named(...)` can register a named emitter provider
+when a service needs separate event channels. Use
+`EventModule::named_event_bus(...)` to name the exported `A3sEventBus` provider
+as well.
+Use `EventEnvelope::as_a3s_event()` when a listener needs the underlying
+`a3s_event::Event` envelope, including subject, event type, timestamp, and
+metadata.
 
 ## CQRS
 
@@ -5120,7 +5135,7 @@ A3S Boot aims to provide a structured service framework for A3S components:
 | Pipe | Request validation and transformation, including built-in single-value parse pipes |
 | WebSocket gateway | Event-based bidirectional message handlers |
 | Message transport | Adapter-neutral request-response and event-only message patterns |
-| Event emitter | Optional provider-backed in-process application events |
+| Event emitter | Optional `a3s-event` backed application events through `EventModule` and injectable `A3sEventBus` |
 | CQRS | Optional command, query, and event buses through `CqrsModule` |
 | Authentication | Optional strategy-backed auth provider and `AuthGuard` |
 | Health check | Optional provider-backed readiness/liveness reports |
@@ -5184,7 +5199,7 @@ src/
 │   └── module.rs      # Provider-backed CQRS module
 ├── database.rs   # Optional provider-backed database facade and backend traits
 ├── discovery.rs  # Runtime discovery snapshots and metadata reflector
-├── events.rs     # Optional in-process application event emitter module
+├── events.rs     # Optional a3s-event backed application event module
 ├── health.rs     # Optional provider-backed health check module
 ├── http/         # Adapter-neutral request, response, methods, and query parsing
 │   └── streamable_file.rs # Nest-style file and download response helpers

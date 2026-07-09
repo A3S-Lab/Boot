@@ -24,7 +24,7 @@ compression = ["dep:flate2"]
 config = ["dep:a3s-acl"]
 cqrs = []
 database = []
-events = []
+events = ["dep:a3s-event"]
 file-upload = ["dep:bytes", "dep:multer"]
 health = []
 http-client = ["dep:reqwest"]
@@ -49,6 +49,7 @@ tcp-transport = ["dep:tokio"]
 [dependencies]
 a3s-acl = { version = "0.2.1", optional = true }
 a3s-boot-macros = { version = "0.1.1", path = "macros", optional = true }
+a3s-event = { version = "0.3.0", path = "../event", default-features = false, optional = true }
 a3s-lane = { version = "0.5.0", path = "../lane", default-features = false, optional = true }
 async-nats = { version = "0.49.1", default-features = false, optional = true }
 axum = { version = "0.8", features = ["ws"], optional = true }

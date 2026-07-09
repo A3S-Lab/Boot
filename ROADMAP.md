@@ -225,6 +225,9 @@ Implemented today:
 - Provider-backed queues with `QueueModule`, `Queue`, `a3s-lane` backed job
   storage and workers, typed serde JSON payloads, named/global provider
   exports, and lifecycle-managed processors.
+- Provider-backed application events with `EventModule`, Nest-style
+  `EventEmitter`, injectable `a3s-event` `EventBus`, listener macros, and
+  pluggable providers.
 - Provider-backed structured logging with `LoggingModule`, `Logger`, pluggable
   sinks, in-memory test capture, request middleware/interceptor helpers, and
   worker-friendly injection through the same provider graph.
@@ -821,10 +824,11 @@ Acceptance:
 - Queue can register typed providers, enqueue serde JSON jobs through
   `a3s-lane`, run named processors through lifecycle-managed workers, and
   participate in module imports/exports. (Covered)
-- Application events can register an in-process `EventEmitter` provider,
-  dispatch typed JSON payloads to exact or wildcard listeners, expose
-  Nest-style listener macros, and participate in module imports/exports.
-  (Covered)
+- Application events can register an `a3s-event` backed `EventEmitter`
+  provider, dispatch typed JSON payloads to exact or wildcard listeners, expose
+  Nest-style listener macros, retain events through the underlying `EventBus`,
+  accept custom `a3s-event` providers, and participate in module
+  imports/exports. (Covered)
 - Health checks can register provider-backed async indicators, expose a typed
   `HealthCheckService`, return JSON readiness reports, and map unhealthy
   reports to HTTP 503. (Covered)
