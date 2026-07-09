@@ -336,6 +336,7 @@ write Rust attributes that feel close to Nest.js decorators:
 | `new ValidationPipe({ transform: true })` | `#[validate(transform)]` or `ValidationOptions::new().transform(true)` |
 | `new ValidationPipe({ whitelist: true })` | `#[validate(whitelist)]` or `ValidationOptions::new().whitelist(true)` with `ValidationSchema` |
 | `new ValidationPipe({ forbidNonWhitelisted: true })` | `#[validate(forbidNonWhitelisted)]` or `ValidationOptions::new().forbid_non_whitelisted(true)` |
+| `applyDecorators(...)` | `#[apply_decorators(...)]` below `#[controller]` or on a route method |
 | `@SetMetadata("roles", ["admin"])` | `#[metadata("roles", ["admin"])]` below `#[controller]` or on a route method |
 | `@Version("1")` | `#[version("1")]` below `#[controller]` or on a route method |
 | `@Version(["1", "2"])` | `#[versions("1", "2")]` below `#[controller]` or on a route method |
@@ -385,6 +386,34 @@ generate ordinary `ProviderDefinition`, `ControllerDefinition`, and
 `MessagePatternDefinition` values at
 compile time. The explicit API remains available and is what the macros expand
 into:
+
+`#[apply_decorators(...)]` mirrors Nest's `applyDecorators(...)` for controller
+and route metadata. It expands to the same attributes that could have been
+written separately, so it works with route methods, pipeline hooks, metadata,
+OpenAPI decorators, response decorators, versioning, serialization, and
+validation:
+
+```rust
+#[controller("/cats")]
+#[apply_decorators(
+    tag("cats"),
+    metadata("resource", "cats"),
+    use_guard(AuthGuard),
+)]
+impl CatsController {
+    #[apply_decorators(
+        get("/{id}"),
+        metadata("roles", ["admin"]),
+        operation(summary = "Find a cat", operation_id = "findCat"),
+        response(status = 200, description = "Cat found", schema = CatDto),
+        bearer_auth,
+        api_key_auth(name = "x-api-key"),
+    )]
+    async fn find_one(&self, #[param("id")] id: String) -> Result<CatDto> {
+        Ok(self.cats.find_one(&id))
+    }
+}
+```
 
 ```rust
 use std::sync::Arc;

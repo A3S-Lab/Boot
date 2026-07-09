@@ -68,14 +68,14 @@ pub use a3s_boot_macros::session;
 #[cfg(feature = "macros")]
 pub use a3s_boot_macros::{
     all, api_cookie_auth, api_header, api_key_auth, api_param, api_query, api_security,
-    bearer_auth, body, catch, controller, cookie, cookies, delete, delete_json, event_pattern,
-    extract, get, get_json, head, header, headers, hide_from_openapi, host, host_param, http_code,
-    injectable, ip, message_controller, message_pattern, metadata, module, on_gateway_connection,
-    on_gateway_disconnect, on_gateway_init, operation, options, param, params, patch, patch_json,
-    post, post_json, put, put_json, query, redirect, render, request, request_body, res, response,
-    serialize, skip_validation, sse, subscribe_message, tag, use_filter, use_guard,
-    use_interceptor, use_pipe, validate, version, version_neutral, versions, websocket_gateway,
-    ValidationSchema,
+    apply_decorators, bearer_auth, body, catch, controller, cookie, cookies, delete, delete_json,
+    event_pattern, extract, get, get_json, head, header, headers, hide_from_openapi, host,
+    host_param, http_code, injectable, ip, message_controller, message_pattern, metadata, module,
+    on_gateway_connection, on_gateway_disconnect, on_gateway_init, operation, options, param,
+    params, patch, patch_json, post, post_json, put, put_json, query, redirect, render, request,
+    request_body, res, response, serialize, skip_validation, sse, subscribe_message, tag,
+    use_filter, use_guard, use_interceptor, use_pipe, validate, version, version_neutral, versions,
+    websocket_gateway, ValidationSchema,
 };
 #[cfg(all(feature = "macros", feature = "schedule"))]
 pub use a3s_boot_macros::{cron, interval, schedule, timeout};

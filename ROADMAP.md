@@ -71,6 +71,9 @@ Implemented today:
   `#[api_cookie_auth]`, and `#[api_key_auth]`, including operation security
   requirements and generated security schemes for bearer, cookie, header, and
   query API key authentication.
+- Nest-style decorator composition with `#[apply_decorators(...)]` for
+  grouping controller and route attributes such as routing, metadata, pipeline
+  hooks, validation, versioning, response metadata, and OpenAPI decorators.
 - WebSocket lifecycle macros: `#[on_gateway_init]`,
   `#[on_gateway_connection]`, and `#[on_gateway_disconnect]`.
 - Host-scoped HTTP routes with `RouteDefinition::with_host(...)` and

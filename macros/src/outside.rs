@@ -33,6 +33,17 @@ pub(crate) fn openapi_attribute_outside_controller(name: &str, item: TokenStream
     .into()
 }
 
+pub(crate) fn decorator_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
+    let item = proc_macro2::TokenStream::from(item);
+    let message =
+        format!("#[{name}] must be used inside an impl block annotated with #[controller]");
+    quote! {
+        compile_error!(#message);
+        #item
+    }
+    .into()
+}
+
 pub(crate) fn response_attribute_outside_controller(name: &str, item: TokenStream) -> TokenStream {
     let item = proc_macro2::TokenStream::from(item);
     let message =

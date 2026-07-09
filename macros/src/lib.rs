@@ -3,6 +3,7 @@ use syn::parse_macro_input;
 use syn::{Item, ItemImpl, LitStr};
 
 mod controller;
+mod decorators;
 mod dependency;
 mod events;
 mod file_upload;
@@ -102,6 +103,11 @@ pub fn websocket_gateway(attr: TokenStream, item: TokenStream) -> TokenStream {
     expand_websocket_gateway(args, item_impl)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
+}
+
+#[proc_macro_attribute]
+pub fn apply_decorators(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    decorator_attribute_outside_controller("apply_decorators", item)
 }
 
 #[proc_macro_attribute]

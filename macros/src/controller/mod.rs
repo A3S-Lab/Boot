@@ -12,6 +12,7 @@ pub(crate) use input::{MethodArg, RouteMethodInput};
 use quote::quote;
 use syn::{Attribute, ImplItem, ImplItemFn, ItemImpl, LitInt, LitStr, Result};
 
+use crate::decorators::expand_apply_decorators_attrs;
 use crate::openapi::RouteSpec as RouteOpenApiSpec;
 use crate::push_error;
 use crate::validation::{
@@ -46,8 +47,12 @@ pub(crate) fn expand_controller(
     let self_ty = item_impl.self_ty.clone();
     let mut routes = Vec::new();
     let mut errors: Option<syn::Error> = None;
+    let (impl_attrs, impl_decorator_errors) = expand_apply_decorators_attrs(&item_impl.attrs);
+    for error in impl_decorator_errors {
+        push_error(&mut errors, error);
+    }
     let (clean_impl_attrs, controller_validation, controller_validation_errors) =
-        take_controller_validation_attrs(&item_impl.attrs);
+        take_controller_validation_attrs(&impl_attrs);
     let (clean_impl_attrs, controller_openapi, controller_openapi_errors) =
         take_controller_openapi_attrs(&clean_impl_attrs);
     let (clean_impl_attrs, controller_metadata, controller_metadata_errors) =
@@ -94,7 +99,11 @@ pub(crate) fn expand_controller(
             continue;
         };
 
-        let (clean_attrs, method_routes, route_errors) = take_route_attrs(&method.attrs);
+        let (method_attrs, decorator_errors) = expand_apply_decorators_attrs(&method.attrs);
+        for error in decorator_errors {
+            push_error(&mut errors, error);
+        }
+        let (clean_attrs, method_routes, route_errors) = take_route_attrs(&method_attrs);
         let (clean_attrs, route_validation, validation_errors) =
             take_route_validation_attrs(&clean_attrs);
         let (clean_attrs, openapi_specs, openapi_errors) = take_route_openapi_attrs(&clean_attrs);
