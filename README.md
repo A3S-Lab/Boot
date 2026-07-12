@@ -169,7 +169,9 @@ remain normal Rust types, while attributes generate their Boot registrations.
 ```rust,no_run
 use std::sync::Arc;
 
-use a3s_boot::{controller, get, injectable, module, AxumAdapter, BootFactory, Result};
+use a3s_boot::{
+    controller, get, injectable, module, param, AxumAdapter, BootFactory, Result,
+};
 
 #[injectable]
 #[derive(Debug)]
@@ -190,7 +192,7 @@ struct GreetingController {
 #[controller("/greetings")]
 impl GreetingController {
     #[get("/{name}")]
-    async fn greet(&self, #[a3s_boot::param("name")] name: String) -> Result<String> {
+    async fn greet(&self, #[param("name")] name: String) -> Result<String> {
         Ok(self.greeting.hello(&name))
     }
 }
