@@ -121,7 +121,9 @@ fn extractor_tokens(arg: MethodArg, extractor: Extractor) -> proc_macro2::TokenS
             __a3s_boot_request.require_json_content_type()?;
             let #ident: #ty = __a3s_boot_request.json::<#ty>()?;
         },
-        Extractor::Body(BodyExtractor::Field(spec)) => body_field_extractor_tokens(ident, ty, spec),
+        Extractor::Body(BodyExtractor::Field(spec)) => {
+            body_field_extractor_tokens(ident, ty, *spec)
+        }
         Extractor::Request => quote! {
             let #ident: #ty = __a3s_boot_request.clone();
         },

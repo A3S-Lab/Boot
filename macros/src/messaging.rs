@@ -123,7 +123,7 @@ pub(crate) fn expand_message_controller(
             push_error(
                 &mut errors,
                 syn::Error::new_spanned(
-                    &method.sig.fn_token,
+                    method.sig.fn_token,
                     "message pattern handlers must be async",
                 ),
             );
@@ -184,14 +184,16 @@ fn take_message_pattern_attrs(
 
         match attr.parse_args::<MessagePatternArgs>() {
             Ok(args) => {
-                if matches!(kind, MessagePatternAttrKind::Event) && args.raw.is_some() {
-                    errors.push(syn::Error::new_spanned(
-                        args.raw.unwrap(),
-                        "raw is not supported on event pattern attributes",
-                    ));
-                } else {
-                    patterns.push(MessagePatternSpec { kind, args });
+                if matches!(kind, MessagePatternAttrKind::Event) {
+                    if let Some(raw) = &args.raw {
+                        errors.push(syn::Error::new_spanned(
+                            raw,
+                            "raw is not supported on event pattern attributes",
+                        ));
+                        continue;
+                    }
                 }
+                patterns.push(MessagePatternSpec { kind, args });
             }
             Err(error) => errors.push(error),
         }
@@ -200,6 +202,8 @@ fn take_message_pattern_attrs(
     (clean_attrs, patterns, errors)
 }
 
+// Message registration mirrors the independent controller and method decorators.
+#[allow(clippy::too_many_arguments)]
 fn message_pattern_registration(
     method: &ImplItemFn,
     input: RouteMethodInput,

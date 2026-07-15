@@ -168,7 +168,7 @@ pub(crate) fn expand_websocket_gateway(
             push_error(
                 &mut errors,
                 syn::Error::new_spanned(
-                    &method.sig.fn_token,
+                    method.sig.fn_token,
                     "websocket gateway message handlers and lifecycle hooks must be async",
                 ),
             );

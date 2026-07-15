@@ -631,10 +631,7 @@ impl LaneQueueState {
     }
 
     fn processor_for(&self, name: &str) -> Result<Option<Arc<dyn QueueProcessor>>> {
-        Ok(self
-            .read_processors()?
-            .get(name)
-            .map(|processor| Arc::clone(processor)))
+        Ok(self.read_processors()?.get(name).map(Arc::clone))
     }
 
     fn has_processors(&self) -> bool {

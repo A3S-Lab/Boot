@@ -41,7 +41,7 @@ pub(crate) fn expand_event_listener(mut item_impl: ItemImpl) -> Result<proc_macr
             push_error(
                 &mut errors,
                 syn::Error::new_spanned(
-                    &method.sig.fn_token,
+                    method.sig.fn_token,
                     "event listener methods must be async",
                 ),
             );

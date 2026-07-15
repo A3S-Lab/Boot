@@ -75,13 +75,21 @@ async fn auth_guard_authenticates_bearer_tokens_and_exposes_principal() {
     );
     assert_eq!(missing.status(), 401);
     assert_eq!(
-        missing.body_text().unwrap(),
-        "missing authentication credentials"
+        missing.body_json::<serde_json::Value>().unwrap(),
+        json!({
+            "statusCode": 401,
+            "message": "missing authentication credentials",
+            "error": "Unauthorized",
+        })
     );
     assert_eq!(wrong_role.status(), 403);
     assert_eq!(
-        wrong_role.body_text().unwrap(),
-        "missing required role: admin"
+        wrong_role.body_json::<serde_json::Value>().unwrap(),
+        json!({
+            "statusCode": 403,
+            "message": "missing required role: admin",
+            "error": "Forbidden",
+        })
     );
 }
 

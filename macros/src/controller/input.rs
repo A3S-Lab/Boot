@@ -135,7 +135,7 @@ pub(crate) enum Extractor {
 #[derive(Clone)]
 pub(crate) enum BodyExtractor {
     Whole,
-    Field(SingleValueExtractor),
+    Field(Box<SingleValueExtractor>),
 }
 
 #[derive(Clone)]
@@ -147,7 +147,7 @@ pub(crate) enum ProtocolExtractor {
 #[derive(Clone)]
 pub(crate) enum ProtocolPayloadExtractor {
     Whole,
-    Field(SingleValueExtractor),
+    Field(Box<SingleValueExtractor>),
 }
 
 #[derive(Clone)]
@@ -243,7 +243,9 @@ impl ProtocolExtractor {
 fn parse_body_extractor(attr: &Attribute) -> Result<BodyExtractor> {
     match &attr.meta {
         syn::Meta::Path(_) => Ok(BodyExtractor::Whole),
-        _ => parse_single_value_extractor(attr, "body").map(BodyExtractor::Field),
+        _ => parse_single_value_extractor(attr, "body")
+            .map(Box::new)
+            .map(BodyExtractor::Field),
     }
 }
 
@@ -253,7 +255,9 @@ fn parse_protocol_payload_extractor(
 ) -> Result<ProtocolPayloadExtractor> {
     match &attr.meta {
         syn::Meta::Path(_) => Ok(ProtocolPayloadExtractor::Whole),
-        _ => parse_single_value_extractor(attr, name).map(ProtocolPayloadExtractor::Field),
+        _ => parse_single_value_extractor(attr, name)
+            .map(Box::new)
+            .map(ProtocolPayloadExtractor::Field),
     }
 }
 

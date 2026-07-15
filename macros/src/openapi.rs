@@ -686,7 +686,10 @@ impl OpenApiParameterSpec {
             .as_ref()
             .map(schema_tokens)
             .unwrap_or_else(|| quote!(::a3s_boot::OpenApiSchema::string()));
-        let required = self.args.required.as_ref().map_or(true, LitBool::value);
+        let required = match &self.args.required {
+            Some(required) => required.value,
+            None => true,
+        };
 
         if matches!(self.kind, OpenApiParameterSpecKind::Path) && !required {
             return Err(syn::Error::new_spanned(

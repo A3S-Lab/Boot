@@ -368,6 +368,8 @@ fn take_route_attrs(attrs: &[Attribute]) -> (Vec<Attribute>, Vec<RouteSpec>, Vec
     (clean_attrs, routes, errors)
 }
 
+// Route registration intentionally keeps each independent decorator input explicit.
+#[allow(clippy::too_many_arguments)]
 fn route_registration(
     route: RouteSpec,
     method: &ImplItemFn,
@@ -387,7 +389,7 @@ fn route_registration(
 ) -> Result<proc_macro2::TokenStream> {
     if method.sig.asyncness.is_none() {
         return Err(syn::Error::new_spanned(
-            &method.sig.fn_token,
+            method.sig.fn_token,
             "controller route methods must be async",
         ));
     }
@@ -399,11 +401,13 @@ fn route_registration(
     let metadata_input = input.clone();
 
     let raw = route.args.raw.is_some();
-    if raw && route.kind.is_explicit_json() {
-        return Err(syn::Error::new_spanned(
-            route.args.raw.unwrap(),
-            "raw is not supported on *_json route attributes",
-        ));
+    if route.kind.is_explicit_json() {
+        if let Some(raw) = &route.args.raw {
+            return Err(syn::Error::new_spanned(
+                raw,
+                "raw is not supported on *_json route attributes",
+            ));
+        }
     }
     if let Some(render_spec) = render_spec {
         if raw {
@@ -446,9 +450,9 @@ fn route_registration(
                         "status is not supported on SSE route attributes",
                     ));
                 }
-                if route.args.raw.is_some() {
+                if let Some(raw) = &route.args.raw {
                     return Err(syn::Error::new_spanned(
-                        route.args.raw.unwrap(),
+                        raw,
                         "raw is not supported on SSE route attributes",
                     ));
                 }

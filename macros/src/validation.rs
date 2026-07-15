@@ -100,18 +100,21 @@ impl AttrOptions {
     }
 
     pub(crate) fn token(self) -> proc_macro2::TokenStream {
-        let transform = self
-            .transform
-            .then(|| quote!(.transform(true)))
-            .unwrap_or_default();
-        let whitelist = self
-            .whitelist
-            .then(|| quote!(.whitelist(true)))
-            .unwrap_or_default();
-        let forbid_non_whitelisted = self
-            .forbid_non_whitelisted
-            .then(|| quote!(.forbid_non_whitelisted(true)))
-            .unwrap_or_default();
+        let transform = if self.transform {
+            quote!(.transform(true))
+        } else {
+            proc_macro2::TokenStream::new()
+        };
+        let whitelist = if self.whitelist {
+            quote!(.whitelist(true))
+        } else {
+            proc_macro2::TokenStream::new()
+        };
+        let forbid_non_whitelisted = if self.forbid_non_whitelisted {
+            quote!(.forbid_non_whitelisted(true))
+        } else {
+            proc_macro2::TokenStream::new()
+        };
         quote! {
             ::a3s_boot::ValidationOptions::new() #transform #whitelist #forbid_non_whitelisted
         }

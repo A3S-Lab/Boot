@@ -544,7 +544,7 @@ impl Parse for ModuleArgs {
 }
 
 enum ModuleExportSpec {
-    Type(Type),
+    Type(Box<Type>),
     Named(LitStr),
 }
 
@@ -553,7 +553,7 @@ impl Parse for ModuleExportSpec {
         if input.peek(LitStr) {
             return Ok(Self::Named(input.parse()?));
         }
-        Ok(Self::Type(input.parse()?))
+        Ok(Self::Type(Box::new(input.parse()?)))
     }
 }
 

@@ -43,10 +43,7 @@ pub(crate) fn expand_schedule(mut item_impl: ItemImpl) -> Result<proc_macro2::To
         if method.sig.asyncness.is_none() {
             push_error(
                 &mut errors,
-                syn::Error::new_spanned(
-                    &method.sig.fn_token,
-                    "scheduled job methods must be async",
-                ),
+                syn::Error::new_spanned(method.sig.fn_token, "scheduled job methods must be async"),
             );
             continue;
         }

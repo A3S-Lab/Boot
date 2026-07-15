@@ -3,6 +3,8 @@ use crate::option_inner_type;
 use quote::quote;
 use syn::{Ident, LitStr, Type};
 
+// Each callback represents a distinct payload source and target shape.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn json_payload_binding_tokens<
     Whole,
     Required,
