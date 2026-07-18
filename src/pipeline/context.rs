@@ -120,6 +120,7 @@ impl ExecutionContext {
     }
 
     pub(crate) fn transport(
+        request: BootRequest,
         pattern: String,
         kind: ExecutionTransportKind,
         module_name: Option<String>,
@@ -134,7 +135,7 @@ impl ExecutionContext {
             controller_prefix: None,
             serialization: SerializationOptions::default(),
             metadata,
-            request: BootRequest::new(HttpMethod::Post, "/__transport"),
+            request,
             websocket: None,
             transport: Some(TransportExecutionContext { pattern, kind }),
         }

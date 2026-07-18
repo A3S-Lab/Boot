@@ -6,7 +6,10 @@ mod interceptor;
 mod middleware;
 mod pipe;
 
-pub(crate) use components::{PipelineComponent, PipelineComponents, PipelineOverrides};
+pub(crate) use components::{
+    PipelineComponent, PipelineComponents, PipelineOverrides, ProviderEnhancerComponents,
+    ProviderEnhancerMarker,
+};
 pub use context::{
     ExecutionContext, ExecutionProtocol, ExecutionTransportKind, TransportExecutionContext,
     WebSocketExecutionContext,
@@ -17,7 +20,7 @@ pub use filter::{
 };
 pub use guard::Guard;
 pub(crate) use interceptor::ExecutionInterceptorAdapter;
-pub use interceptor::{ExecutionInterceptor, Interceptor};
+pub use interceptor::{CallHandler, ExecutionInterceptor, Interceptor};
 pub use middleware::{
     Middleware, MiddlewareConsumer, MiddlewareConsumerBuilder, MiddlewareOutcome, MiddlewareRoute,
 };

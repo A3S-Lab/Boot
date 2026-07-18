@@ -3,9 +3,9 @@ use super::{
     Interceptor, Middleware, Pipe,
 };
 use crate::{
-    BootErrorKind, TransportExceptionFilter, TransportGuard, TransportInterceptor, TransportPipe,
-    ValidationOptions, WebSocketExceptionFilter, WebSocketGuard, WebSocketInterceptor,
-    WebSocketPipe,
+    BootErrorKind, ContextId, ModuleRef, ProviderToken, Result, TransportExceptionFilter,
+    TransportGuard, TransportInterceptor, TransportPipe, ValidationOptions,
+    WebSocketExceptionFilter, WebSocketGuard, WebSocketInterceptor, WebSocketPipe,
 };
 use std::any::TypeId;
 use std::collections::HashMap;
@@ -13,25 +13,224 @@ use std::sync::Arc;
 
 pub(crate) struct PipelineComponent<T: ?Sized> {
     type_id: TypeId,
-    inner: Arc<T>,
+    source: PipelineComponentSource<T>,
+}
+
+type PipelineProviderResolver<T> = dyn Fn(&ModuleRef, &ContextId) -> Result<Arc<T>> + Send + Sync;
+
+enum PipelineComponentSource<T: ?Sized> {
+    Static(Arc<T>),
+    Provider {
+        owner: ModuleRef,
+        resolver: Arc<PipelineProviderResolver<T>>,
+    },
 }
 
 impl<T: ?Sized> Clone for PipelineComponent<T> {
     fn clone(&self) -> Self {
         Self {
             type_id: self.type_id,
-            inner: Arc::clone(&self.inner),
+            source: match &self.source {
+                PipelineComponentSource::Static(inner) => {
+                    PipelineComponentSource::Static(Arc::clone(inner))
+                }
+                PipelineComponentSource::Provider { owner, resolver } => {
+                    PipelineComponentSource::Provider {
+                        owner: owner.clone(),
+                        resolver: Arc::clone(resolver),
+                    }
+                }
+            },
         }
     }
 }
 
 impl<T: ?Sized> PipelineComponent<T> {
-    pub(crate) fn inner(&self) -> &T {
-        self.inner.as_ref()
+    fn from_static(type_id: TypeId, inner: Arc<T>) -> Self {
+        Self {
+            type_id,
+            source: PipelineComponentSource::Static(inner),
+        }
+    }
+
+    pub(crate) fn from_provider<R>(type_id: TypeId, owner: ModuleRef, resolver: R) -> Self
+    where
+        R: Fn(&ModuleRef, &ContextId) -> Result<Arc<T>> + Send + Sync + 'static,
+    {
+        Self {
+            type_id,
+            source: PipelineComponentSource::Provider {
+                owner,
+                resolver: Arc::new(resolver),
+            },
+        }
+    }
+
+    pub(crate) fn resolve(&self, context_id: &ContextId) -> Result<Arc<T>> {
+        match &self.source {
+            PipelineComponentSource::Static(inner) => Ok(Arc::clone(inner)),
+            PipelineComponentSource::Provider { owner, resolver } => resolver(owner, context_id),
+        }
     }
 
     fn type_id(&self) -> TypeId {
         self.type_id
+    }
+}
+
+type ProviderEnhancerBinder = dyn Fn(ModuleRef) -> BoundProviderEnhancer + Send + Sync;
+
+#[derive(Clone)]
+pub(crate) struct ProviderEnhancerMarker {
+    binder: Arc<ProviderEnhancerBinder>,
+}
+
+#[derive(Clone)]
+pub(crate) enum BoundProviderEnhancer {
+    Pipe(PipelineComponent<dyn Pipe>),
+    Guard(PipelineComponent<dyn Guard>),
+    Interceptor(PipelineComponent<dyn Interceptor>),
+    Filter(PipelineComponent<dyn ExceptionFilter>),
+    WebSocketPipe(PipelineComponent<dyn WebSocketPipe>),
+    WebSocketGuard(PipelineComponent<dyn WebSocketGuard>),
+    WebSocketInterceptor(PipelineComponent<dyn WebSocketInterceptor>),
+    WebSocketFilter(PipelineComponent<dyn WebSocketExceptionFilter>),
+    TransportPipe(PipelineComponent<dyn TransportPipe>),
+    TransportGuard(PipelineComponent<dyn TransportGuard>),
+    TransportInterceptor(PipelineComponent<dyn TransportInterceptor>),
+    TransportFilter(PipelineComponent<dyn TransportExceptionFilter>),
+}
+
+macro_rules! provider_enhancer_marker {
+    ($method:ident, $variant:ident, $provider_trait:path, $trait_object:ty) => {
+        pub(crate) fn $method<T>(token: ProviderToken) -> Self
+        where
+            T: $provider_trait,
+        {
+            Self {
+                binder: Arc::new(move |owner| {
+                    let token = token.clone();
+                    BoundProviderEnhancer::$variant(PipelineComponent::from_provider(
+                        TypeId::of::<T>(),
+                        owner,
+                        move |module_ref, context_id| {
+                            module_ref
+                                .resolve_token_with_context::<T>(&token, context_id)
+                                .map(|provider| provider as Arc<$trait_object>)
+                        },
+                    ))
+                }),
+            }
+        }
+    };
+}
+
+impl ProviderEnhancerMarker {
+    provider_enhancer_marker!(pipe, Pipe, Pipe, dyn Pipe);
+    provider_enhancer_marker!(guard, Guard, Guard, dyn Guard);
+    provider_enhancer_marker!(interceptor, Interceptor, Interceptor, dyn Interceptor);
+    provider_enhancer_marker!(filter, Filter, ExceptionFilter, dyn ExceptionFilter);
+    provider_enhancer_marker!(
+        websocket_pipe,
+        WebSocketPipe,
+        WebSocketPipe,
+        dyn WebSocketPipe
+    );
+    provider_enhancer_marker!(
+        websocket_guard,
+        WebSocketGuard,
+        WebSocketGuard,
+        dyn WebSocketGuard
+    );
+    provider_enhancer_marker!(
+        websocket_interceptor,
+        WebSocketInterceptor,
+        WebSocketInterceptor,
+        dyn WebSocketInterceptor
+    );
+    provider_enhancer_marker!(
+        websocket_filter,
+        WebSocketFilter,
+        WebSocketExceptionFilter,
+        dyn WebSocketExceptionFilter
+    );
+    provider_enhancer_marker!(
+        transport_pipe,
+        TransportPipe,
+        TransportPipe,
+        dyn TransportPipe
+    );
+    provider_enhancer_marker!(
+        transport_guard,
+        TransportGuard,
+        TransportGuard,
+        dyn TransportGuard
+    );
+    provider_enhancer_marker!(
+        transport_interceptor,
+        TransportInterceptor,
+        TransportInterceptor,
+        dyn TransportInterceptor
+    );
+    provider_enhancer_marker!(
+        transport_filter,
+        TransportFilter,
+        TransportExceptionFilter,
+        dyn TransportExceptionFilter
+    );
+
+    pub(crate) fn bind(&self, owner: ModuleRef) -> BoundProviderEnhancer {
+        (self.binder)(owner)
+    }
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct ProviderEnhancerComponents {
+    pub http: PipelineComponents,
+    pub websocket_pipes: Vec<PipelineComponent<dyn WebSocketPipe>>,
+    pub websocket_guards: Vec<PipelineComponent<dyn WebSocketGuard>>,
+    pub websocket_interceptors: Vec<PipelineComponent<dyn WebSocketInterceptor>>,
+    pub websocket_filters: Vec<PipelineComponent<dyn WebSocketExceptionFilter>>,
+    pub transport_pipes: Vec<PipelineComponent<dyn TransportPipe>>,
+    pub transport_guards: Vec<PipelineComponent<dyn TransportGuard>>,
+    pub transport_interceptors: Vec<PipelineComponent<dyn TransportInterceptor>>,
+    pub transport_filters: Vec<PipelineComponent<dyn TransportExceptionFilter>>,
+}
+
+impl ProviderEnhancerComponents {
+    pub(crate) fn push(&mut self, enhancer: BoundProviderEnhancer) {
+        match enhancer {
+            BoundProviderEnhancer::Pipe(component) => self.http.pipes.push(component),
+            BoundProviderEnhancer::Guard(component) => self.http.guards.push(component),
+            BoundProviderEnhancer::Interceptor(component) => {
+                self.http.interceptors.push(component);
+            }
+            BoundProviderEnhancer::Filter(component) => self.http.filters.push(component),
+            BoundProviderEnhancer::WebSocketPipe(component) => {
+                self.websocket_pipes.push(component);
+            }
+            BoundProviderEnhancer::WebSocketGuard(component) => {
+                self.websocket_guards.push(component);
+            }
+            BoundProviderEnhancer::WebSocketInterceptor(component) => {
+                self.websocket_interceptors.push(component);
+            }
+            BoundProviderEnhancer::WebSocketFilter(component) => {
+                self.websocket_filters.push(component);
+            }
+            BoundProviderEnhancer::TransportPipe(component) => {
+                self.transport_pipes.push(component);
+            }
+            BoundProviderEnhancer::TransportGuard(component) => {
+                self.transport_guards.push(component);
+            }
+            BoundProviderEnhancer::TransportInterceptor(component) => {
+                self.transport_interceptors.push(component);
+            }
+            BoundProviderEnhancer::TransportFilter(component) => {
+                self.transport_filters.push(component);
+            }
+        }
     }
 }
 
@@ -40,10 +239,7 @@ impl PipelineComponent<dyn Pipe> {
     where
         P: Pipe,
     {
-        Self {
-            type_id: TypeId::of::<P>(),
-            inner: Arc::new(pipe),
-        }
+        Self::from_static(TypeId::of::<P>(), Arc::new(pipe))
     }
 
     fn replacement<T, P>(pipe: P) -> Self
@@ -51,10 +247,7 @@ impl PipelineComponent<dyn Pipe> {
         T: Pipe,
         P: Pipe,
     {
-        Self {
-            type_id: TypeId::of::<T>(),
-            inner: Arc::new(pipe),
-        }
+        Self::from_static(TypeId::of::<T>(), Arc::new(pipe))
     }
 }
 
@@ -63,17 +256,11 @@ impl PipelineComponent<dyn Guard> {
     where
         G: Guard,
     {
-        Self {
-            type_id: TypeId::of::<G>(),
-            inner: Arc::new(guard),
-        }
+        Self::from_static(TypeId::of::<G>(), Arc::new(guard))
     }
 
     pub(crate) fn from_arc(guard: Arc<dyn Guard>) -> Self {
-        Self {
-            type_id: TypeId::of::<Arc<dyn Guard>>(),
-            inner: guard,
-        }
+        Self::from_static(TypeId::of::<Arc<dyn Guard>>(), guard)
     }
 
     fn replacement<T, G>(guard: G) -> Self
@@ -81,10 +268,7 @@ impl PipelineComponent<dyn Guard> {
         T: Guard,
         G: Guard,
     {
-        Self {
-            type_id: TypeId::of::<T>(),
-            inner: Arc::new(guard),
-        }
+        Self::from_static(TypeId::of::<T>(), Arc::new(guard))
     }
 }
 
@@ -93,10 +277,7 @@ impl PipelineComponent<dyn Interceptor> {
     where
         I: Interceptor,
     {
-        Self {
-            type_id: TypeId::of::<I>(),
-            inner: Arc::new(interceptor),
-        }
+        Self::from_static(TypeId::of::<I>(), Arc::new(interceptor))
     }
 
     fn replacement<T, I>(interceptor: I) -> Self
@@ -104,10 +285,7 @@ impl PipelineComponent<dyn Interceptor> {
         T: Interceptor,
         I: Interceptor,
     {
-        Self {
-            type_id: TypeId::of::<T>(),
-            inner: Arc::new(interceptor),
-        }
+        Self::from_static(TypeId::of::<T>(), Arc::new(interceptor))
     }
 }
 
@@ -116,10 +294,7 @@ impl PipelineComponent<dyn ExceptionFilter> {
     where
         F: ExceptionFilter,
     {
-        Self {
-            type_id: TypeId::of::<F>(),
-            inner: Arc::new(filter),
-        }
+        Self::from_static(TypeId::of::<F>(), Arc::new(filter))
     }
 
     fn replacement<T, F>(filter: F) -> Self
@@ -127,10 +302,7 @@ impl PipelineComponent<dyn ExceptionFilter> {
         T: ExceptionFilter,
         F: ExceptionFilter,
     {
-        Self {
-            type_id: TypeId::of::<T>(),
-            inner: Arc::new(filter),
-        }
+        Self::from_static(TypeId::of::<T>(), Arc::new(filter))
     }
 }
 
@@ -139,17 +311,11 @@ impl PipelineComponent<dyn WebSocketPipe> {
     where
         P: WebSocketPipe,
     {
-        Self {
-            type_id: TypeId::of::<P>(),
-            inner: Arc::new(pipe),
-        }
+        Self::from_static(TypeId::of::<P>(), Arc::new(pipe))
     }
 
     pub(crate) fn from_arc(pipe: Arc<dyn WebSocketPipe>) -> Self {
-        Self {
-            type_id: TypeId::of::<Arc<dyn WebSocketPipe>>(),
-            inner: pipe,
-        }
+        Self::from_static(TypeId::of::<Arc<dyn WebSocketPipe>>(), pipe)
     }
 
     fn replacement<T, P>(pipe: P) -> Self
@@ -157,10 +323,7 @@ impl PipelineComponent<dyn WebSocketPipe> {
         T: WebSocketPipe,
         P: WebSocketPipe,
     {
-        Self {
-            type_id: TypeId::of::<T>(),
-            inner: Arc::new(pipe),
-        }
+        Self::from_static(TypeId::of::<T>(), Arc::new(pipe))
     }
 }
 
@@ -169,17 +332,11 @@ impl PipelineComponent<dyn WebSocketGuard> {
     where
         G: WebSocketGuard,
     {
-        Self {
-            type_id: TypeId::of::<G>(),
-            inner: Arc::new(guard),
-        }
+        Self::from_static(TypeId::of::<G>(), Arc::new(guard))
     }
 
     pub(crate) fn from_arc(guard: Arc<dyn WebSocketGuard>) -> Self {
-        Self {
-            type_id: TypeId::of::<Arc<dyn WebSocketGuard>>(),
-            inner: guard,
-        }
+        Self::from_static(TypeId::of::<Arc<dyn WebSocketGuard>>(), guard)
     }
 
     fn replacement<T, G>(guard: G) -> Self
@@ -187,10 +344,7 @@ impl PipelineComponent<dyn WebSocketGuard> {
         T: WebSocketGuard,
         G: WebSocketGuard,
     {
-        Self {
-            type_id: TypeId::of::<T>(),
-            inner: Arc::new(guard),
-        }
+        Self::from_static(TypeId::of::<T>(), Arc::new(guard))
     }
 }
 
@@ -199,17 +353,11 @@ impl PipelineComponent<dyn WebSocketInterceptor> {
     where
         I: WebSocketInterceptor,
     {
-        Self {
-            type_id: TypeId::of::<I>(),
-            inner: Arc::new(interceptor),
-        }
+        Self::from_static(TypeId::of::<I>(), Arc::new(interceptor))
     }
 
     pub(crate) fn from_arc(interceptor: Arc<dyn WebSocketInterceptor>) -> Self {
-        Self {
-            type_id: TypeId::of::<Arc<dyn WebSocketInterceptor>>(),
-            inner: interceptor,
-        }
+        Self::from_static(TypeId::of::<Arc<dyn WebSocketInterceptor>>(), interceptor)
     }
 
     fn replacement<T, I>(interceptor: I) -> Self
@@ -217,10 +365,7 @@ impl PipelineComponent<dyn WebSocketInterceptor> {
         T: WebSocketInterceptor,
         I: WebSocketInterceptor,
     {
-        Self {
-            type_id: TypeId::of::<T>(),
-            inner: Arc::new(interceptor),
-        }
+        Self::from_static(TypeId::of::<T>(), Arc::new(interceptor))
     }
 }
 
@@ -229,17 +374,11 @@ impl PipelineComponent<dyn WebSocketExceptionFilter> {
     where
         F: WebSocketExceptionFilter,
     {
-        Self {
-            type_id: TypeId::of::<F>(),
-            inner: Arc::new(filter),
-        }
+        Self::from_static(TypeId::of::<F>(), Arc::new(filter))
     }
 
     pub(crate) fn from_arc(filter: Arc<dyn WebSocketExceptionFilter>) -> Self {
-        Self {
-            type_id: TypeId::of::<Arc<dyn WebSocketExceptionFilter>>(),
-            inner: filter,
-        }
+        Self::from_static(TypeId::of::<Arc<dyn WebSocketExceptionFilter>>(), filter)
     }
 
     fn replacement<T, F>(filter: F) -> Self
@@ -247,10 +386,7 @@ impl PipelineComponent<dyn WebSocketExceptionFilter> {
         T: WebSocketExceptionFilter,
         F: WebSocketExceptionFilter,
     {
-        Self {
-            type_id: TypeId::of::<T>(),
-            inner: Arc::new(filter),
-        }
+        Self::from_static(TypeId::of::<T>(), Arc::new(filter))
     }
 }
 
@@ -259,17 +395,11 @@ impl PipelineComponent<dyn TransportPipe> {
     where
         P: TransportPipe,
     {
-        Self {
-            type_id: TypeId::of::<P>(),
-            inner: Arc::new(pipe),
-        }
+        Self::from_static(TypeId::of::<P>(), Arc::new(pipe))
     }
 
     pub(crate) fn from_arc(pipe: Arc<dyn TransportPipe>) -> Self {
-        Self {
-            type_id: TypeId::of::<Arc<dyn TransportPipe>>(),
-            inner: pipe,
-        }
+        Self::from_static(TypeId::of::<Arc<dyn TransportPipe>>(), pipe)
     }
 
     fn replacement<T, P>(pipe: P) -> Self
@@ -277,10 +407,7 @@ impl PipelineComponent<dyn TransportPipe> {
         T: TransportPipe,
         P: TransportPipe,
     {
-        Self {
-            type_id: TypeId::of::<T>(),
-            inner: Arc::new(pipe),
-        }
+        Self::from_static(TypeId::of::<T>(), Arc::new(pipe))
     }
 }
 
@@ -289,17 +416,11 @@ impl PipelineComponent<dyn TransportGuard> {
     where
         G: TransportGuard,
     {
-        Self {
-            type_id: TypeId::of::<G>(),
-            inner: Arc::new(guard),
-        }
+        Self::from_static(TypeId::of::<G>(), Arc::new(guard))
     }
 
     pub(crate) fn from_arc(guard: Arc<dyn TransportGuard>) -> Self {
-        Self {
-            type_id: TypeId::of::<Arc<dyn TransportGuard>>(),
-            inner: guard,
-        }
+        Self::from_static(TypeId::of::<Arc<dyn TransportGuard>>(), guard)
     }
 
     fn replacement<T, G>(guard: G) -> Self
@@ -307,10 +428,7 @@ impl PipelineComponent<dyn TransportGuard> {
         T: TransportGuard,
         G: TransportGuard,
     {
-        Self {
-            type_id: TypeId::of::<T>(),
-            inner: Arc::new(guard),
-        }
+        Self::from_static(TypeId::of::<T>(), Arc::new(guard))
     }
 }
 
@@ -319,17 +437,11 @@ impl PipelineComponent<dyn TransportInterceptor> {
     where
         I: TransportInterceptor,
     {
-        Self {
-            type_id: TypeId::of::<I>(),
-            inner: Arc::new(interceptor),
-        }
+        Self::from_static(TypeId::of::<I>(), Arc::new(interceptor))
     }
 
     pub(crate) fn from_arc(interceptor: Arc<dyn TransportInterceptor>) -> Self {
-        Self {
-            type_id: TypeId::of::<Arc<dyn TransportInterceptor>>(),
-            inner: interceptor,
-        }
+        Self::from_static(TypeId::of::<Arc<dyn TransportInterceptor>>(), interceptor)
     }
 
     fn replacement<T, I>(interceptor: I) -> Self
@@ -337,10 +449,7 @@ impl PipelineComponent<dyn TransportInterceptor> {
         T: TransportInterceptor,
         I: TransportInterceptor,
     {
-        Self {
-            type_id: TypeId::of::<T>(),
-            inner: Arc::new(interceptor),
-        }
+        Self::from_static(TypeId::of::<T>(), Arc::new(interceptor))
     }
 }
 
@@ -349,17 +458,11 @@ impl PipelineComponent<dyn TransportExceptionFilter> {
     where
         F: TransportExceptionFilter,
     {
-        Self {
-            type_id: TypeId::of::<F>(),
-            inner: Arc::new(filter),
-        }
+        Self::from_static(TypeId::of::<F>(), Arc::new(filter))
     }
 
     pub(crate) fn from_arc(filter: Arc<dyn TransportExceptionFilter>) -> Self {
-        Self {
-            type_id: TypeId::of::<Arc<dyn TransportExceptionFilter>>(),
-            inner: filter,
-        }
+        Self::from_static(TypeId::of::<Arc<dyn TransportExceptionFilter>>(), filter)
     }
 
     fn replacement<T, F>(filter: F) -> Self
@@ -367,10 +470,7 @@ impl PipelineComponent<dyn TransportExceptionFilter> {
         T: TransportExceptionFilter,
         F: TransportExceptionFilter,
     {
-        Self {
-            type_id: TypeId::of::<T>(),
-            inner: Arc::new(filter),
-        }
+        Self::from_static(TypeId::of::<T>(), Arc::new(filter))
     }
 }
 
@@ -386,6 +486,18 @@ pub(crate) struct PipelineComponents {
 }
 
 impl PipelineComponents {
+    pub(crate) fn append(&mut self, components: &Self) {
+        self.middleware
+            .extend(components.middleware.iter().cloned());
+        self.pipes.extend(components.pipes.iter().cloned());
+        self.guards.extend(components.guards.iter().cloned());
+        self.interceptors
+            .extend(components.interceptors.iter().cloned());
+        self.filters.extend(components.filters.iter().cloned());
+        self.validation_enabled = self.validation_enabled || components.validation_enabled;
+        self.validation_options = self.validation_options.merge(components.validation_options);
+    }
+
     pub fn push_middleware<M>(&mut self, middleware: M)
     where
         M: Middleware,

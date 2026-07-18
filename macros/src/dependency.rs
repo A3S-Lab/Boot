@@ -11,7 +11,7 @@ use crate::{parse_optional_comma, set_once};
 pub(crate) fn expand_injectable(
     mut item_struct: syn::ItemStruct,
 ) -> Result<proc_macro2::TokenStream> {
-    let constructor = injectable_constructor(&mut item_struct)?;
+    let (constructor, dependencies) = injectable_constructor(&mut item_struct)?;
     let ident = &item_struct.ident;
     let mut from_module_ref_generics = item_struct.generics.clone();
     from_module_ref_generics
@@ -27,6 +27,12 @@ pub(crate) fn expand_injectable(
         impl #from_impl_generics ::a3s_boot::FromModuleRef for #ident #ty_generics #from_where_clause {
             fn from_module_ref(module_ref: &::a3s_boot::ModuleRef) -> ::a3s_boot::Result<Self> {
                 #constructor
+            }
+
+            fn provider_dependencies() -> ::std::option::Option<
+                ::std::vec::Vec<::a3s_boot::ProviderDependency>,
+            > {
+                ::std::option::Option::Some(::std::vec![#(#dependencies,)*])
             }
         }
 
@@ -139,7 +145,16 @@ pub(crate) fn expand_module(
     } else {
         quote! {
             Ok(::std::vec![
-                #(module_ref.get::<#controllers>()?.controller()?,)*
+                #({
+                    if module_ref.provider_is_contextual::<#controllers>()?
+                        || module_ref.provider_scope::<#controllers>()?
+                            != ::a3s_boot::ProviderScope::Singleton
+                    {
+                        <#controllers>::provider_controller()?
+                    } else {
+                        module_ref.get::<#controllers>()?.controller()?
+                    }
+                },)*
             ])
         }
     };
@@ -164,9 +179,16 @@ pub(crate) fn expand_module(
         quote! {
             let mut __a3s_boot_patterns = ::std::vec::Vec::new();
             #(
-                __a3s_boot_patterns.extend(
-                    module_ref.get::<#message_controllers>()?.message_patterns()?
-                );
+                __a3s_boot_patterns.extend({
+                    if module_ref.provider_is_contextual::<#message_controllers>()?
+                        || module_ref.provider_scope::<#message_controllers>()?
+                            != ::a3s_boot::ProviderScope::Singleton
+                    {
+                        <#message_controllers>::provider_message_patterns()?
+                    } else {
+                        module_ref.get::<#message_controllers>()?.message_patterns()?
+                    }
+                });
             )*
             Ok(__a3s_boot_patterns)
         }
@@ -345,50 +367,57 @@ fn export_registration_token(spec: &ModuleExportSpec) -> proc_macro2::TokenStrea
     }
 }
 
-fn injectable_constructor(item_struct: &mut syn::ItemStruct) -> Result<proc_macro2::TokenStream> {
+fn injectable_constructor(
+    item_struct: &mut syn::ItemStruct,
+) -> Result<(proc_macro2::TokenStream, Vec<proc_macro2::TokenStream>)> {
     match &mut item_struct.fields {
-        Fields::Unit => Ok(quote! { Ok(Self) }),
+        Fields::Unit => Ok((quote! { Ok(Self) }, Vec::new())),
         Fields::Named(fields) => {
             let mut values = Vec::new();
+            let mut dependencies = Vec::new();
             for field in fields.named.iter_mut() {
                 let ident = field.ident.clone().ok_or_else(|| {
                     syn::Error::new_spanned(&*field, "#[injectable] requires named fields")
                 })?;
                 let token = take_field_inject_attr(&mut field.attrs)?;
-                let value = match injectable_field_dependency(&field.ty) {
-                    Some(InjectableFieldDependency::Required(inner)) => match token {
+                let dependency = injectable_field_dependency(&field.ty).ok_or_else(|| {
+                    syn::Error::new_spanned(
+                        &field.ty,
+                        "#[injectable] fields must be Arc<T>, Option<Arc<T>>, ProviderRef<T>, or Option<ProviderRef<T>>",
+                    )
+                })?;
+                dependencies.push(provider_dependency_token(dependency, token.as_ref()));
+                let value = match dependency {
+                    InjectableFieldDependency::Required(inner) => match token {
                         Some(token) => quote! { module_ref.get_named::<#inner>(#token)? },
                         None => quote! { module_ref.get::<#inner>()? },
                     },
-                    Some(InjectableFieldDependency::Optional(inner)) => match token {
+                    InjectableFieldDependency::Optional(inner) => match token {
                         Some(token) => quote! { module_ref.get_optional_named::<#inner>(#token)? },
                         None => quote! { module_ref.get_optional::<#inner>()? },
                     },
-                    Some(InjectableFieldDependency::ProviderRef(inner)) => match token {
+                    InjectableFieldDependency::ProviderRef(inner) => match token {
                         Some(token) => quote! { module_ref.named_provider_ref::<#inner>(#token) },
                         None => quote! { module_ref.provider_ref::<#inner>() },
                     },
-                    Some(InjectableFieldDependency::OptionalProviderRef(inner)) => match token {
+                    InjectableFieldDependency::OptionalProviderRef(inner) => match token {
                         Some(token) => {
                             quote! { module_ref.optional_named_provider_ref::<#inner>(#token)? }
                         }
                         None => quote! { module_ref.optional_provider_ref::<#inner>()? },
                     },
-                    None => {
-                        return Err(syn::Error::new_spanned(
-                            &field.ty,
-                            "#[injectable] fields must be Arc<T>, Option<Arc<T>>, ProviderRef<T>, or Option<ProviderRef<T>>",
-                        ));
-                    }
                 };
                 values.push(quote! { #ident: #value });
             }
 
-            Ok(quote! {
-                Ok(Self {
-                    #(#values,)*
-                })
-            })
+            Ok((
+                quote! {
+                    Ok(Self {
+                        #(#values,)*
+                    })
+                },
+                dependencies,
+            ))
         }
         Fields::Unnamed(fields) => Err(syn::Error::new_spanned(
             fields,
@@ -397,11 +426,37 @@ fn injectable_constructor(item_struct: &mut syn::ItemStruct) -> Result<proc_macr
     }
 }
 
+#[derive(Clone, Copy)]
 enum InjectableFieldDependency<'a> {
     Required(&'a Type),
     Optional(&'a Type),
     ProviderRef(&'a Type),
     OptionalProviderRef(&'a Type),
+}
+
+fn provider_dependency_token(
+    kind: InjectableFieldDependency<'_>,
+    token: Option<&LitStr>,
+) -> proc_macro2::TokenStream {
+    let inner = match kind {
+        InjectableFieldDependency::Required(inner)
+        | InjectableFieldDependency::Optional(inner)
+        | InjectableFieldDependency::ProviderRef(inner)
+        | InjectableFieldDependency::OptionalProviderRef(inner) => inner,
+    };
+    let dependency = match token {
+        Some(token) => quote! { ::a3s_boot::ProviderDependency::named(#token) },
+        None => quote! { ::a3s_boot::ProviderDependency::typed::<#inner>() },
+    };
+
+    match kind {
+        InjectableFieldDependency::Required(_) => dependency,
+        InjectableFieldDependency::Optional(_) => quote! { (#dependency).optional() },
+        InjectableFieldDependency::ProviderRef(_) => quote! { (#dependency).lazy() },
+        InjectableFieldDependency::OptionalProviderRef(_) => {
+            quote! { (#dependency).optional().lazy() }
+        }
+    }
 }
 
 fn injectable_field_dependency(field_type: &Type) -> Option<InjectableFieldDependency<'_>> {

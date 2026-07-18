@@ -1,4 +1,4 @@
-use super::{ModuleRef, ProviderToken};
+use super::{ContextId, ModuleRef, ProviderToken};
 use crate::Result;
 use std::fmt;
 use std::marker::PhantomData;
@@ -26,7 +26,7 @@ where
 {
     pub fn new(module_ref: ModuleRef, token: ProviderToken) -> Self {
         Self {
-            module_ref,
+            module_ref: module_ref.without_resolution_stack(),
             token,
             _marker: PhantomData,
         }
@@ -52,7 +52,17 @@ where
         self.module_ref.resolve_token(&self.token)
     }
 
+    pub fn resolve_with_context(&self, context_id: &ContextId) -> Result<Arc<T>> {
+        self.module_ref
+            .resolve_token_with_context(&self.token, context_id)
+    }
+
     pub fn resolve_optional(&self) -> Result<Option<Arc<T>>> {
         self.module_ref.resolve_optional_token(&self.token)
+    }
+
+    pub fn resolve_optional_with_context(&self, context_id: &ContextId) -> Result<Option<Arc<T>>> {
+        self.module_ref
+            .resolve_optional_token_with_context(&self.token, context_id)
     }
 }

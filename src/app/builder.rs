@@ -451,14 +451,21 @@ impl BootApplicationBuilder {
             ModuleRegistry::new(global_ref, self.provider_overrides, self.module_overrides);
         let mut modules = Vec::new();
         let mut module_instances = Vec::new();
-        let mut routes = self
-            .routes
-            .into_iter()
-            .map(|route| route.with_pipeline_prefix(&self.global_pipeline))
-            .collect::<Vec<_>>();
+        let mut routes = self.routes;
         let mut gateways = self.gateways;
         let mut message_patterns = self.message_patterns;
 
+        for module in &self.modules {
+            let registered = registry.register_module(Arc::clone(module))?;
+            module_ref.add_visible_scope(registered.module_ref)?;
+        }
+        let provider_enhancers = registry.provider_enhancers();
+        let mut effective_global_pipeline = self.global_pipeline.clone();
+        effective_global_pipeline.append(&provider_enhancers.http);
+        routes = routes
+            .into_iter()
+            .map(|route| route.with_pipeline_prefix(&effective_global_pipeline))
+            .collect();
         {
             let mut sink = ModuleRegistrationSink {
                 modules: &mut modules,
@@ -467,15 +474,7 @@ impl BootApplicationBuilder {
                 gateways: &mut gateways,
                 message_patterns: &mut message_patterns,
             };
-
-            for module in &self.modules {
-                let registered = registry.register_module(
-                    Arc::clone(module),
-                    &self.global_pipeline,
-                    &mut sink,
-                )?;
-                module_ref.add_visible_scope(registered.module_ref)?;
-            }
+            registry.finalize(&effective_global_pipeline, &mut sink)?;
         }
         for (name, registered) in registry.registered_modules() {
             lazy_module_loader.seed_module(name, registered.module_ref, registered.exports)?;
@@ -490,6 +489,7 @@ impl BootApplicationBuilder {
             .into_iter()
             .map(|gateway| {
                 gateway
+                    .with_provider_enhancer_prefix(&provider_enhancers)
                     .with_guard_prefix(&self.global_websocket_guards)
                     .with_interceptor_prefix(&self.global_websocket_interceptors)
                     .with_execution_pipeline_prefix(
@@ -502,12 +502,14 @@ impl BootApplicationBuilder {
                         self.global_pipeline.validation_enabled,
                         self.global_pipeline.validation_options,
                     )
+                    .with_default_module_ref(module_ref.clone())
             })
             .collect::<Vec<_>>();
         let message_patterns = message_patterns
             .into_iter()
             .map(|pattern| {
                 pattern
+                    .with_provider_enhancer_prefix(&provider_enhancers)
                     .with_guard_prefix(&self.global_transport_guards)
                     .with_interceptor_prefix(&self.global_transport_interceptors)
                     .with_execution_pipeline_prefix(
@@ -520,14 +522,15 @@ impl BootApplicationBuilder {
                         self.global_pipeline.validation_enabled,
                         self.global_pipeline.validation_options,
                     )
+                    .with_default_module_ref(module_ref.clone())
             })
             .collect::<Vec<_>>();
         let documented_routes = routes.clone();
 
         for (path, info) in self.openapi_routes {
             let document = OpenApiDocument::from_routes(info, &documented_routes);
-            let route =
-                openapi_json_route(path, document)?.with_pipeline_prefix(&self.global_pipeline);
+            let route = openapi_json_route(path, document)?
+                .with_pipeline_prefix(&effective_global_pipeline);
             let route = apply_global_prefix_to_route(
                 route,
                 self.global_prefix.as_deref(),
@@ -542,13 +545,13 @@ impl BootApplicationBuilder {
                 &documented_routes,
                 self.global_prefix.as_deref(),
                 &self.global_prefix_exclusions,
-                &self.global_pipeline,
+                &effective_global_pipeline,
             )?;
         }
 
         #[cfg(feature = "security")]
         if let Some(cors_preflight) = &self.cors_preflight {
-            add_cors_preflight_routes(&mut routes, cors_preflight, &self.global_pipeline)?;
+            add_cors_preflight_routes(&mut routes, cors_preflight, &effective_global_pipeline)?;
         }
 
         routes = routes
@@ -569,6 +572,7 @@ impl BootApplicationBuilder {
             module_ref,
             module_instances,
             api_versioning: self.api_versioning,
+            global_filters: effective_global_pipeline.filters.clone(),
         })
     }
 
@@ -583,14 +587,21 @@ impl BootApplicationBuilder {
             ModuleRegistry::new(global_ref, self.provider_overrides, self.module_overrides);
         let mut modules = Vec::new();
         let mut module_instances = Vec::new();
-        let mut routes = self
-            .routes
-            .into_iter()
-            .map(|route| route.with_pipeline_prefix(&self.global_pipeline))
-            .collect::<Vec<_>>();
+        let mut routes = self.routes;
         let mut gateways = self.gateways;
         let mut message_patterns = self.message_patterns;
 
+        for module in &self.modules {
+            let registered = registry.register_module_async(Arc::clone(module)).await?;
+            module_ref.add_visible_scope(registered.module_ref)?;
+        }
+        let provider_enhancers = registry.provider_enhancers();
+        let mut effective_global_pipeline = self.global_pipeline.clone();
+        effective_global_pipeline.append(&provider_enhancers.http);
+        routes = routes
+            .into_iter()
+            .map(|route| route.with_pipeline_prefix(&effective_global_pipeline))
+            .collect();
         {
             let mut sink = ModuleRegistrationSink {
                 modules: &mut modules,
@@ -599,13 +610,9 @@ impl BootApplicationBuilder {
                 gateways: &mut gateways,
                 message_patterns: &mut message_patterns,
             };
-
-            for module in &self.modules {
-                let registered = registry
-                    .register_module_async(Arc::clone(module), &self.global_pipeline, &mut sink)
-                    .await?;
-                module_ref.add_visible_scope(registered.module_ref)?;
-            }
+            registry
+                .finalize_async(&effective_global_pipeline, &mut sink)
+                .await?;
         }
         for (name, registered) in registry.registered_modules() {
             lazy_module_loader.seed_module(name, registered.module_ref, registered.exports)?;
@@ -620,6 +627,7 @@ impl BootApplicationBuilder {
             .into_iter()
             .map(|gateway| {
                 gateway
+                    .with_provider_enhancer_prefix(&provider_enhancers)
                     .with_guard_prefix(&self.global_websocket_guards)
                     .with_interceptor_prefix(&self.global_websocket_interceptors)
                     .with_execution_pipeline_prefix(
@@ -632,12 +640,14 @@ impl BootApplicationBuilder {
                         self.global_pipeline.validation_enabled,
                         self.global_pipeline.validation_options,
                     )
+                    .with_default_module_ref(module_ref.clone())
             })
             .collect::<Vec<_>>();
         let message_patterns = message_patterns
             .into_iter()
             .map(|pattern| {
                 pattern
+                    .with_provider_enhancer_prefix(&provider_enhancers)
                     .with_guard_prefix(&self.global_transport_guards)
                     .with_interceptor_prefix(&self.global_transport_interceptors)
                     .with_execution_pipeline_prefix(
@@ -650,14 +660,15 @@ impl BootApplicationBuilder {
                         self.global_pipeline.validation_enabled,
                         self.global_pipeline.validation_options,
                     )
+                    .with_default_module_ref(module_ref.clone())
             })
             .collect::<Vec<_>>();
         let documented_routes = routes.clone();
 
         for (path, info) in self.openapi_routes {
             let document = OpenApiDocument::from_routes(info, &documented_routes);
-            let route =
-                openapi_json_route(path, document)?.with_pipeline_prefix(&self.global_pipeline);
+            let route = openapi_json_route(path, document)?
+                .with_pipeline_prefix(&effective_global_pipeline);
             let route = apply_global_prefix_to_route(
                 route,
                 self.global_prefix.as_deref(),
@@ -672,13 +683,13 @@ impl BootApplicationBuilder {
                 &documented_routes,
                 self.global_prefix.as_deref(),
                 &self.global_prefix_exclusions,
-                &self.global_pipeline,
+                &effective_global_pipeline,
             )?;
         }
 
         #[cfg(feature = "security")]
         if let Some(cors_preflight) = &self.cors_preflight {
-            add_cors_preflight_routes(&mut routes, cors_preflight, &self.global_pipeline)?;
+            add_cors_preflight_routes(&mut routes, cors_preflight, &effective_global_pipeline)?;
         }
 
         routes = routes
@@ -699,6 +710,7 @@ impl BootApplicationBuilder {
             module_ref,
             module_instances,
             api_versioning: self.api_versioning,
+            global_filters: effective_global_pipeline.filters.clone(),
         })
     }
 }

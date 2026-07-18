@@ -41,10 +41,18 @@ Implemented today:
   factories, singleton provider lifecycle hooks, lookup, `FromModuleRef`
   auto-wired provider factories, named or optional dependency resolution,
   `ProviderRef<T>` lazy provider handles for forward-reference-style
-  dependencies, fresh resolution contexts, and dynamic injectable creation.
+  dependencies, declared eager dependency graphs with automatic request-scope
+  propagation, public `ContextId` / `ContextIdFactory` identities, fresh or
+  caller-shared resolution contexts, per-inquirer transient reuse, and dynamic
+  injectable creation.
+- DI-managed application-wide enhancers corresponding to Nest's `APP_GUARD`,
+  `APP_PIPE`, `APP_INTERCEPTOR`, and `APP_FILTER`, with typed provider markers
+  for HTTP plus protocol-specific WebSocket and transport variants, automatic
+  scope bubbling, and per-invocation contextual resolution.
 - `TestingModule` with module and provider overrides, async provider-aware
   `compile_async`, and typed HTTP, WebSocket, and transport pipeline overrides
-  for guards, interceptors, exception filters, and pipes.
+  for guards, interceptors, exception filters, and pipes, including
+  provider-backed application enhancers.
 - `ControllerDefinition` and `RouteDefinition` for HTTP route groups, including
   specificity-aware path params, catch-all route params, and Nest-style ALL
   method routes with exact-method precedence.
@@ -62,8 +70,9 @@ Implemented today:
   Nest-style custom route/controller metadata and `#[http_code]` for Nest-style
   response status metadata, `#[cache_key]` / `#[cache_ttl]` for cache response
   metadata, `#[header]` for response headers, and `#[redirect]` for redirect
-  responses. `#[injectable]` implements `FromModuleRef` for unit structs and
-  named-field structs whose dependencies are `Arc<T>` or `Option<Arc<T>>`, with
+  responses. `#[injectable]` implements `FromModuleRef` and dependency metadata
+  for unit structs and named-field structs whose dependencies are `Arc<T>`,
+  `Option<Arc<T>>`, `ProviderRef<T>`, or `Option<ProviderRef<T>>`, with
   `#[inject("token")]` for named provider lookup.
   `#[module]` implements `Module` from Nest-style metadata lists for imports,
   providers, controllers, routes, gateways, message controllers, exports,
@@ -87,6 +96,14 @@ Implemented today:
 - Nest-style generic pipeline macros: `#[use_guard]`, `#[use_interceptor]`,
   `#[use_filter]`, and `#[use_pipe]` at HTTP controller/route,
   WebSocket gateway/subscription, and message controller/pattern scope.
+- A shared Nest-style `CallHandler` abstraction for the protocol-specific HTTP,
+  WebSocket, and message-transport around-interceptor traits. Interceptors can transform or
+  recover downstream errors, short-circuit without calling `next`, and apply
+  sequential retries or runtime-specific timeouts around reusable
+  `next.handle()` calls. Existing
+  `before` / `short_circuit` / `after` implementations remain compatible
+  through the default `intercept(...)` methods, and exception filters receive
+  only errors that remain unrecovered after the interceptor chain.
 - Nest-style catch-filter targeting with `#[catch]`, `BootErrorKind`,
   `catch_errors(...)`, `with_catch_filter(...)`, and
   `use_global_catch_filter(...)`, plus protocol-specific global WebSocket and
@@ -158,23 +175,27 @@ Implemented today:
   module-level forward imports for deliberate circular module relationships,
   and contextual module import cycle diagnostics.
 - Provider lifecycle scopes with default singleton providers, request-scoped
-  providers cached per in-process request context, transient providers built per
-  resolution, async singleton provider factories awaited during async graph
-  build, order-independent singleton provider graph initialization,
-  request-time lookup through `BootRequest`, singleton/transient/request-scoped
-  provider dependency cycle diagnostics, and singleton provider startup/shutdown
-  hooks for module init, application bootstrap, module destroy, before
-  application shutdown, and application shutdown, including OS signal labels
-  from shutdown hooks.
+  providers cached per `ContextId`, transient providers reused per inquirer
+  within a context, async singleton provider factories awaited during async
+  graph build, automatic request-scope propagation through declared eager
+  dependency graphs, order-independent singleton provider graph initialization,
+  request-time lookup and automatic context identity through `BootRequest`,
+  singleton/transient/request-scoped provider dependency cycle diagnostics, and
+  singleton provider startup/shutdown hooks for module init, application
+  bootstrap, module destroy, before application shutdown, and application
+  shutdown, including OS signal labels from shutdown hooks.
 - Provider aliases that mirror Nest custom provider `useExisting` semantics and
   preserve target provider scope.
 - Lazy `ProviderRef<T>` handles that mirror the useful part of Nest
   `forwardRef(...)`: explicit delayed provider resolution without weakening
-  normal cycle diagnostics.
+  normal cycle diagnostics. Lazy edges intentionally do not propagate request
+  scope; callers use a captured request context or explicit `resolve(...)`.
 - Module-level forward imports that mirror Nest `forwardRef(() => Module)` for
   explicit circular module relationships while preserving normal import-cycle
   diagnostics.
-- Request-scoped route/controller handler factories through `*_scoped` helpers.
+- Request-scoped route/controller handler factories through `*_scoped` helpers,
+  plus provider-backed macro controllers selected automatically for request,
+  transient, and dependency-bubbled controller graphs.
 - Middleware with request mutation, short-circuit responses, global/module/
   controller/route scopes, `MiddlewareConsumer::apply(...).for_routes(...)`
   include/exclude rules, filter integration for errors, and adapter validation
@@ -189,10 +210,11 @@ Implemented today:
   WebSocket route registration.
 - Microservice transports with adapter-neutral `TransportMessage` /
   `TransportReply`, request-response and event-only message patterns,
-  provider-backed handlers, validation helpers, transport pipes/guards/
-  interceptors, application-wide protocol guards/interceptors/pipes, local and
-  global protocol exception filters, Nest-style message macros with controller-
-  and pattern-scoped pipeline decorators, an in-process transport, and an optional
+  per-dispatch scoped handlers and message controllers, validation helpers,
+  transport pipes/guards/interceptors, application-wide protocol
+  guards/interceptors/pipes, local and global protocol exception filters,
+  Nest-style message macros with controller- and pattern-scoped pipeline
+  decorators, an in-process transport, and an optional
   TCP transport for newline-delimited JSON message frames plus an optional Redis
   Pub/Sub transport and optional NATS request/reply and event subjects plus
   optional MQTT request/reply and event topics plus optional RabbitMQ
@@ -255,7 +277,8 @@ Implemented today:
 1. Parameter extraction macros
 2. OpenAPI metadata and generator
 3. Validation pipeline (implemented)
-4. Module encapsulation, dynamic modules, and provider lifecycle scopes (implemented)
+4. Module encapsulation, dynamic modules, provider lifecycle scopes, and
+   application enhancers (implemented)
 5. Middleware (implemented)
 6. WebSocket gateways (implemented)
 7. Microservice transports (implemented)
@@ -458,8 +481,8 @@ Tasks:
 - Add a small `Validate` trait in core or a `validation` feature. (Implemented
   in core)
 - Integrate validation after DTO extraction and before handler invocation.
-  (Implemented with route validation hooks that run after guards, interceptor
-  `before` hooks, and request pipes for routes carrying validation metadata)
+  (Implemented with route validation hooks inside the around-interceptor chain,
+  after request pipes and before the handler)
 - Support explicit validation pipe composition for projects that prefer a third
   party crate such as `garde` or `validator`. (Implemented through ordinary
   `Pipe` composition plus explicit `Validate` implementations)
@@ -501,7 +524,7 @@ Acceptance:
 - Validation does not run for raw handlers unless explicitly configured.
   (Covered)
 
-## Milestone 4: Module Encapsulation, Dynamic Modules, And Provider Lifecycle Scopes
+## Milestone 4: Module Encapsulation, Dynamic Modules, Provider Scopes, And Application Enhancers
 
 Nest equivalent:
 
@@ -517,6 +540,8 @@ Nest equivalent:
 - forward-reference-style provider dependencies
 - module-level `forwardRef(() => Module)`
 - lazy module loading
+- DI-managed global enhancers through `APP_GUARD`, `APP_PIPE`,
+  `APP_INTERCEPTOR`, and `APP_FILTER`
 
 Current gap:
 
@@ -531,20 +556,50 @@ shutdown, and application shutdown hooks. Managed HTTP and microservice hosts
 can enable Nest-style shutdown hooks so OS signals close the application through
 the same signal-aware lifecycle phases.
 Request-scoped handler factories rebuild route/controller state from the current
-request's module context. Provider aliases let one token delegate to an existing
+request's module context. Macro controllers automatically use provider-backed
+routes when their own scope or an eager dependency graph is contextual.
+Singleton dependency trees automatically inherit request context without
+changing their declared cache scope. Transient dependencies are cached per
+inquirer inside a `ContextId`: one consumer reuses its transient instance, while
+different consumers or contexts remain isolated. Direct contextless transient
+lookups remain fresh per call for compatibility. `#[injectable]` emits typed,
+named, optional, and lazy dependency metadata; hand-written factories can
+declare the same graph explicitly without Boot probing factories and repeating
+their side effects. Provider aliases let one token delegate to an existing
 provider token without changing the target provider's lifecycle scope.
 Explicit module-level forward imports can model deliberate circular module
 relationships, while ordinary module import cycles still report the active
 module chain during sync and async application graph builds. Singleton provider
 factories are initialized after all module provider tokens are registered, so
 factories can depend on providers declared later in the same module.
-`LazyModuleLoader` can load provider-only module graphs on demand, reuse eagerly
-registered modules, and resolve async singleton factories through
-`load_async(...)`. `ModuleRef` can resolve providers in a fresh temporary
-request context and dynamically create unregistered `FromModuleRef` values.
+`LazyModuleLoader` can register complete provider-only module graphs on demand,
+including forward imports, reuse eagerly registered modules, and resolve async
+singleton factories through `load_async(...)`. Late global lazy modules are
+rejected before factory execution because mutating global visibility would
+invalidate already initialized singleton plans. `ModuleRef` can resolve
+providers in a fresh temporary context or reuse a caller-supplied `ContextId`,
+bind a context with `context_scope(...)`, and dynamically create unregistered
+`FromModuleRef` values. `ContextIdFactory` creates standalone contexts and
+discovers the identity attached automatically to each HTTP request.
 `ProviderRef<T>` can capture a module context and resolve a provider lazily,
 which gives Rust code an explicit forward-reference-style escape hatch while
-keeping ordinary provider cycles diagnostic.
+keeping ordinary provider cycles diagnostic. It can also resolve through a
+caller-supplied context while preserving the original inquirer. Contextual
+factories use non-owning context views so cached lazy refs cannot retain their
+own request cache. Provider construction uses panic-safe, branch-local
+resolution paths plus single-flight cache slots and cross-thread wait-cycle
+diagnostics. Provider definitions can also carry typed application-enhancer
+markers that map to Nest's `APP_GUARD`, `APP_PIPE`, `APP_INTERCEPTOR`, and
+`APP_FILTER` provider registrations. HTTP, WebSocket, and transport variants
+resolve from the declaring module against the current request or message
+`ContextId`, so private dependencies remain injectable without widening module
+exports. HTTP requests, WebSocket messages, and transport messages each receive
+an isolated context; sequential interceptor retries reuse the original context.
+Pipelines compose builder globals before provider globals, provider globals
+retain module/provider declaration order, and handler-local hooks remain last;
+exception filters keep their existing local-to-global handling direction. Lazy
+modules reject `APP_*` providers before any factory executes because existing
+application pipelines cannot be mutated after build.
 
 Tasks:
 
@@ -564,15 +619,32 @@ Tasks:
   (Implemented; root scopes and global exports are visible to the host)
 - Add provider lifecycle scopes comparable to Nest singleton, request, and
   transient providers. (Implemented)
-- Make request-scoped providers reuse one instance per request context,
+- Make request-scoped providers reuse one instance per resolution context,
   including dependencies resolved inside request-scoped provider factories.
   (Implemented)
+- Add public `ContextId` / `ContextIdFactory` APIs plus `ModuleRef` and
+  `ProviderRef<T>` context-aware resolution, including named and optional
+  variants. (Implemented)
+- Reuse transient providers per inquirer within one context while keeping
+  different consumers and contexts isolated and direct contextless transient
+  lookup fresh. (Implemented)
+- Attach one discoverable `ContextId` to each dispatched HTTP request.
+  (Implemented through `BootRequest::context_id()` and
+  `ContextIdFactory::get_by_request(...)`)
+- Propagate request context through eager singleton and transient dependency
+  graphs without rewriting their declared scope. (Implemented through
+  `ProviderDependency` metadata generated by `#[injectable]` or declared on
+  `ProviderDefinition`)
+- Reject async factories and singleton lifecycle-hook providers whose effective
+  dependency graph is contextual. (Implemented during graph finalization)
 - Add singleton provider lifecycle hooks for init, bootstrap, module destroy,
   before application shutdown, and application shutdown. (Implemented)
 - Add Nest-style shutdown hook enabling for managed HTTP and microservice
   hosts. (Implemented with `enable_shutdown_hooks(...)` and default
   `SIGINT`/`SIGTERM` support)
-- Add request-scoped route/controller handler factories. (Implemented)
+- Add request-scoped route/controller and transport message-handler factories.
+  (Implemented, with automatic provider-backed routes and message patterns for
+  contextual macro controllers)
 - Add provider aliases comparable to Nest `useExisting`. (Implemented)
 - Add lazy provider handles comparable to the useful provider side of Nest
   `forwardRef(...)`. (Implemented with `ProviderRef<T>`)
@@ -585,7 +657,25 @@ Tasks:
   dependency cycles. (Implemented)
 - Add contextual diagnostics for module import cycles. (Implemented)
 - Add order-independent singleton provider graph initialization. (Implemented)
-- Add provider-only lazy module loading with cached module refs. (Implemented)
+- Add provider-only lazy module loading with cached module refs. (Implemented
+  with full-graph forward-import planning; newly loaded globals are rejected)
+- Add typed provider-backed application enhancers corresponding to Nest
+  `APP_GUARD`, `APP_PIPE`, `APP_INTERCEPTOR`, and `APP_FILTER`, including
+  WebSocket and transport variants. (Implemented with `app_*::<T>()` and
+  `with_app_*::<T>()` provider APIs)
+- Resolve application enhancers from their declaring module with automatic
+  scope bubbling and the active HTTP request, WebSocket message, or transport
+  message `ContextId`; preserve that id across sequential interceptor retries.
+  (Implemented)
+- Preserve deterministic builder-global, provider-global, and local-hook order
+  without widening module visibility. (Implemented)
+- Reject `APP_*` providers in lazy-loaded modules before provider factories
+  execute. (Implemented)
+- Make testing pipeline overrides replace provider-backed components by their
+  original concrete type and retain original enhancer markers across provider
+  overrides. (Implemented)
+- Add custom context-id selection strategies, durable provider subtrees, and
+  request-object registration for arbitrary context ids. (Future work)
 
 Acceptance:
 
@@ -596,24 +686,69 @@ Acceptance:
 - Duplicate-provider checks respect module scope. (Covered)
 - Existing simple module examples continue to work or have a documented migration.
   (Covered; root module providers remain visible through `BootApplication::get`)
-- Transient providers are rebuilt for every resolution. (Covered)
-- Request-scoped providers are cached per request and are isolated from other
-  requests. (Covered)
+- Direct contextless transient lookups remain fresh, while repeated transient
+  injection into one inquirer is reused and different inquirers or context ids
+  receive distinct instances. (Covered)
+- Request-scoped providers are cached per context and are isolated from other
+  contexts; a caller can reuse that cache through `resolve_with_context(...)`
+  or `ModuleRef::context_scope(...)`. (Covered)
+- Singleton providers with eager request-scoped dependencies are cached once per
+  context, contextual transients follow per-inquirer reuse, and opaque factories
+  cannot capture a startup-only request instance. (Covered)
 - Singleton provider lifecycle hooks run with module lifecycle hooks, reject
   request/transient provider scopes, and receive explicit shutdown signal labels
   through signal-aware close helpers. (Covered)
 - Managed HTTP and microservice hosts can close through signal-aware lifecycle
   hooks when a configured shutdown signal wins the serve race. (Covered)
-- Request-scoped controller handlers are rebuilt for each request and share the
-  same request-scoped provider cache as `BootRequest::get(...)`. (Covered)
+- Request-scoped and dependency-bubbled controller handlers are rebuilt for
+  each request and share the same request-scoped provider cache as
+  `BootRequest::get(...)`. (Covered)
+- Request-scoped, transient, and dependency-bubbled message controllers resolve
+  once per transport dispatch, reuse the same controller and `ContextId` across
+  interceptor retries, and isolate later messages. (Covered)
 - Provider aliases resolve the same singleton instance, preserve request-scoped
   resolution, and reject alias cycles with contextual errors. (Covered)
 - `ProviderRef<T>` resolves lazily, can break an intentional singleton
   dependency cycle, supports named and optional macro injection, and preserves a
-  captured request scope. (Covered)
-- `ModuleRef::resolve(...)` creates a fresh resolution context for
-  request-scoped dependency caches, and `ModuleRef::create(...)` can instantiate
-  `FromModuleRef` values without registering them. (Covered)
+  captured request scope and inquirer; explicit context resolution reuses a
+  caller-supplied id. (Covered)
+- Context caches release providers that contain lazy refs, construction paths
+  recover after caught panics, parallel branches do not share sibling frames,
+  and concurrent single-flight waits distinguish real cycles from converging
+  dependency graphs. (Covered)
+- `ModuleRef::resolve(...)` creates a fresh resolution context,
+  `resolve_with_context(...)` and its named/optional variants reuse an explicit
+  context, and `ModuleRef::create(...)` can instantiate `FromModuleRef` values
+  with distinct synthetic inquirers without registering them. (Covered)
+- Every dispatched HTTP request exposes one distinct context identity through
+  `BootRequest::context_id()` and `ContextIdFactory::get_by_request(...)`.
+  (Covered)
+- Provider-backed HTTP application guards, pipes, interceptors, and filters
+  share the request context across direct and module routes, and application
+  filters can handle early routing errors. (Covered)
+- Provider-backed HTTP enhancers also apply to framework-provided routes, and
+  application filters can handle unmatched application routes. (Covered)
+- Provider-backed WebSocket and transport application enhancers resolve from a
+  fresh message context, share one exact context within a dispatch, and isolate
+  later messages on the same connection or pattern. (Covered)
+- Sequential HTTP, WebSocket, and transport interceptor retries reuse the
+  original request or message context. (Covered)
+- Application enhancers resolve through their declaring module, can inject its
+  private providers, retain deterministic builder/provider/local order, and do
+  not make those dependencies visible to unrelated handler modules. (Covered)
+- Typed custom and named provider definitions can retain application-enhancer
+  markers. (Covered)
+- Alias, value, and async provider definitions can retain the same markers, and
+  contextual async or lifecycle enhancer graphs are rejected before factory
+  execution. (Covered)
+- Testing pipeline overrides replace provider-backed application enhancers by
+  original concrete type, provider overrides retain the original marker slot,
+  and lazy module loading rejects `APP_*` providers before factories run.
+  (Covered)
+- Graph-level enhancer replacement uses `override_provider(...)` with the
+  original typed or named token, runs before singleton construction, suppresses
+  the original provider lifecycle, and retains its pipeline marker; pipeline
+  overrides remain type-safe component-view replacements. (Covered)
 - Transient and request-scoped provider cycles report the active token chain.
   (Covered)
 - Module import cycles report the active module chain during sync and async
@@ -624,10 +759,14 @@ Acceptance:
 - Singleton provider factories can resolve dependencies declared later in the
   same module, including sync factories that depend on async-built singletons in
   async builds. (Covered)
+- Declared async dependencies are seeded before their consumers across local,
+  imported, forward-imported, and global module edges; cycles and missing
+  dependencies fail before factory execution. (Covered)
 - Lazy module loading returns cached module refs, reuses eagerly imported
-  modules, resolves imports/exports, supports async singleton providers through
-  `load_async(...)`, and does not register controllers, routes, gateways,
-  middleware, message patterns, or lifecycle hooks. (Covered)
+  modules, resolves imports/exports/forward imports, supports async singleton
+  providers through `load_async(...)`, rejects new late globals, and does not
+  register controllers, routes, gateways, middleware, message patterns, or
+  lifecycle hooks. (Covered)
 
 ## Milestone 5: Middleware
 
@@ -639,16 +778,17 @@ Nest equivalent:
 
 Tasks:
 
-- Add middleware trait that can inspect/mutate `BootRequest` before guards,
-  interceptor `before` hooks, and pipes. (Implemented)
+- Add middleware trait that can inspect/mutate `BootRequest` before guards, the
+  around-interceptor chain, and pipes. (Implemented)
 - Allow middleware to short-circuit with `BootResponse`. (Implemented through
   `MiddlewareOutcome::Respond`)
 - Support global, module/controller, and route-scoped registration.
   (Implemented)
 - Add Nest-style `MiddlewareConsumer` with `apply`, `exclude`, `for_routes`,
   and `for_all_routes` for module-scoped route selection. (Implemented)
-- Preserve order: middleware, guards, interceptor `before` hooks, pipes,
-  validation, handler, interceptor `after` hooks, filters. (Covered)
+- Preserve order: middleware, guards, the nested around-interceptor chain,
+  pipes, validation, and the handler; legacy `after` hooks unwind in reverse,
+  and filters receive only unrecovered errors. (Covered)
 - Ensure adapter-level request validation remains before middleware.
   (Covered for Axum)
 
@@ -724,9 +864,12 @@ Acceptance:
 - Gateway and subscription guards/interceptors/pipes plus application-wide
   gateway guards/interceptors/pipes run in Nest-style deterministic order.
   (Covered)
+- Gateway interceptors can use reusable `CallHandler` access to short-circuit,
+  recover or transform errors, and retry the downstream pipeline while
+  retaining legacy `before` / `after` compatibility. (Covered)
 - Gateway exception filters can handle matching message dispatch errors and map
-  them to outbound WebSocket messages, including application-wide WebSocket
-  filters. (Covered)
+  unrecovered errors to outbound WebSocket messages, including application-wide
+  WebSocket filters. (Covered)
 - Gateways can track active connection ids, join/leave rooms, and deliver
   direct, room-scoped, or gateway-wide messages to adapter-backed connections.
   (Covered)
@@ -748,6 +891,10 @@ Tasks:
   `MessagePatternDefinition`, `Module::message_patterns`,
   `BootApplicationBuilder::message_pattern`, `#[message_controller]`,
   `#[message_pattern]`, and `#[event_pattern]`)
+- Add dispatch-scoped request/event pattern factories and automatically select
+  them for request-scoped, transient, or dependency-bubbled macro message
+  controllers. (Implemented with `request_scoped(...)`, `event_scoped(...)`,
+  and provider-backed macro patterns)
 - Add field-level payload binding comparable to Nest `@Payload("field")`.
   (Implemented with `#[payload("field")]` and
   `TransportMessage::data_field_as(...)` helpers)
@@ -767,17 +914,24 @@ Acceptance:
 - A module can register message handlers independently from HTTP routes.
   (Covered)
 - Message handlers can use providers and validation. (Covered)
+- Scoped message handlers can inject private declaring-module providers, reuse
+  one handler/controller across an interceptor retry, and receive a fresh
+  context on the next request-response or event message. (Covered)
 - Message handlers can bind individual payload fields, including optional
   fields, defaults, and parse pipes. (Covered)
 - Application-wide transport guards/interceptors/pipes run before and around
   pattern-scoped hooks in Nest-style deterministic order. (Covered)
+- Transport interceptors can use reusable `CallHandler` access to short-circuit,
+  recover or transform errors, and retry the downstream pipeline while
+  retaining legacy `before` / `after` compatibility. Event-pattern replies are
+  discarded even when an interceptor short-circuits. (Covered)
 - Tests cover request-response and event-only patterns. (Covered)
 - Handler errors preserve `BootError` HTTP exception semantics across TCP,
   Redis, NATS, MQTT, RabbitMQ, Kafka, and gRPC request-response transports.
   (Covered)
 - Transport exception filters can handle matching message dispatch errors and
-  map them to request-response replies or handled event errors, including
-  application-wide transport filters. (Covered)
+  map unrecovered errors to request-response replies or handled event errors,
+  including application-wide transport filters. (Covered)
 
 ## Milestone 8: Technique Modules
 
@@ -905,8 +1059,9 @@ Acceptance:
   through Nest-style `#[body("field")]` arguments. (Covered)
 - Testing utilities can compile Nest-style testing modules, override imported
   modules and providers before controllers are built, override HTTP,
-  WebSocket, and transport pipeline components, resolve providers, and dispatch
-  in-process requests. (Covered)
+  WebSocket, and transport pipeline components including provider-backed
+  application enhancers, resolve providers, and dispatch in-process requests.
+  (Covered)
 - Discovery and reflector utilities can snapshot modules, module graph edges,
   provider tokens, exports, HTTP route metadata, WebSocket gateways, and
   message patterns from a built application. (Covered)

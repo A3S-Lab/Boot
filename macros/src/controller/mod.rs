@@ -47,6 +47,7 @@ pub(crate) fn expand_controller(
 
     let self_ty = item_impl.self_ty.clone();
     let mut routes = Vec::new();
+    let mut provider_routes = Vec::new();
     let mut errors: Option<syn::Error> = None;
     let (impl_attrs, impl_decorator_errors) = expand_apply_decorators_attrs(&item_impl.attrs);
     for error in impl_decorator_errors {
@@ -283,9 +284,9 @@ pub(crate) fn expand_controller(
             let validation_options = route_validation.enabled_options(controller_validation);
             let validation_skipped = route_validation.skip;
             match route_registration(
-                route,
+                route.clone(),
                 method,
-                input,
+                input.clone(),
                 validation_options,
                 validation_skipped,
                 &metadata_specs,
@@ -298,8 +299,32 @@ pub(crate) fn expand_controller(
                 version_specs.as_ref(),
                 serialization_specs.as_ref(),
                 &openapi_specs,
+                ControllerRouteKind::Instance,
             ) {
-                Ok(registration) => routes.push(registration),
+                Ok(registration) => {
+                    routes.push(registration);
+                    match route_registration(
+                        route,
+                        method,
+                        input,
+                        validation_options,
+                        validation_skipped,
+                        &metadata_specs,
+                        &cache_specs,
+                        http_code.as_ref(),
+                        &response_specs,
+                        render_spec.as_ref(),
+                        &pipeline_specs,
+                        host_specs.as_ref(),
+                        version_specs.as_ref(),
+                        serialization_specs.as_ref(),
+                        &openapi_specs,
+                        ControllerRouteKind::Provider,
+                    ) {
+                        Ok(registration) => provider_routes.push(registration),
+                        Err(error) => push_error(&mut errors, error),
+                    }
+                }
                 Err(error) => push_error(&mut errors, error),
             }
         }
@@ -344,8 +369,47 @@ pub(crate) fn expand_controller(
                 )*
                 Ok(__a3s_boot_controller)
             }
+
+            pub fn provider_controller() -> ::a3s_boot::Result<::a3s_boot::ControllerDefinition>
+            where
+                Self: ::std::marker::Send + ::std::marker::Sync + 'static,
+            {
+                let mut __a3s_boot_controller =
+                    ::a3s_boot::ControllerDefinition::new(#prefix)?;
+                #(
+                    __a3s_boot_controller = __a3s_boot_controller.#controller_openapi;
+                )*
+                #(
+                    __a3s_boot_controller = __a3s_boot_controller.#controller_metadata?;
+                )*
+                #(
+                    __a3s_boot_controller = __a3s_boot_controller.#controller_cache;
+                )*
+                #(
+                    __a3s_boot_controller = __a3s_boot_controller.#controller_pipeline;
+                )*
+                #(
+                    __a3s_boot_controller = __a3s_boot_controller.#controller_host?;
+                )*
+                #(
+                    __a3s_boot_controller = __a3s_boot_controller.#controller_version;
+                )*
+                #(
+                    __a3s_boot_controller = __a3s_boot_controller.#controller_serialization;
+                )*
+                #(
+                    __a3s_boot_controller = #provider_routes;
+                )*
+                Ok(__a3s_boot_controller)
+            }
         }
     })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ControllerRouteKind {
+    Instance,
+    Provider,
 }
 
 fn take_route_attrs(attrs: &[Attribute]) -> (Vec<Attribute>, Vec<RouteSpec>, Vec<syn::Error>) {
@@ -386,6 +450,7 @@ fn route_registration(
     version_spec: Option<&VersionSpec>,
     serialization_spec: Option<&SerializationSpec>,
     openapi_specs: &[RouteOpenApiSpec],
+    controller_route_kind: ControllerRouteKind,
 ) -> Result<proc_macro2::TokenStream> {
     if method.sig.asyncness.is_none() {
         return Err(syn::Error::new_spanned(
@@ -395,6 +460,10 @@ fn route_registration(
     }
 
     let method_ident = &method.sig.ident;
+    let receiver = match controller_route_kind {
+        ControllerRouteKind::Instance => quote! { &self },
+        ControllerRouteKind::Provider => quote! { &__a3s_boot_provider_controller },
+    };
     let explicit_status = route.args.explicit_status(http_code)?;
     let status = status_value(explicit_status)?;
     let path = route.args.path.clone();
@@ -435,7 +504,8 @@ fn route_registration(
     let route_definition = if let Some(render_spec) = render_spec {
         let builder = route.kind.raw_builder_ident();
         let view = &render_spec.view;
-        let handler = rendered_view_handler(method_ident, input.clone(), view, status.clone())?;
+        let handler =
+            rendered_view_handler(method_ident, input.clone(), view, status.clone(), &receiver)?;
         quote! {
             ::a3s_boot::RouteDefinition::#builder(#path, #handler)?
                 .with_response(#status, ::a3s_boot::OpenApiResponse::description("Success"))
@@ -457,9 +527,9 @@ fn route_registration(
                     ));
                 }
                 let handler = if input.has_extractors() {
-                    extracted_sse_handler(method_ident, input)?
+                    extracted_sse_handler(method_ident, input, &receiver)?
                 } else {
-                    raw_or_json_request_handler(method_ident, input)?
+                    raw_or_json_request_handler(method_ident, input, &receiver)?
                 };
                 quote! {
                     ::a3s_boot::RouteDefinition::sse(#path, #handler)?
@@ -474,9 +544,9 @@ fn route_registration(
                 }
                 let builder = route.kind.raw_builder_ident();
                 let handler = if input.has_extractors() {
-                    extracted_raw_handler(method_ident, input)?
+                    extracted_raw_handler(method_ident, input, &receiver)?
                 } else {
-                    raw_or_json_request_handler(method_ident, input)?
+                    raw_or_json_request_handler(method_ident, input, &receiver)?
                 };
                 quote! {
                     ::a3s_boot::RouteDefinition::#builder(#path, #handler)?
@@ -485,8 +555,12 @@ fn route_registration(
             RouteFlavor::JsonRequest => {
                 if input.has_extractors() {
                     let builder = route.kind.raw_builder_ident();
-                    let handler =
-                        extracted_json_response_handler(method_ident, input, status.clone())?;
+                    let handler = extracted_json_response_handler(
+                        method_ident,
+                        input,
+                        status.clone(),
+                        &receiver,
+                    )?;
                     json_success_status = Some(status.clone());
                     quote! {
                         ::a3s_boot::RouteDefinition::#builder(#path, #handler)?
@@ -498,7 +572,7 @@ fn route_registration(
                             "this HTTP method does not support JSON route inference",
                         )
                     })?;
-                    let handler = raw_or_json_request_handler(method_ident, input)?;
+                    let handler = raw_or_json_request_handler(method_ident, input, &receiver)?;
                     quote! {
                         ::a3s_boot::RouteDefinition::#builder(#path, #status, #handler)?
                     }
@@ -507,8 +581,12 @@ fn route_registration(
             RouteFlavor::JsonBody => {
                 if input.has_extractors() {
                     let builder = route.kind.raw_builder_ident();
-                    let handler =
-                        extracted_json_response_handler(method_ident, input, status.clone())?;
+                    let handler = extracted_json_response_handler(
+                        method_ident,
+                        input,
+                        status.clone(),
+                        &receiver,
+                    )?;
                     json_success_status = Some(status.clone());
                     quote! {
                         ::a3s_boot::RouteDefinition::#builder(#path, #handler)?
@@ -526,7 +604,7 @@ fn route_registration(
                             "this HTTP method does not support JSON route inference",
                         )
                     })?;
-                    let handler = json_body_handler(method_ident, input);
+                    let handler = json_body_handler(method_ident, input, &receiver);
                     quote! {
                         ::a3s_boot::RouteDefinition::#builder(#path, #status, #handler)?
                     }
@@ -534,6 +612,38 @@ fn route_registration(
             }
         }
     };
+
+    let mut route_definition = route_definition;
+    if controller_route_kind == ControllerRouteKind::Provider {
+        let method = route.kind.http_method_ident();
+        let provider_route = route_definition;
+        route_definition = quote! {
+            ::a3s_boot::RouteDefinition::new_provider::<Self, _>(
+                ::a3s_boot::HttpMethod::#method,
+                #path,
+                move |__a3s_boot_provider_controller: ::std::sync::Arc<Self>| {
+                    let __a3s_boot_provider_route = #provider_route;
+                    Ok(__a3s_boot_provider_route)
+                },
+            )?
+        };
+
+        if let Some(render_spec) = render_spec {
+            let view = &render_spec.view;
+            route_definition = quote! {
+                (#route_definition)
+                    .with_response(
+                        #status,
+                        ::a3s_boot::OpenApiResponse::description("Success")
+                    )
+                    .with_metadata("render:view", #view)?
+            };
+        } else if matches!(flavor, RouteFlavor::JsonRequest | RouteFlavor::JsonBody)
+            && !metadata_input.has_extractors()
+        {
+            json_success_status = Some(status.clone());
+        }
+    }
 
     let route_definition = validation_route_definition(
         route_definition,

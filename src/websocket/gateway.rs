@@ -11,13 +11,13 @@ use super::pipeline::{
 };
 use super::server::WebSocketGatewayServer;
 use super::state::{normalize_namespace, normalize_room, WebSocketGatewayState};
-use crate::pipeline::{PipelineComponent, PipelineOverrides};
+use crate::pipeline::{PipelineComponent, PipelineOverrides, ProviderEnhancerComponents};
 use crate::routing::path::{
     join_paths, match_path_params, match_path_shape, route_shape_key, validate_route_path,
 };
 use crate::{
     catch_errors, BootError, BootErrorKind, BootRequest, ExecutionInterceptor, Guard, HttpMethod,
-    Result, ValidationOptions, WebSocketExceptionFilter,
+    ModuleRef, Result, ValidationOptions, WebSocketExceptionFilter,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -41,6 +41,7 @@ pub struct WebSocketGatewayDefinition {
     pub(crate) filters: Vec<PipelineComponent<dyn WebSocketExceptionFilter>>,
     pub(crate) metadata: BTreeMap<String, Value>,
     pub(crate) module_name: Option<String>,
+    pub(crate) module_ref: Option<ModuleRef>,
     pub(crate) state: Arc<WebSocketGatewayState>,
 }
 
@@ -61,6 +62,7 @@ impl WebSocketGatewayDefinition {
             filters: Vec::new(),
             metadata: BTreeMap::new(),
             module_name: None,
+            module_ref: None,
             state: Arc::new(WebSocketGatewayState::default()),
         })
     }
@@ -418,6 +420,28 @@ impl WebSocketGatewayDefinition {
         self
     }
 
+    pub(crate) fn with_provider_enhancer_prefix(
+        mut self,
+        enhancers: &ProviderEnhancerComponents,
+    ) -> Self {
+        let mut pipes = enhancers.websocket_pipes.clone();
+        pipes.extend(self.pipes);
+        self.pipes = pipes;
+
+        let mut guards = enhancers.websocket_guards.clone();
+        guards.extend(self.guards);
+        self.guards = guards;
+
+        let mut interceptors = enhancers.websocket_interceptors.clone();
+        interceptors.extend(self.interceptors);
+        self.interceptors = interceptors;
+
+        let mut filters = enhancers.websocket_filters.clone();
+        filters.extend(self.filters);
+        self.filters = filters;
+        self
+    }
+
     pub(crate) fn with_validation_prefix(
         mut self,
         validation_enabled: bool,
@@ -561,6 +585,18 @@ impl WebSocketGatewayDefinition {
 
     pub(crate) fn with_module_name(mut self, module_name: &str) -> Self {
         self.module_name = Some(module_name.to_string());
+        self
+    }
+
+    pub(crate) fn with_module_ref(mut self, module_ref: ModuleRef) -> Self {
+        self.module_ref = Some(module_ref);
+        self
+    }
+
+    pub(crate) fn with_default_module_ref(mut self, module_ref: ModuleRef) -> Self {
+        if self.module_ref.is_none() {
+            self.module_ref = Some(module_ref);
+        }
         self
     }
 }

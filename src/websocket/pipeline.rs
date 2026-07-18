@@ -1,7 +1,7 @@
 use super::context::WebSocketContext;
 use super::message::WebSocketMessage;
 use crate::pipeline::PipelineComponent;
-use crate::{BoxFuture, ExecutionInterceptor, Guard, Result};
+use crate::{BoxFuture, CallHandler, ExecutionInterceptor, Guard, Result};
 use std::future::Future;
 use std::sync::Arc;
 
@@ -50,6 +50,23 @@ where
 
 /// Around-handler hook for WebSocket gateway messages.
 pub trait WebSocketInterceptor: Send + Sync + 'static {
+    /// Run around the remaining WebSocket pipeline.
+    ///
+    /// Override this method to recover downstream errors, retry the handler,
+    /// or return a reply without calling `next`. The default implementation
+    /// preserves the legacy `before` and `after` hook behavior.
+    fn intercept<'a>(
+        &'a self,
+        context: WebSocketContext,
+        next: CallHandler<'a, Option<WebSocketMessage>>,
+    ) -> BoxFuture<'a, Result<Option<WebSocketMessage>>> {
+        Box::pin(async move {
+            self.before(context.clone()).await?;
+            let reply = next.handle().await?;
+            self.after(context, reply).await
+        })
+    }
+
     fn before(&self, _context: WebSocketContext) -> BoxFuture<'static, Result<()>> {
         Box::pin(async { Ok(()) })
     }

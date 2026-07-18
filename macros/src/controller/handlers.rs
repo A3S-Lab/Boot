@@ -8,12 +8,13 @@ use syn::{Ident, LitStr, Result};
 pub(super) fn raw_or_json_request_handler(
     method_ident: &Ident,
     input: RouteMethodInput,
+    receiver: &proc_macro2::TokenStream,
 ) -> Result<proc_macro2::TokenStream> {
     let controller_name = format_ident!("__a3s_boot_{}", method_ident);
     Ok(match input.into_legacy_arg()? {
         Some(MethodArg { ident, ty, .. }) => quote! {
             {
-                let #controller_name = ::std::sync::Arc::clone(&self);
+                let #controller_name = ::std::sync::Arc::clone(#receiver);
                 move |#ident: #ty| {
                     let #controller_name = ::std::sync::Arc::clone(&#controller_name);
                     async move { #controller_name.#method_ident(#ident).await }
@@ -22,7 +23,7 @@ pub(super) fn raw_or_json_request_handler(
         },
         None => quote! {
             {
-                let #controller_name = ::std::sync::Arc::clone(&self);
+                let #controller_name = ::std::sync::Arc::clone(#receiver);
                 move |_request: ::a3s_boot::BootRequest| {
                     let #controller_name = ::std::sync::Arc::clone(&#controller_name);
                     async move { #controller_name.#method_ident().await }
@@ -35,12 +36,13 @@ pub(super) fn raw_or_json_request_handler(
 pub(super) fn json_body_handler(
     method_ident: &Ident,
     input: MethodArg,
+    receiver: &proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
     let controller_name = format_ident!("__a3s_boot_{}", method_ident);
     let MethodArg { ident, ty, .. } = input;
     quote! {
         {
-            let #controller_name = ::std::sync::Arc::clone(&self);
+            let #controller_name = ::std::sync::Arc::clone(#receiver);
             move |#ident: #ty| {
                 let #controller_name = ::std::sync::Arc::clone(&#controller_name);
                 async move { #controller_name.#method_ident(#ident).await }
@@ -52,6 +54,7 @@ pub(super) fn json_body_handler(
 pub(super) fn extracted_raw_handler(
     method_ident: &Ident,
     input: RouteMethodInput,
+    receiver: &proc_macro2::TokenStream,
 ) -> Result<proc_macro2::TokenStream> {
     let controller_name = format_ident!("__a3s_boot_{}", method_ident);
     let ExtractedArguments {
@@ -64,7 +67,7 @@ pub(super) fn extracted_raw_handler(
 
     Ok(quote! {
         {
-            let #controller_name = ::std::sync::Arc::clone(&self);
+            let #controller_name = ::std::sync::Arc::clone(#receiver);
             move |__a3s_boot_request: ::a3s_boot::BootRequest| {
                 let #controller_name = ::std::sync::Arc::clone(&#controller_name);
                 async move {
@@ -83,6 +86,7 @@ pub(super) fn extracted_json_response_handler(
     method_ident: &Ident,
     input: RouteMethodInput,
     status: proc_macro2::TokenStream,
+    receiver: &proc_macro2::TokenStream,
 ) -> Result<proc_macro2::TokenStream> {
     let controller_name = format_ident!("__a3s_boot_{}", method_ident);
     let ExtractedArguments {
@@ -95,7 +99,7 @@ pub(super) fn extracted_json_response_handler(
 
     Ok(quote! {
         {
-            let #controller_name = ::std::sync::Arc::clone(&self);
+            let #controller_name = ::std::sync::Arc::clone(#receiver);
             move |__a3s_boot_request: ::a3s_boot::BootRequest| {
                 let #controller_name = ::std::sync::Arc::clone(&#controller_name);
                 async move {
@@ -117,6 +121,7 @@ pub(super) fn rendered_view_handler(
     input: RouteMethodInput,
     view: &LitStr,
     status: proc_macro2::TokenStream,
+    receiver: &proc_macro2::TokenStream,
 ) -> Result<proc_macro2::TokenStream> {
     let controller_name = format_ident!("__a3s_boot_{}", method_ident);
 
@@ -130,7 +135,7 @@ pub(super) fn rendered_view_handler(
         let apply_response = response_passthrough_apply(response_passthrough);
         return Ok(quote! {
             {
-                let #controller_name = ::std::sync::Arc::clone(&self);
+                let #controller_name = ::std::sync::Arc::clone(#receiver);
                 move |__a3s_boot_request: ::a3s_boot::BootRequest| {
                     let #controller_name = ::std::sync::Arc::clone(&#controller_name);
                     async move {
@@ -153,7 +158,7 @@ pub(super) fn rendered_view_handler(
     Ok(match input.into_legacy_arg()? {
         Some(MethodArg { ident, ty, .. }) => quote! {
             {
-                let #controller_name = ::std::sync::Arc::clone(&self);
+                let #controller_name = ::std::sync::Arc::clone(#receiver);
                 move |__a3s_boot_request: ::a3s_boot::BootRequest| {
                     let #controller_name = ::std::sync::Arc::clone(&#controller_name);
                     async move {
@@ -170,7 +175,7 @@ pub(super) fn rendered_view_handler(
         },
         None => quote! {
             {
-                let #controller_name = ::std::sync::Arc::clone(&self);
+                let #controller_name = ::std::sync::Arc::clone(#receiver);
                 move |__a3s_boot_request: ::a3s_boot::BootRequest| {
                     let #controller_name = ::std::sync::Arc::clone(&#controller_name);
                     async move {
@@ -190,6 +195,7 @@ pub(super) fn rendered_view_handler(
 pub(super) fn extracted_sse_handler(
     method_ident: &Ident,
     input: RouteMethodInput,
+    receiver: &proc_macro2::TokenStream,
 ) -> Result<proc_macro2::TokenStream> {
     let controller_name = format_ident!("__a3s_boot_{}", method_ident);
     let ExtractedArguments {
@@ -207,7 +213,7 @@ pub(super) fn extracted_sse_handler(
 
     Ok(quote! {
         {
-            let #controller_name = ::std::sync::Arc::clone(&self);
+            let #controller_name = ::std::sync::Arc::clone(#receiver);
             move |__a3s_boot_request: ::a3s_boot::BootRequest| {
                 let #controller_name = ::std::sync::Arc::clone(&#controller_name);
                 async move {

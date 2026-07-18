@@ -2,18 +2,20 @@
 
 use std::collections::BTreeMap;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use a3s_boot::{
     controller, injectable, ApiVersioning, BootApplication, BootError, BootErrorKind, BootRequest,
-    BootResponse, BoxFuture, ControllerDefinition, ExceptionFilter, ExecutionContext, Guard,
-    Interceptor, Module, ModuleRef, OpenApiInfo, ParseArrayPipe, ParseBoolPipe, ParseEnumPipe,
-    ParseFloatPipe, ParseIntPipe, ParseUuidPipe, Pipe, ProviderDefinition, ProviderRef,
-    ProviderToken, Result, SseEvent, SseStream, StringTemplateViewEngine, TransportContext,
-    TransportExceptionFilter, TransportExceptionResponse, TransportMessage, TransportReply,
-    UuidVersion, Validate, ViewModule, WebSocketContext, WebSocketExceptionFilter,
-    WebSocketExceptionResponse, WebSocketGatewayConnection, WebSocketGatewayInitContext,
-    WebSocketGatewayServer, WebSocketMessage,
+    BootResponse, BoxFuture, CallHandler, ControllerDefinition, ExceptionFilter, ExecutionContext,
+    FromModuleRef, Guard, Interceptor, Module, ModuleRef, OpenApiInfo, ParseArrayPipe,
+    ParseBoolPipe, ParseEnumPipe, ParseFloatPipe, ParseIntPipe, ParseUuidPipe, Pipe,
+    ProviderDefinition, ProviderRef, ProviderScope, ProviderToken, Result, SseEvent, SseStream,
+    StringTemplateViewEngine, TransportContext, TransportExceptionFilter,
+    TransportExceptionResponse, TransportMessage, TransportReply, UuidVersion, Validate,
+    ViewModule, WebSocketContext, WebSocketExceptionFilter, WebSocketExceptionResponse,
+    WebSocketGatewayConnection, WebSocketGatewayInitContext, WebSocketGatewayServer,
+    WebSocketMessage,
 };
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -720,6 +722,26 @@ struct MacroCatDetailsDto {
 #[derive(Debug)]
 struct MacroCatsModule;
 
+#[a3s_boot::module(
+    name = "macro-provider-flavors",
+    imports = [
+        ViewModule::new(
+            "macro-provider-views",
+            StringTemplateViewEngine::new()
+                .with_template("cats/card", "<article>{{ id }}:{{ name }}</article>"),
+        )
+    ],
+    providers = [
+        MacroCatsService,
+        MacroCatsService.into_named_provider("readonly-cats"),
+        MacroAutoCatsReader,
+        MacroCatsController::request_scoped_provider(),
+    ],
+    controllers = [MacroCatsController],
+)]
+#[derive(Debug)]
+struct MacroProviderFlavorModule;
+
 #[derive(Debug)]
 struct MacroHiddenOpenApiController;
 
@@ -748,6 +770,7 @@ impl Module for MacroHiddenOpenApiModule {
     }
 }
 
+#[injectable]
 #[derive(Debug)]
 struct MacroValidationController;
 
@@ -832,23 +855,7 @@ fn macro_default_kind() -> String {
     "cat".to_string()
 }
 
-#[derive(Debug)]
-struct MacroValidationModule;
-
-impl Module for MacroValidationModule {
-    fn name(&self) -> &'static str {
-        "macro-validation"
-    }
-
-    fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
-        Ok(vec![
-            Arc::new(MacroValidationController).controller()?,
-            Arc::new(MacroRouteValidationController).controller()?,
-            Arc::new(MacroWhitelistValidationController).controller()?,
-        ])
-    }
-}
-
+#[injectable]
 #[derive(Debug)]
 struct MacroRouteValidationController;
 
@@ -864,6 +871,7 @@ impl MacroRouteValidationController {
     }
 }
 
+#[injectable]
 #[derive(Debug)]
 struct MacroWhitelistValidationController;
 
@@ -898,6 +906,22 @@ impl MacroWhitelistValidationController {
         request.json::<serde_json::Value>()
     }
 }
+
+#[a3s_boot::module(
+    name = "macro-validation",
+    providers = [
+        MacroValidationController::request_scoped_provider(),
+        MacroRouteValidationController::request_scoped_provider(),
+        MacroWhitelistValidationController::request_scoped_provider(),
+    ],
+    controllers = [
+        MacroValidationController,
+        MacroRouteValidationController,
+        MacroWhitelistValidationController,
+    ],
+)]
+#[derive(Debug)]
+struct MacroValidationModule;
 
 struct MacroControllerHeaderInterceptor;
 
@@ -1041,7 +1065,7 @@ impl MacroPipelineController {
 
 #[a3s_boot::module(
     name = "macro-pipeline",
-    providers = [MacroPipelineController],
+    providers = [MacroPipelineController::request_scoped_provider()],
     controllers = [MacroPipelineController],
 )]
 #[derive(Debug)]
@@ -1229,6 +1253,504 @@ struct MacroForwardRootModule;
 #[derive(Debug)]
 struct MacroForwardFeatureModule;
 
+static MACRO_BUBBLED_STATE_CALLS: AtomicUsize = AtomicUsize::new(0);
+static MACRO_REQUEST_STATE_CALLS: AtomicUsize = AtomicUsize::new(0);
+static MACRO_RETRY_CONTROLLER_CALLS: AtomicUsize = AtomicUsize::new(0);
+static MACRO_RETRY_CONTROLLER_ATTEMPTS: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+
+#[derive(Debug)]
+struct MacroBubbledState {
+    id: usize,
+}
+
+#[injectable]
+#[derive(Debug)]
+struct MacroBubbledController {
+    first: Arc<MacroBubbledState>,
+    second: Arc<MacroBubbledState>,
+}
+
+#[controller("/macro-bubbled-controller")]
+#[a3s_boot::metadata("controller-scope", "bubbled")]
+#[a3s_boot::use_interceptor(MacroControllerHeaderInterceptor)]
+impl MacroBubbledController {
+    #[a3s_boot::get("/", raw)]
+    #[a3s_boot::metadata("route-scope", "bubbled")]
+    async fn current(&self) -> Result<BootResponse> {
+        Ok(BootResponse::text(format!(
+            "{}:{}:{}",
+            self.first.id,
+            self.second.id,
+            Arc::ptr_eq(&self.first, &self.second),
+        )))
+    }
+}
+
+#[derive(Debug)]
+struct MacroRequestState {
+    id: usize,
+}
+
+#[injectable]
+#[derive(Debug)]
+struct MacroRequestController {
+    state: Arc<MacroRequestState>,
+}
+
+#[controller("/macro-request-controller")]
+impl MacroRequestController {
+    #[a3s_boot::get("/", raw)]
+    async fn current(&self) -> Result<BootResponse> {
+        Ok(BootResponse::text(self.state.id.to_string()))
+    }
+}
+
+#[derive(Debug)]
+struct MacroRetryRequestController {
+    id: usize,
+    attempts: AtomicUsize,
+}
+
+impl FromModuleRef for MacroRetryRequestController {
+    fn from_module_ref(_module_ref: &ModuleRef) -> Result<Self> {
+        Ok(Self {
+            id: MACRO_RETRY_CONTROLLER_CALLS.fetch_add(1, Ordering::SeqCst) + 1,
+            attempts: AtomicUsize::new(0),
+        })
+    }
+
+    fn provider_dependencies() -> Option<Vec<a3s_boot::ProviderDependency>> {
+        Some(Vec::new())
+    }
+}
+
+struct MacroRetryOnceInterceptor;
+
+impl Interceptor for MacroRetryOnceInterceptor {
+    fn intercept<'a>(
+        &'a self,
+        _context: ExecutionContext,
+        next: CallHandler<'a>,
+    ) -> BoxFuture<'a, Result<BootResponse>> {
+        Box::pin(async move {
+            match next.handle().await {
+                Ok(response) => Ok(response),
+                Err(_) => next.handle().await,
+            }
+        })
+    }
+}
+
+#[controller("/macro-retry-request-controller")]
+#[a3s_boot::use_interceptor(MacroRetryOnceInterceptor)]
+impl MacroRetryRequestController {
+    #[a3s_boot::get("/", raw)]
+    async fn current(&self) -> Result<BootResponse> {
+        MACRO_RETRY_CONTROLLER_ATTEMPTS
+            .lock()
+            .unwrap()
+            .push(self.id);
+        if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Err(BootError::Internal("retry controller".to_string()));
+        }
+
+        Ok(BootResponse::text(self.id.to_string()))
+    }
+}
+
+#[a3s_boot::module(
+    name = "macro-provider-controllers",
+    providers = [
+        ProviderDefinition::request_scoped::<MacroBubbledState, _>(|_| {
+            Ok(MacroBubbledState {
+                id: MACRO_BUBBLED_STATE_CALLS.fetch_add(1, Ordering::SeqCst) + 1,
+            })
+        }),
+        ProviderDefinition::request_scoped::<MacroRequestState, _>(|_| {
+            Ok(MacroRequestState {
+                id: MACRO_REQUEST_STATE_CALLS.fetch_add(1, Ordering::SeqCst) + 1,
+            })
+        }),
+        MacroBubbledController,
+        MacroRequestController::request_scoped_provider(),
+        ProviderDefinition::request_scoped_injectable::<MacroRetryRequestController>(),
+    ],
+    controllers = [
+        MacroBubbledController,
+        MacroRequestController,
+        MacroRetryRequestController,
+    ],
+)]
+#[derive(Debug)]
+struct MacroProviderControllerModule;
+
+#[test]
+fn injectable_macros_describe_provider_dependencies() {
+    let unit = MacroCatsService::provider();
+    assert_eq!(unit.dependencies(), Some(&[][..]));
+
+    let reader = MacroAutoCatsReader::provider();
+    let dependencies = reader.dependencies().unwrap();
+    let actual = dependencies
+        .iter()
+        .map(|dependency| {
+            (
+                dependency.token().clone(),
+                dependency.is_optional(),
+                dependency.is_lazy(),
+            )
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        actual,
+        vec![
+            (ProviderToken::of::<MacroCatsService>(), false, false),
+            (ProviderToken::named("readonly-cats"), false, false),
+            (ProviderToken::of::<MacroMissingCatsService>(), true, false,),
+            (ProviderToken::named("missing-cats"), true, false),
+            (ProviderToken::of::<MacroCatsService>(), false, true),
+            (ProviderToken::named("readonly-cats"), false, true),
+            (ProviderToken::of::<MacroMissingCatsService>(), true, true,),
+        ]
+    );
+
+    let named = MacroAutoCatsReader::named_provider("reader");
+    assert_eq!(named.dependencies(), reader.dependencies());
+}
+
+#[tokio::test]
+async fn module_macros_use_provider_backed_contextual_controllers() {
+    MACRO_BUBBLED_STATE_CALLS.store(0, Ordering::SeqCst);
+    MACRO_REQUEST_STATE_CALLS.store(0, Ordering::SeqCst);
+    let app = BootApplication::builder()
+        .import(MacroProviderControllerModule)
+        .build()
+        .unwrap();
+
+    assert!(app
+        .module_ref()
+        .provider_is_contextual::<MacroBubbledController>()
+        .unwrap());
+    assert_eq!(
+        app.module_ref()
+            .provider_scope::<MacroBubbledController>()
+            .unwrap(),
+        ProviderScope::Singleton,
+    );
+    assert_eq!(
+        app.module_ref()
+            .provider_scope::<MacroRequestController>()
+            .unwrap(),
+        ProviderScope::Request,
+    );
+    let first_bubbled = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-bubbled-controller",
+        ))
+        .await
+        .unwrap();
+    let second_bubbled = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-bubbled-controller",
+        ))
+        .await
+        .unwrap();
+    let first_request = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-request-controller",
+        ))
+        .await
+        .unwrap();
+    let second_request = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-request-controller",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(first_bubbled.body_text().unwrap(), "1:1:true");
+    assert_eq!(first_bubbled.header("x-macro-controller"), Some("yes"));
+    assert_eq!(second_bubbled.body_text().unwrap(), "2:2:true");
+    assert_eq!(first_request.body_text().unwrap(), "1");
+    assert_eq!(second_request.body_text().unwrap(), "2");
+    assert_eq!(MACRO_BUBBLED_STATE_CALLS.load(Ordering::SeqCst), 2);
+    assert_eq!(MACRO_REQUEST_STATE_CALLS.load(Ordering::SeqCst), 2);
+
+    let first_scope = app.module_ref().request_scope();
+    let first_bubbled_controller = first_scope.get::<MacroBubbledController>().unwrap();
+    let repeated_bubbled_controller = first_scope.get::<MacroBubbledController>().unwrap();
+    let first_request_controller = first_scope.get::<MacroRequestController>().unwrap();
+    let repeated_request_controller = first_scope.get::<MacroRequestController>().unwrap();
+    assert!(Arc::ptr_eq(
+        &first_bubbled_controller,
+        &repeated_bubbled_controller,
+    ));
+    assert!(Arc::ptr_eq(
+        &first_request_controller,
+        &repeated_request_controller,
+    ));
+
+    let second_scope = app.module_ref().request_scope();
+    let second_bubbled_controller = second_scope.get::<MacroBubbledController>().unwrap();
+    let second_request_controller = second_scope.get::<MacroRequestController>().unwrap();
+    assert!(!Arc::ptr_eq(
+        &first_bubbled_controller,
+        &second_bubbled_controller,
+    ));
+    assert!(!Arc::ptr_eq(
+        &first_request_controller,
+        &second_request_controller,
+    ));
+
+    assert_eq!(
+        app.reflector().unwrap().metadata_value(
+            a3s_boot::HttpMethod::Get,
+            "/macro-bubbled-controller",
+            "controller-scope",
+        ),
+        Some(&json!("bubbled")),
+    );
+    assert_eq!(
+        app.reflector().unwrap().metadata_value(
+            a3s_boot::HttpMethod::Get,
+            "/macro-bubbled-controller",
+            "route-scope",
+        ),
+        Some(&json!("bubbled")),
+    );
+}
+
+#[tokio::test]
+async fn interceptor_retry_reuses_the_request_scoped_controller_instance() {
+    MACRO_RETRY_CONTROLLER_CALLS.store(0, Ordering::SeqCst);
+    MACRO_RETRY_CONTROLLER_ATTEMPTS.lock().unwrap().clear();
+    let app = BootApplication::builder()
+        .import(MacroProviderControllerModule)
+        .build()
+        .unwrap();
+
+    assert_eq!(
+        app.module_ref()
+            .provider_scope::<MacroRetryRequestController>()
+            .unwrap(),
+        ProviderScope::Request,
+    );
+
+    let first = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-retry-request-controller",
+        ))
+        .await
+        .unwrap();
+    let second = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-retry-request-controller",
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(first.body_text().unwrap(), "1");
+    assert_eq!(second.body_text().unwrap(), "2");
+    assert_eq!(MACRO_RETRY_CONTROLLER_CALLS.load(Ordering::SeqCst), 2);
+    assert_eq!(
+        *MACRO_RETRY_CONTROLLER_ATTEMPTS.lock().unwrap(),
+        [1, 1, 2, 2],
+    );
+}
+
+#[tokio::test]
+async fn provider_backed_controllers_support_all_http_handler_flavors() {
+    let app = BootApplication::builder()
+        .import(MacroProviderFlavorModule)
+        .build()
+        .unwrap();
+
+    let raw = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-cats/raw-id",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(raw.body_text().unwrap(), "raw-id:Milo");
+
+    let json_response = app
+        .call(
+            BootRequest::new(a3s_boot::HttpMethod::Get, "/macro-cats/json-id/json")
+                .with_header("accept", "application/json"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        json_response.body_json::<MacroCatDto>().unwrap(),
+        MacroCatDto {
+            id: "json-id".to_string(),
+            name: "Milo".to_string(),
+        },
+    );
+
+    let json_body = BootRequest::new(a3s_boot::HttpMethod::Post, "/macro-cats")
+        .with_json(&MacroCreateCatDto {
+            name: "Nori".to_string(),
+        })
+        .unwrap();
+    let created = app.call(json_body).await.unwrap();
+    assert_eq!(created.status(), 201);
+    assert_eq!(
+        created.body_json::<MacroCatDto>().unwrap(),
+        MacroCatDto {
+            id: "generated".to_string(),
+            name: "Nori".to_string(),
+        },
+    );
+
+    let extracted = app
+        .call(
+            BootRequest::new(
+                a3s_boot::HttpMethod::Get,
+                "/macro-cats/pipe/cat_extracted?page=3",
+            )
+            .with_header("x-cat-kind", "  TABBY  "),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        extracted.body_json::<MacroCatDto>().unwrap(),
+        MacroCatDto {
+            id: "cat_extracted".to_string(),
+            name: "TABBY:3".to_string(),
+        },
+    );
+
+    let extracted_raw = app
+        .call(
+            BootRequest::new(
+                a3s_boot::HttpMethod::Get,
+                "/macro-cats/extracted-raw/raw-details",
+            )
+            .with_header("x-request-id", "provider-request")
+            .with_header("user-agent", "provider-controller-test"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        extracted_raw.body_text().unwrap(),
+        "extracted-raw:provider-request:provider-controller-test:/macro-cats/extracted-raw/raw-details",
+    );
+
+    let extracted_body =
+        BootRequest::new(a3s_boot::HttpMethod::Post, "/macro-cats/adopted/adoptions")
+            .with_json(&MacroCreateCatDto {
+                name: "Nori".to_string(),
+            })
+            .unwrap();
+    let adopted = app.call(extracted_body).await.unwrap();
+    assert_eq!(adopted.status(), 201);
+    assert_eq!(
+        adopted.body_json::<MacroCatDto>().unwrap(),
+        MacroCatDto {
+            id: "adopted".to_string(),
+            name: "Nori".to_string(),
+        },
+    );
+
+    let catch_all = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Patch,
+            "/macro-cats/catch",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        catch_all.body_json::<MacroCatDto>().unwrap(),
+        MacroCatDto {
+            id: "PATCH".to_string(),
+            name: "Catch".to_string(),
+        },
+    );
+
+    let rendered = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-cats/rendered/card",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        rendered.body_text().unwrap(),
+        "<article>rendered:Milo</article>",
+    );
+
+    let cached = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-cats/cache",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(cached.header("cache-control"), Some("max-age=60"));
+
+    let redirected = app
+        .call(BootRequest::new(
+            a3s_boot::HttpMethod::Get,
+            "/macro-cats/legacy",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(redirected.status(), 301);
+    assert_eq!(redirected.location(), Some("/macro-cats/42"));
+
+    let events = app
+        .call(
+            BootRequest::new(a3s_boot::HttpMethod::Get, "/macro-cats/events")
+                .with_header("accept", "text/event-stream"),
+        )
+        .await
+        .unwrap();
+    let mut stream = events.into_sse_stream().unwrap();
+    assert_eq!(
+        String::from_utf8(stream.next().await.unwrap().unwrap().encode()).unwrap(),
+        "event: cat.found\ndata: Milo\n\n",
+    );
+    assert!(stream.next().await.is_none());
+
+    let extracted_events = app
+        .call(
+            BootRequest::new(a3s_boot::HttpMethod::Get, "/macro-cats/provider-sse/events")
+                .with_header("accept", "text/event-stream"),
+        )
+        .await
+        .unwrap();
+    let mut extracted_stream = extracted_events.into_sse_stream().unwrap();
+    assert_eq!(
+        String::from_utf8(extracted_stream.next().await.unwrap().unwrap().encode(),).unwrap(),
+        "event: cat.selected\ndata: provider-sse\n\n",
+    );
+    assert!(extracted_stream.next().await.is_none());
+
+    assert_eq!(
+        app.reflector().unwrap().metadata_value(
+            a3s_boot::HttpMethod::Get,
+            "/macro-cats/{id}/details",
+            "roles",
+        ),
+        Some(&json!(["admin"])),
+    );
+    let document =
+        serde_json::to_value(app.openapi(OpenApiInfo::new("Provider", "1.0.0"))).unwrap();
+    assert_eq!(
+        document["paths"]["/macro-cats/{id}/details"]["get"]["operationId"],
+        json!("findMacroCatDetails"),
+    );
+}
+
 #[tokio::test]
 async fn macros_register_injectable_services_and_controller_routes() {
     let app = BootApplication::builder()
@@ -1245,6 +1767,32 @@ async fn macros_register_injectable_services_and_controller_routes() {
     assert!(exports.contains(&ProviderToken::named("readonly-cats")));
     let reader = app.get::<MacroAutoCatsReader>().unwrap();
     let controller = app.get::<MacroCatsController>().unwrap();
+    let instance_controller = Arc::clone(&controller).controller().unwrap();
+    let provider_controller = MacroCatsController::provider_controller().unwrap();
+    assert_eq!(
+        instance_controller.routes().len(),
+        provider_controller.routes().len()
+    );
+    for (instance_route, provider_route) in instance_controller
+        .routes()
+        .iter()
+        .zip(provider_controller.routes())
+    {
+        assert_eq!(instance_route.method(), provider_route.method());
+        assert_eq!(instance_route.path(), provider_route.path());
+        assert_eq!(instance_route.host(), provider_route.host());
+        assert_eq!(instance_route.openapi(), provider_route.openapi());
+        assert_eq!(instance_route.versioning(), provider_route.versioning());
+        assert_eq!(
+            instance_route.serialization(),
+            provider_route.serialization()
+        );
+        assert_eq!(instance_route.metadata(), provider_route.metadata());
+        assert_eq!(
+            instance_route.validation_enabled(),
+            provider_route.validation_enabled(),
+        );
+    }
     assert_eq!(
         reader.summary(),
         "auto:readonly:true:true:lazy:lazy-readonly:true"
@@ -2125,6 +2673,12 @@ async fn macro_pipeline_decorators_register_controller_and_route_hooks() {
         .import(MacroPipelineModule)
         .build()
         .unwrap();
+    assert_eq!(
+        app.module_ref()
+            .provider_scope::<MacroPipelineController>()
+            .unwrap(),
+        ProviderScope::Request,
+    );
 
     let guarded = app
         .call(BootRequest::new(
@@ -2408,6 +2962,12 @@ async fn validate_macro_enables_body_and_query_dto_validation() {
         .import(MacroValidationModule)
         .build()
         .unwrap();
+    assert_eq!(
+        app.module_ref()
+            .provider_scope::<MacroValidationController>()
+            .unwrap(),
+        ProviderScope::Request,
+    );
 
     let body_error = app
         .call(

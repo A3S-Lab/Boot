@@ -1,7 +1,8 @@
 use a3s_boot::{
     BootApplication, BootError, BootFactory, BootRequest, BootResponse, ControllerDefinition,
     DynamicModule, ExecutionContext, FromModuleRef, HttpMethod, Module, ModuleRef,
-    ProviderDefinition, ProviderRef, ProviderScope, ProviderToken, Result, TestingModule,
+    ProviderDefinition, ProviderDependency, ProviderOnModuleInit, ProviderRef, ProviderScope,
+    ProviderToken, Result, TestingModule,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -275,6 +276,83 @@ struct ScopedConsumer {
 }
 
 #[derive(Debug)]
+struct BubbledConsumer {
+    counter: Arc<ScopedCounter>,
+}
+
+#[derive(Debug)]
+struct ContextualTransient {
+    counter: Arc<ScopedCounter>,
+}
+
+#[derive(Debug)]
+struct TransitiveBubbledConsumer {
+    dependency: Arc<ContextualTransient>,
+}
+
+#[derive(Debug)]
+struct LazyCounterConsumer {
+    counter: ProviderRef<ScopedCounter>,
+}
+
+#[derive(Debug)]
+struct NamedBubbledConsumer {
+    counter: Arc<ScopedCounter>,
+}
+
+#[derive(Debug)]
+struct OptionalExistingConsumer {
+    counter: Option<Arc<ScopedCounter>>,
+}
+
+#[derive(Debug)]
+struct OptionalMissingConsumer {
+    counter: Option<Arc<ScopedCounter>>,
+}
+
+#[derive(Debug)]
+struct MissingLazyConsumer {
+    _counter: ProviderRef<ScopedCounter>,
+}
+
+#[derive(Debug)]
+struct LifecycleBubbledConsumer {
+    _counter: Arc<ScopedCounter>,
+}
+
+impl ProviderOnModuleInit for LifecycleBubbledConsumer {}
+
+#[derive(Debug)]
+struct AsyncContextualConsumer {
+    _counter: Arc<ScopedCounter>,
+}
+
+#[derive(Debug)]
+struct AsyncDependency {
+    value: &'static str,
+}
+
+#[derive(Debug)]
+struct AsyncDependent {
+    dependency: Arc<AsyncDependency>,
+}
+
+#[derive(Debug)]
+struct AsyncCycleA {
+    _dependency: Arc<AsyncCycleB>,
+}
+
+#[derive(Debug)]
+struct AsyncCycleB {
+    _dependency: Arc<AsyncCycleA>,
+}
+
+#[derive(Debug)]
+struct ForwardContextConsumer {
+    counter: Arc<ScopedCounter>,
+}
+
+#[derive(Debug)]
 struct ArcFactoryModule;
 
 impl Module for ArcFactoryModule {
@@ -427,6 +505,119 @@ impl Module for RequestScopedDependencyModule {
                 )))
             },
         )?])
+    }
+}
+
+#[derive(Debug)]
+struct BubbledProviderModule {
+    calls: Arc<AtomicUsize>,
+}
+
+impl Module for BubbledProviderModule {
+    fn name(&self) -> &'static str {
+        "bubbled-provider"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        let calls = Arc::clone(&self.calls);
+        Ok(vec![
+            ProviderDefinition::request_scoped::<ScopedCounter, _>(move |_| {
+                Ok(ScopedCounter {
+                    id: calls.fetch_add(1, Ordering::SeqCst) + 1,
+                })
+            }),
+            ProviderDefinition::factory::<BubbledConsumer, _>(|module_ref| {
+                Ok(BubbledConsumer {
+                    counter: module_ref.get::<ScopedCounter>()?,
+                })
+            })
+            .depends_on::<ScopedCounter>(),
+        ])
+    }
+
+    fn controllers(&self, _module_ref: &ModuleRef) -> Result<Vec<ControllerDefinition>> {
+        Ok(vec![ControllerDefinition::new("/bubbled")?.get(
+            "/",
+            |request: BootRequest| async move {
+                let consumer = request.get::<BubbledConsumer>()?;
+                let same = request.get::<BubbledConsumer>()?;
+                let direct = request.get::<ScopedCounter>()?;
+                Ok(BootResponse::text(format!(
+                    "{}:{}:{}:{}",
+                    consumer.counter.id,
+                    same.counter.id,
+                    direct.id,
+                    Arc::ptr_eq(&consumer, &same)
+                )))
+            },
+        )?])
+    }
+}
+
+#[derive(Debug)]
+struct ForwardContextRootModule {
+    calls: Arc<AtomicUsize>,
+}
+
+impl Module for ForwardContextRootModule {
+    fn name(&self) -> &'static str {
+        "forward-context-root"
+    }
+
+    fn forward_imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(ForwardContextFeatureModule {
+            calls: Arc::clone(&self.calls),
+        })]
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        let calls = Arc::clone(&self.calls);
+        Ok(vec![
+            ProviderDefinition::request_scoped::<ScopedCounter, _>(move |_| {
+                Ok(ScopedCounter {
+                    id: calls.fetch_add(1, Ordering::SeqCst) + 1,
+                })
+            }),
+        ])
+    }
+
+    fn exports(&self) -> Result<Vec<ProviderToken>> {
+        Ok(vec![
+            ProviderToken::of::<ScopedCounter>(),
+            ProviderToken::of::<ForwardContextConsumer>(),
+        ])
+    }
+}
+
+#[derive(Debug)]
+struct ForwardContextFeatureModule {
+    calls: Arc<AtomicUsize>,
+}
+
+impl Module for ForwardContextFeatureModule {
+    fn name(&self) -> &'static str {
+        "forward-context-feature"
+    }
+
+    fn forward_imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(ForwardContextRootModule {
+            calls: Arc::clone(&self.calls),
+        })]
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![
+            ProviderDefinition::factory::<ForwardContextConsumer, _>(|module_ref| {
+                Ok(ForwardContextConsumer {
+                    counter: module_ref.get::<ScopedCounter>()?,
+                })
+            })
+            .depends_on::<ScopedCounter>(),
+        ])
+    }
+
+    fn exports(&self) -> Result<Vec<ProviderToken>> {
+        Ok(vec![ProviderToken::of::<ForwardContextConsumer>()])
     }
 }
 
@@ -797,6 +988,33 @@ impl Module for UsesRuntimeConfigModule {
 }
 
 #[derive(Debug)]
+struct AsyncGlobalRuntimeConfigModule;
+
+impl Module for AsyncGlobalRuntimeConfigModule {
+    fn name(&self) -> &'static str {
+        "async-global-runtime-config"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![
+            ProviderDefinition::async_factory::<RuntimeConfig, _, _>(|_| async {
+                Ok(RuntimeConfig {
+                    value: "async-global".to_string(),
+                })
+            }),
+        ])
+    }
+
+    fn exports(&self) -> Result<Vec<ProviderToken>> {
+        Ok(vec![ProviderToken::of::<RuntimeConfig>()])
+    }
+
+    fn is_global(&self) -> bool {
+        true
+    }
+}
+
+#[derive(Debug)]
 struct AutoProviderModule;
 
 impl Module for AutoProviderModule {
@@ -943,6 +1161,506 @@ fn module_ref_resolve_uses_a_fresh_request_resolution_context() {
     assert_eq!(second.second.id, 2);
     assert!(Arc::ptr_eq(&second.first, &second.second));
     assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn request_scope_propagates_to_declared_singleton_dependencies() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let module_ref = ModuleRef::new();
+    let counter_calls = Arc::clone(&calls);
+    module_ref
+        .register(ProviderDefinition::request_scoped::<ScopedCounter, _>(
+            move |_| {
+                Ok(ScopedCounter {
+                    id: counter_calls.fetch_add(1, Ordering::SeqCst) + 1,
+                })
+            },
+        ))
+        .unwrap();
+    module_ref
+        .register(
+            ProviderDefinition::factory::<BubbledConsumer, _>(|module_ref| {
+                Ok(BubbledConsumer {
+                    counter: module_ref.get::<ScopedCounter>()?,
+                })
+            })
+            .depends_on::<ScopedCounter>(),
+        )
+        .unwrap();
+
+    assert!(module_ref
+        .provider_is_contextual::<BubbledConsumer>()
+        .unwrap());
+    let error = module_ref.get::<BubbledConsumer>().unwrap_err();
+    assert!(matches!(
+        error,
+        BootError::Internal(message)
+            if message.contains("requires an active request scope")
+    ));
+
+    let first_scope = module_ref.request_scope();
+    let first = first_scope.get::<BubbledConsumer>().unwrap();
+    let same = first_scope.get::<BubbledConsumer>().unwrap();
+    let direct = first_scope.get::<ScopedCounter>().unwrap();
+    let second = module_ref.request_scope().get::<BubbledConsumer>().unwrap();
+
+    assert!(Arc::ptr_eq(&first, &same));
+    assert!(Arc::ptr_eq(&first.counter, &direct));
+    assert_eq!(first.counter.id, 1);
+    assert_eq!(second.counter.id, 2);
+    assert!(!Arc::ptr_eq(&first, &second));
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn request_scope_propagates_through_transient_and_alias_dependencies() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let module_ref = ModuleRef::new();
+    let counter_calls = Arc::clone(&calls);
+    module_ref
+        .register(ProviderDefinition::request_scoped::<ScopedCounter, _>(
+            move |_| {
+                Ok(ScopedCounter {
+                    id: counter_calls.fetch_add(1, Ordering::SeqCst) + 1,
+                })
+            },
+        ))
+        .unwrap();
+    module_ref
+        .register(
+            ProviderDefinition::transient::<ContextualTransient, _>(|module_ref| {
+                Ok(ContextualTransient {
+                    counter: module_ref.get::<ScopedCounter>()?,
+                })
+            })
+            .depends_on::<ScopedCounter>(),
+        )
+        .unwrap();
+    module_ref
+        .register(
+            ProviderDefinition::factory::<TransitiveBubbledConsumer, _>(|module_ref| {
+                Ok(TransitiveBubbledConsumer {
+                    dependency: module_ref.get::<ContextualTransient>()?,
+                })
+            })
+            .depends_on::<ContextualTransient>(),
+        )
+        .unwrap();
+    module_ref
+        .register(ProviderDefinition::named_alias(
+            "request-counter",
+            ProviderToken::of::<ScopedCounter>(),
+        ))
+        .unwrap();
+    module_ref
+        .register(
+            ProviderDefinition::named_factory::<BubbledConsumer, _>(
+                "alias-consumer",
+                |module_ref| {
+                    Ok(BubbledConsumer {
+                        counter: module_ref.get_named::<ScopedCounter>("request-counter")?,
+                    })
+                },
+            )
+            .depends_on_named("request-counter"),
+        )
+        .unwrap();
+
+    assert!(module_ref
+        .provider_is_contextual::<ContextualTransient>()
+        .unwrap());
+    assert!(module_ref
+        .provider_is_contextual::<TransitiveBubbledConsumer>()
+        .unwrap());
+    assert!(module_ref
+        .named_provider_is_contextual("alias-consumer")
+        .unwrap());
+
+    let scope = module_ref.request_scope();
+    let transitive = scope.get::<TransitiveBubbledConsumer>().unwrap();
+    let alias = scope
+        .get_named::<BubbledConsumer>("alias-consumer")
+        .unwrap();
+    assert!(Arc::ptr_eq(&transitive.dependency.counter, &alias.counter));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn lazy_dependencies_do_not_bubble_but_require_an_explicit_resolution_context() {
+    let module_ref = ModuleRef::new();
+    module_ref
+        .register(ProviderDefinition::request_scoped::<ScopedCounter, _>(
+            |_| Ok(ScopedCounter { id: 1 }),
+        ))
+        .unwrap();
+    module_ref
+        .register(
+            ProviderDefinition::factory::<LazyCounterConsumer, _>(|module_ref| {
+                Ok(LazyCounterConsumer {
+                    counter: module_ref.provider_ref::<ScopedCounter>(),
+                })
+            })
+            .with_dependency(ProviderDependency::typed::<ScopedCounter>().lazy()),
+        )
+        .unwrap();
+
+    assert!(!module_ref
+        .provider_is_contextual::<LazyCounterConsumer>()
+        .unwrap());
+    let consumer = module_ref.get::<LazyCounterConsumer>().unwrap();
+    assert!(consumer.counter.get().is_err());
+    assert_eq!(consumer.counter.resolve().unwrap().id, 1);
+}
+
+#[test]
+fn opaque_singleton_factories_cannot_capture_request_scoped_providers() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let module_ref = ModuleRef::new();
+    module_ref
+        .register(ProviderDefinition::request_scoped::<ScopedCounter, _>(
+            |_| Ok(ScopedCounter { id: 1 }),
+        ))
+        .unwrap();
+    let factory_calls = Arc::clone(&calls);
+    module_ref
+        .register(ProviderDefinition::factory::<BubbledConsumer, _>(
+            move |module_ref| {
+                factory_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(BubbledConsumer {
+                    counter: module_ref.get::<ScopedCounter>()?,
+                })
+            },
+        ))
+        .unwrap();
+
+    let error = module_ref.get::<BubbledConsumer>().unwrap_err();
+    assert!(matches!(
+        error,
+        BootError::Internal(message)
+            if message.contains("BubbledConsumer")
+                && message.contains("ScopedCounter")
+                && message.contains(" -> ")
+                && message.contains("declare factory dependencies")
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn dependency_plans_validate_required_contextual_and_lazy_edges() {
+    let contextual_ref = ModuleRef::new();
+    contextual_ref
+        .register(
+            ProviderDefinition::named_request_scoped::<ItemsService, _>(
+                "request-with-missing-dependency",
+                |_| Ok(ItemsService),
+            )
+            .depends_on_named("missing-eager-dependency"),
+        )
+        .unwrap();
+
+    let contextual_error = contextual_ref
+        .named_provider_is_contextual("request-with-missing-dependency")
+        .unwrap_err();
+    assert!(matches!(
+        contextual_error,
+        BootError::MissingProvider(token) if token == "missing-eager-dependency"
+    ));
+
+    let lazy_ref = ModuleRef::new();
+    lazy_ref
+        .register(
+            ProviderDefinition::factory::<MissingLazyConsumer, _>(|module_ref| {
+                Ok(MissingLazyConsumer {
+                    _counter: module_ref.provider_ref::<ScopedCounter>(),
+                })
+            })
+            .with_dependency(ProviderDependency::typed::<ScopedCounter>().lazy()),
+        )
+        .unwrap();
+
+    let lazy_error = lazy_ref
+        .provider_is_contextual::<MissingLazyConsumer>()
+        .unwrap_err();
+    assert!(matches!(
+        lazy_error,
+        BootError::MissingProvider(token)
+            if token == ProviderToken::of::<ScopedCounter>().to_string()
+    ));
+}
+
+#[test]
+fn optional_dependencies_bubble_only_when_the_provider_exists() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let module_ref = ModuleRef::new();
+    let counter_calls = Arc::clone(&calls);
+    module_ref
+        .register(ProviderDefinition::request_scoped::<ScopedCounter, _>(
+            move |_| {
+                Ok(ScopedCounter {
+                    id: counter_calls.fetch_add(1, Ordering::SeqCst) + 1,
+                })
+            },
+        ))
+        .unwrap();
+    module_ref
+        .register(
+            ProviderDefinition::factory::<OptionalExistingConsumer, _>(|module_ref| {
+                Ok(OptionalExistingConsumer {
+                    counter: module_ref.get_optional::<ScopedCounter>()?,
+                })
+            })
+            .with_dependency(ProviderDependency::typed::<ScopedCounter>().optional()),
+        )
+        .unwrap();
+    module_ref
+        .register(
+            ProviderDefinition::factory::<OptionalMissingConsumer, _>(|module_ref| {
+                Ok(OptionalMissingConsumer {
+                    counter: module_ref.get_optional_named::<ScopedCounter>("missing-counter")?,
+                })
+            })
+            .with_dependency(ProviderDependency::named("missing-counter").optional()),
+        )
+        .unwrap();
+
+    assert!(module_ref
+        .provider_is_contextual::<OptionalExistingConsumer>()
+        .unwrap());
+    assert!(!module_ref
+        .provider_is_contextual::<OptionalMissingConsumer>()
+        .unwrap());
+    assert!(module_ref
+        .get::<OptionalMissingConsumer>()
+        .unwrap()
+        .counter
+        .is_none());
+
+    let scope = module_ref.request_scope();
+    let consumer = scope.get::<OptionalExistingConsumer>().unwrap();
+    let direct = scope.get::<ScopedCounter>().unwrap();
+    assert!(Arc::ptr_eq(consumer.counter.as_ref().unwrap(), &direct));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn contextual_plans_use_the_declaring_module_for_imports_and_named_aliases() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let request_calls = Arc::clone(&calls);
+    let child = DynamicModule::new("contextual-owner-child")
+        .provider(ProviderDefinition::request_scoped::<ScopedCounter, _>(
+            move |_| {
+                Ok(ScopedCounter {
+                    id: request_calls.fetch_add(1, Ordering::SeqCst) + 1,
+                })
+            },
+        ))
+        .provider(ProviderDefinition::named_alias(
+            "contextual-owner-alias",
+            ProviderToken::of::<ScopedCounter>(),
+        ))
+        .export::<ScopedCounter>()
+        .export_named("contextual-owner-alias");
+    let parent = DynamicModule::new("contextual-owner-parent")
+        .import(child)
+        .provider(
+            ProviderDefinition::factory::<BubbledConsumer, _>(|module_ref| {
+                Ok(BubbledConsumer {
+                    counter: module_ref.get::<ScopedCounter>()?,
+                })
+            })
+            .depends_on::<ScopedCounter>(),
+        )
+        .provider(
+            ProviderDefinition::factory::<NamedBubbledConsumer, _>(|module_ref| {
+                Ok(NamedBubbledConsumer {
+                    counter: module_ref.get_named::<ScopedCounter>("contextual-owner-alias")?,
+                })
+            })
+            .depends_on_named("contextual-owner-alias"),
+        );
+    let sibling = DynamicModule::new("contextual-owner-sibling")
+        .provider(ProviderDefinition::singleton(ScopedCounter { id: 99 }));
+
+    let app = BootApplication::builder()
+        .import(sibling)
+        .import(parent)
+        .build()
+        .unwrap();
+
+    assert!(app
+        .module_ref()
+        .provider_is_contextual::<BubbledConsumer>()
+        .unwrap());
+    assert!(app
+        .module_ref()
+        .provider_is_contextual::<NamedBubbledConsumer>()
+        .unwrap());
+    assert_eq!(app.get::<ScopedCounter>().unwrap().id, 99);
+
+    let scope = app.module_ref().request_scope();
+    let typed = scope.get::<BubbledConsumer>().unwrap();
+    let named = scope.get::<NamedBubbledConsumer>().unwrap();
+    assert_eq!(typed.counter.id, 1);
+    assert!(Arc::ptr_eq(&typed.counter, &named.counter));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn request_scope_bubbles_from_a_late_global_provider() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let consumer = DynamicModule::new("global-context-consumer").provider(
+        ProviderDefinition::factory::<BubbledConsumer, _>(|module_ref| {
+            Ok(BubbledConsumer {
+                counter: module_ref.get::<ScopedCounter>()?,
+            })
+        })
+        .depends_on::<ScopedCounter>(),
+    );
+    let request_calls = Arc::clone(&calls);
+    let global = DynamicModule::new("global-context-provider")
+        .provider(ProviderDefinition::request_scoped::<ScopedCounter, _>(
+            move |_| {
+                Ok(ScopedCounter {
+                    id: request_calls.fetch_add(1, Ordering::SeqCst) + 1,
+                })
+            },
+        ))
+        .export::<ScopedCounter>()
+        .global();
+
+    let app = BootApplication::builder()
+        .import(consumer)
+        .import(global)
+        .build()
+        .unwrap();
+
+    assert!(app
+        .module_ref()
+        .provider_is_contextual::<BubbledConsumer>()
+        .unwrap());
+    let first = app
+        .module_ref()
+        .request_scope()
+        .get::<BubbledConsumer>()
+        .unwrap();
+    let second = app
+        .module_ref()
+        .request_scope()
+        .get::<BubbledConsumer>()
+        .unwrap();
+    assert_eq!(first.counter.id, 1);
+    assert_eq!(second.counter.id, 2);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn request_scope_bubbles_across_forward_imports_after_graph_registration() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let app = BootApplication::builder()
+        .import(ForwardContextRootModule {
+            calls: Arc::clone(&calls),
+        })
+        .build()
+        .unwrap();
+
+    assert!(app
+        .module_ref()
+        .provider_is_contextual::<ForwardContextConsumer>()
+        .unwrap());
+    let first_scope = app.module_ref().request_scope();
+    let first = first_scope.get::<ForwardContextConsumer>().unwrap();
+    let direct = first_scope.get::<ScopedCounter>().unwrap();
+    let second = app
+        .module_ref()
+        .request_scope()
+        .get::<ForwardContextConsumer>()
+        .unwrap();
+
+    assert!(Arc::ptr_eq(&first.counter, &direct));
+    assert_eq!(first.counter.id, 1);
+    assert_eq!(second.counter.id, 2);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn provider_overrides_recalculate_contextual_dependency_plans() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let module = DynamicModule::new("contextual-provider-override")
+        .provider(ProviderDefinition::singleton(ScopedCounter { id: 0 }))
+        .provider(
+            ProviderDefinition::factory::<BubbledConsumer, _>(|module_ref| {
+                Ok(BubbledConsumer {
+                    counter: module_ref.get::<ScopedCounter>()?,
+                })
+            })
+            .depends_on::<ScopedCounter>(),
+        );
+    let request_calls = Arc::clone(&calls);
+    let app = BootApplication::builder()
+        .import(module)
+        .override_provider(ProviderDefinition::request_scoped::<ScopedCounter, _>(
+            move |_| {
+                Ok(ScopedCounter {
+                    id: request_calls.fetch_add(1, Ordering::SeqCst) + 1,
+                })
+            },
+        ))
+        .build()
+        .unwrap();
+
+    assert!(app
+        .module_ref()
+        .provider_is_contextual::<BubbledConsumer>()
+        .unwrap());
+    assert!(app.get::<BubbledConsumer>().is_err());
+    let first = app
+        .module_ref()
+        .request_scope()
+        .get::<BubbledConsumer>()
+        .unwrap();
+    let second = app
+        .module_ref()
+        .request_scope()
+        .get::<BubbledConsumer>()
+        .unwrap();
+    assert_eq!(first.counter.id, 1);
+    assert_eq!(second.counter.id, 2);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[test]
+fn declared_static_singleton_graphs_are_initialized_only_once() {
+    let dependency_calls = Arc::new(AtomicUsize::new(0));
+    let consumer_calls = Arc::new(AtomicUsize::new(0));
+    let dependency_factory_calls = Arc::clone(&dependency_calls);
+    let consumer_factory_calls = Arc::clone(&consumer_calls);
+    let module = DynamicModule::new("declared-static-singletons")
+        .provider(ProviderDefinition::factory::<ScopedCounter, _>(move |_| {
+            dependency_factory_calls.fetch_add(1, Ordering::SeqCst);
+            Ok(ScopedCounter { id: 7 })
+        }))
+        .provider(
+            ProviderDefinition::factory::<BubbledConsumer, _>(move |module_ref| {
+                consumer_factory_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(BubbledConsumer {
+                    counter: module_ref.get::<ScopedCounter>()?,
+                })
+            })
+            .depends_on::<ScopedCounter>(),
+        );
+
+    let app = BootApplication::builder().import(module).build().unwrap();
+    let first = app.get::<BubbledConsumer>().unwrap();
+    let second = app.get::<BubbledConsumer>().unwrap();
+
+    assert!(!app
+        .module_ref()
+        .provider_is_contextual::<BubbledConsumer>()
+        .unwrap());
+    assert!(Arc::ptr_eq(&first, &second));
+    assert!(Arc::ptr_eq(&first.counter, &second.counter));
+    assert_eq!(dependency_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(consumer_calls.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -1235,6 +1953,31 @@ async fn request_scoped_provider_dependencies_share_the_request_scope() {
 }
 
 #[tokio::test]
+async fn request_scope_bubbles_into_declared_singletons_per_request() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let app = BootApplication::builder()
+        .import(BubbledProviderModule {
+            calls: Arc::clone(&calls),
+        })
+        .build()
+        .unwrap();
+
+    assert!(app.get::<BubbledConsumer>().is_err());
+    let first = app
+        .call(BootRequest::new(HttpMethod::Get, "/bubbled"))
+        .await
+        .unwrap();
+    let second = app
+        .call(BootRequest::new(HttpMethod::Get, "/bubbled"))
+        .await
+        .unwrap();
+
+    assert_eq!(first.body_text().unwrap(), "1:1:1:true");
+    assert_eq!(second.body_text().unwrap(), "2:2:2:true");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn scoped_controller_handlers_are_built_for_each_request_scope() {
     let calls = Arc::new(AtomicUsize::new(0));
     let app = BootApplication::builder()
@@ -1318,6 +2061,190 @@ fn singleton_provider_factories_can_depend_on_later_module_providers() {
 
     assert_eq!(repository.config.value, "late");
     assert!(Arc::ptr_eq(&repository.config, &config));
+}
+
+#[test]
+fn contextual_singletons_with_lifecycle_hooks_are_rejected_before_construction() {
+    let factory_calls = Arc::new(AtomicUsize::new(0));
+    let provider_factory_calls = Arc::clone(&factory_calls);
+    let module = DynamicModule::new("contextual-lifecycle-provider")
+        .provider(ProviderDefinition::request_scoped::<ScopedCounter, _>(
+            |_| Ok(ScopedCounter { id: 1 }),
+        ))
+        .provider(
+            ProviderDefinition::factory::<LifecycleBubbledConsumer, _>(move |module_ref| {
+                provider_factory_calls.fetch_add(1, Ordering::SeqCst);
+                Ok(LifecycleBubbledConsumer {
+                    _counter: module_ref.get::<ScopedCounter>()?,
+                })
+            })
+            .depends_on::<ScopedCounter>()
+            .with_on_module_init::<LifecycleBubbledConsumer>(),
+        );
+
+    let result = BootApplication::builder().import(module).build();
+
+    assert!(matches!(
+        result,
+        Err(BootError::Internal(message))
+            if message.contains("LifecycleBubbledConsumer")
+                && message.contains("singleton lifecycle hooks")
+    ));
+    assert_eq!(factory_calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn contextual_async_providers_are_rejected_before_factory_invocation() {
+    let factory_calls = Arc::new(AtomicUsize::new(0));
+    let provider_factory_calls = Arc::clone(&factory_calls);
+    let module = DynamicModule::new("contextual-async-provider")
+        .provider(ProviderDefinition::request_scoped::<ScopedCounter, _>(
+            |_| Ok(ScopedCounter { id: 1 }),
+        ))
+        .provider(
+            ProviderDefinition::async_factory::<AsyncContextualConsumer, _, _>(move |module_ref| {
+                provider_factory_calls.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    Ok(AsyncContextualConsumer {
+                        _counter: module_ref.get::<ScopedCounter>()?,
+                    })
+                }
+            })
+            .depends_on::<ScopedCounter>(),
+        );
+
+    let result = BootApplication::builder()
+        .import(module)
+        .build_async()
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(BootError::Internal(message))
+            if message.contains("AsyncContextualConsumer")
+                && message.contains("cannot depend on a request-context provider")
+    ));
+    assert_eq!(factory_calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn async_singletons_seed_declared_dependencies_before_their_dependents() {
+    let dependency_calls = Arc::new(AtomicUsize::new(0));
+    let dependent_calls = Arc::new(AtomicUsize::new(0));
+    let dependency_factory_calls = Arc::clone(&dependency_calls);
+    let dependent_factory_calls = Arc::clone(&dependent_calls);
+    let module = DynamicModule::new("async-provider-topology")
+        .provider(
+            ProviderDefinition::async_factory::<AsyncDependent, _, _>(move |module_ref| {
+                dependent_factory_calls.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    Ok(AsyncDependent {
+                        dependency: module_ref.get::<AsyncDependency>()?,
+                    })
+                }
+            })
+            .depends_on::<AsyncDependency>(),
+        )
+        .provider(ProviderDefinition::async_factory::<AsyncDependency, _, _>(
+            move |_| {
+                dependency_factory_calls.fetch_add(1, Ordering::SeqCst);
+                async {
+                    Ok(AsyncDependency {
+                        value: "dependency-first",
+                    })
+                }
+            },
+        ));
+
+    let app = BootApplication::builder()
+        .import(module)
+        .build_async()
+        .await
+        .unwrap();
+    let dependent = app.get::<AsyncDependent>().unwrap();
+    let dependency = app.get::<AsyncDependency>().unwrap();
+
+    assert_eq!(dependent.dependency.value, "dependency-first");
+    assert!(Arc::ptr_eq(&dependent.dependency, &dependency));
+    assert_eq!(dependency_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(dependent_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn async_dependency_cycles_are_rejected_without_running_factories() {
+    let factory_calls = Arc::new(AtomicUsize::new(0));
+    let first_calls = Arc::clone(&factory_calls);
+    let second_calls = Arc::clone(&factory_calls);
+    let module = DynamicModule::new("async-provider-cycle")
+        .provider(
+            ProviderDefinition::named_async_factory::<AsyncCycleA, _, _>(
+                "async-cycle-a",
+                move |module_ref| {
+                    first_calls.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        Ok(AsyncCycleA {
+                            _dependency: module_ref.get_named::<AsyncCycleB>("async-cycle-b")?,
+                        })
+                    }
+                },
+            )
+            .depends_on_named("async-cycle-b"),
+        )
+        .provider(
+            ProviderDefinition::named_async_factory::<AsyncCycleB, _, _>(
+                "async-cycle-b",
+                move |module_ref| {
+                    second_calls.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        Ok(AsyncCycleB {
+                            _dependency: module_ref.get_named::<AsyncCycleA>("async-cycle-a")?,
+                        })
+                    }
+                },
+            )
+            .depends_on_named("async-cycle-a"),
+        );
+
+    let result = BootApplication::builder()
+        .import(module)
+        .build_async()
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(BootError::Internal(message))
+            if message
+                == "cyclic async provider dependency detected: async-cycle-a -> async-cycle-b -> async-cycle-a"
+    ));
+    assert_eq!(factory_calls.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn missing_declared_async_dependencies_fail_before_factory_invocation() {
+    let factory_calls = Arc::new(AtomicUsize::new(0));
+    let provider_factory_calls = Arc::clone(&factory_calls);
+    let module = DynamicModule::new("async-provider-missing-dependency").provider(
+        ProviderDefinition::async_factory::<AsyncDependency, _, _>(move |_| {
+            provider_factory_calls.fetch_add(1, Ordering::SeqCst);
+            async {
+                Ok(AsyncDependency {
+                    value: "unreachable",
+                })
+            }
+        })
+        .depends_on_named("missing-async-dependency"),
+    );
+
+    let result = BootApplication::builder()
+        .import(module)
+        .build_async()
+        .await;
+
+    assert!(matches!(
+        result,
+        Err(BootError::MissingProvider(token)) if token == "missing-async-dependency"
+    ));
+    assert_eq!(factory_calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]
@@ -1495,8 +2422,8 @@ fn imported_exports_can_be_re_exported_transitively() {
 #[test]
 fn global_modules_expose_exported_providers_to_other_modules() {
     let app = BootApplication::builder()
-        .import(GlobalConfigModule)
         .import(UsesGlobalConfigModule)
+        .import(GlobalConfigModule)
         .build()
         .unwrap();
 
@@ -1505,6 +2432,22 @@ fn global_modules_expose_exported_providers_to_other_modules() {
 
     assert_eq!(config.value, "global");
     assert_eq!(dependent.config.value, "global");
+}
+
+#[tokio::test]
+async fn async_global_modules_are_seeded_after_the_full_graph_is_registered() {
+    let app = BootApplication::builder()
+        .import(UsesRuntimeConfigModule)
+        .import(AsyncGlobalRuntimeConfigModule)
+        .build_async()
+        .await
+        .unwrap();
+
+    let config = app.get::<RuntimeConfig>().unwrap();
+    let dependent = app.get::<UsesRuntimeConfig>().unwrap();
+
+    assert_eq!(config.value, "async-global");
+    assert!(Arc::ptr_eq(&config, &dependent.config));
 }
 
 #[test]

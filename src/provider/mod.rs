@@ -1,4 +1,5 @@
 mod cache;
+mod context_id;
 mod definition;
 mod entry;
 mod module_ref;
@@ -8,8 +9,9 @@ mod token;
 
 use std::any::Any;
 
+pub use context_id::{ContextId, ContextIdFactory};
 pub use definition::{
-    FromModuleRef, ProviderBeforeApplicationShutdown, ProviderDefinition,
+    FromModuleRef, ProviderBeforeApplicationShutdown, ProviderDefinition, ProviderDependency,
     ProviderOnApplicationBootstrap, ProviderOnApplicationShutdown, ProviderOnModuleDestroy,
     ProviderOnModuleInit, ProviderScope,
 };

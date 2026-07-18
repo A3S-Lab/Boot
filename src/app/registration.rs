@@ -1,5 +1,5 @@
 use super::application::ModuleInstance;
-use crate::pipeline::PipelineComponents;
+use crate::pipeline::{PipelineComponents, ProviderEnhancerComponents};
 use crate::routing::path::join_paths;
 use crate::{
     BootError, BoxFuture, ControllerDefinition, MessagePatternDefinition, MiddlewareConsumer,
@@ -12,10 +12,12 @@ use std::sync::Arc;
 pub(super) struct ModuleRegistry {
     registered: BTreeMap<String, RegisteredModule>,
     active: BTreeMap<String, RegisteredModule>,
+    pending: Vec<PendingModuleRegistration>,
     visiting: Vec<String>,
     global_ref: ModuleRef,
     provider_overrides: BTreeMap<ProviderToken, ProviderDefinition>,
     module_overrides: BTreeMap<String, Arc<dyn Module>>,
+    provider_enhancers: ProviderEnhancerComponents,
 }
 
 pub(super) struct ModuleRegistrationSink<'a> {
@@ -32,6 +34,16 @@ struct ActiveModuleRegistration {
     exports: ModuleRef,
 }
 
+struct PendingModuleRegistration {
+    module: Arc<dyn Module>,
+    name: String,
+    route_prefix: String,
+    module_ref: ModuleRef,
+    import_names: Vec<String>,
+    exported_tokens: Vec<ProviderToken>,
+    is_global: bool,
+}
+
 impl ModuleRegistry {
     pub fn new(
         global_ref: ModuleRef,
@@ -41,27 +53,22 @@ impl ModuleRegistry {
         Self {
             registered: BTreeMap::new(),
             active: BTreeMap::new(),
+            pending: Vec::new(),
             visiting: Vec::new(),
             global_ref,
             provider_overrides,
             module_overrides,
+            provider_enhancers: ProviderEnhancerComponents::default(),
         }
     }
 
-    pub fn register_module(
-        &mut self,
-        module: Arc<dyn Module>,
-        global_pipeline: &PipelineComponents,
-        sink: &mut ModuleRegistrationSink<'_>,
-    ) -> Result<RegisteredModule> {
-        self.register_module_with_prefix(module, global_pipeline, sink, "")
+    pub fn register_module(&mut self, module: Arc<dyn Module>) -> Result<RegisteredModule> {
+        self.register_module_with_prefix(module, "")
     }
 
     fn register_module_with_prefix(
         &mut self,
         module: Arc<dyn Module>,
-        global_pipeline: &PipelineComponents,
-        sink: &mut ModuleRegistrationSink<'_>,
         parent_route_prefix: &str,
     ) -> Result<RegisteredModule> {
         let module = self.module_override_or(module);
@@ -91,7 +98,7 @@ impl ModuleRegistry {
                 exports: exports.clone(),
             },
         );
-        let result = self.register_module_inner(module, name, global_pipeline, sink, state);
+        let result = self.register_module_inner(module, name, state);
         self.active.remove(name);
         self.exit_module();
         result
@@ -100,8 +107,6 @@ impl ModuleRegistry {
     fn register_forward_module_with_prefix(
         &mut self,
         module: Arc<dyn Module>,
-        global_pipeline: &PipelineComponents,
-        sink: &mut ModuleRegistrationSink<'_>,
         parent_route_prefix: &str,
     ) -> Result<RegisteredModule> {
         let module = self.module_override_or(module);
@@ -117,23 +122,19 @@ impl ModuleRegistry {
             return Ok(active.clone());
         }
 
-        self.register_module_with_prefix(module, global_pipeline, sink, parent_route_prefix)
+        self.register_module_with_prefix(module, parent_route_prefix)
     }
 
     pub fn register_module_async<'a>(
         &'a mut self,
         module: Arc<dyn Module>,
-        global_pipeline: &'a PipelineComponents,
-        sink: &'a mut ModuleRegistrationSink<'_>,
     ) -> BoxFuture<'a, Result<RegisteredModule>> {
-        self.register_module_async_with_prefix(module, global_pipeline, sink, "")
+        self.register_module_async_with_prefix(module, "")
     }
 
     fn register_module_async_with_prefix<'a>(
         &'a mut self,
         module: Arc<dyn Module>,
-        global_pipeline: &'a PipelineComponents,
-        sink: &'a mut ModuleRegistrationSink<'_>,
         parent_route_prefix: &'a str,
     ) -> BoxFuture<'a, Result<RegisteredModule>> {
         Box::pin(async move {
@@ -164,9 +165,7 @@ impl ModuleRegistry {
                     exports: exports.clone(),
                 },
             );
-            let result = self
-                .register_module_async_inner(module, name, global_pipeline, sink, state)
-                .await;
+            let result = self.register_module_async_inner(module, name, state).await;
             self.active.remove(name);
             self.exit_module();
             result
@@ -176,8 +175,6 @@ impl ModuleRegistry {
     fn register_forward_module_async_with_prefix<'a>(
         &'a mut self,
         module: Arc<dyn Module>,
-        global_pipeline: &'a PipelineComponents,
-        sink: &'a mut ModuleRegistrationSink<'_>,
         parent_route_prefix: &'a str,
     ) -> BoxFuture<'a, Result<RegisteredModule>> {
         Box::pin(async move {
@@ -194,13 +191,8 @@ impl ModuleRegistry {
                 return Ok(active.clone());
             }
 
-            self.register_module_async_with_prefix(
-                module,
-                global_pipeline,
-                sink,
-                parent_route_prefix,
-            )
-            .await
+            self.register_module_async_with_prefix(module, parent_route_prefix)
+                .await
         })
     }
 
@@ -211,12 +203,14 @@ impl ModuleRegistry {
             .collect()
     }
 
+    pub fn provider_enhancers(&self) -> ProviderEnhancerComponents {
+        self.provider_enhancers.clone()
+    }
+
     fn register_module_inner(
         &mut self,
         module: Arc<dyn Module>,
         name: &'static str,
-        global_pipeline: &PipelineComponents,
-        sink: &mut ModuleRegistrationSink<'_>,
         state: ActiveModuleRegistration,
     ) -> Result<RegisteredModule> {
         let ActiveModuleRegistration {
@@ -226,20 +220,11 @@ impl ModuleRegistry {
         } = state;
         let mut imported_modules = Vec::new();
         for imported in module.imports() {
-            imported_modules.push(self.register_module_with_prefix(
-                imported,
-                global_pipeline,
-                sink,
-                &route_prefix,
-            )?);
+            imported_modules.push(self.register_module_with_prefix(imported, &route_prefix)?);
         }
         for imported in module.forward_imports() {
-            imported_modules.push(self.register_forward_module_with_prefix(
-                imported,
-                global_pipeline,
-                sink,
-                &route_prefix,
-            )?);
+            imported_modules
+                .push(self.register_forward_module_with_prefix(imported, &route_prefix)?);
         }
 
         module_ref.add_visible_scope(self.global_ref.clone())?;
@@ -249,9 +234,13 @@ impl ModuleRegistry {
 
         for provider in module.providers()? {
             let provider = self.provider_override_or(provider);
+            let enhancers = provider.enhancer_markers().to_vec();
             module_ref.register(provider)?;
+            for enhancer in enhancers {
+                self.provider_enhancers
+                    .push(enhancer.bind(module_ref.clone()));
+            }
         }
-        module_ref.initialize_local_singletons()?;
 
         let export_tokens = module.exports()?;
         for token in &export_tokens {
@@ -266,70 +255,23 @@ impl ModuleRegistry {
             }
         }
 
-        module_ref.initialize_local_providers()?;
-        module.on_module_init(&module_ref)?;
-
-        let mut module_pipeline = PipelineComponents::default();
-        for middleware in module.middleware() {
-            module_pipeline.push_middleware_arc(middleware);
-        }
-        let mut middleware_consumer = MiddlewareConsumer::new();
-        module.configure(&mut middleware_consumer, &module_ref)?;
-
-        for controller in module.controllers(&module_ref)? {
-            let context = RouteRegistrationContext {
-                module_name: name,
-                module_ref: &module_ref,
-                global_pipeline,
-                module_pipeline: &module_pipeline,
-                middleware_consumer: &middleware_consumer,
-                route_prefix: &route_prefix,
-            };
-            register_controller(&context, controller, sink.routes)?;
-        }
-
-        for route in module.routes()? {
-            let context = RouteRegistrationContext {
-                module_name: name,
-                module_ref: &module_ref,
-                global_pipeline,
-                module_pipeline: &module_pipeline,
-                middleware_consumer: &middleware_consumer,
-                route_prefix: &route_prefix,
-            };
-            sink.routes.push(context.prepare_route(route)?);
-        }
-        sink.gateways.extend(
-            module
-                .gateways(&module_ref)?
-                .into_iter()
-                .map(|gateway| gateway.with_module_name(name)),
-        );
-        sink.message_patterns.extend(
-            module
-                .message_patterns(&module_ref)?
-                .into_iter()
-                .map(|pattern| pattern.with_module_name(name)),
-        );
-
         let import_names = imported_modules
             .iter()
             .map(|module| module.name.clone())
             .collect::<Vec<_>>();
-        let route_prefix = (!route_prefix.is_empty()).then_some(route_prefix);
         let registered = RegisteredModule {
             name: name.to_string(),
             module_ref: module_ref.clone(),
             exports,
         };
-        sink.modules.push(name.to_string());
-        sink.module_instances.push(ModuleInstance {
+        self.pending.push(PendingModuleRegistration {
             module,
             module_ref,
-            imports: import_names,
-            exports: exported_tokens,
-            is_global,
+            name: name.to_string(),
             route_prefix,
+            import_names,
+            exported_tokens,
+            is_global,
         });
         self.registered.insert(name.to_string(), registered.clone());
         Ok(registered)
@@ -339,8 +281,6 @@ impl ModuleRegistry {
         &'a mut self,
         module: Arc<dyn Module>,
         name: &'static str,
-        global_pipeline: &'a PipelineComponents,
-        sink: &'a mut ModuleRegistrationSink<'_>,
         state: ActiveModuleRegistration,
     ) -> BoxFuture<'a, Result<RegisteredModule>> {
         Box::pin(async move {
@@ -352,24 +292,14 @@ impl ModuleRegistry {
             let mut imported_modules = Vec::new();
             for imported in module.imports() {
                 imported_modules.push(
-                    self.register_module_async_with_prefix(
-                        imported,
-                        global_pipeline,
-                        sink,
-                        &route_prefix,
-                    )
-                    .await?,
+                    self.register_module_async_with_prefix(imported, &route_prefix)
+                        .await?,
                 );
             }
             for imported in module.forward_imports() {
                 imported_modules.push(
-                    self.register_forward_module_async_with_prefix(
-                        imported,
-                        global_pipeline,
-                        sink,
-                        &route_prefix,
-                    )
-                    .await?,
+                    self.register_forward_module_async_with_prefix(imported, &route_prefix)
+                        .await?,
                 );
             }
 
@@ -380,9 +310,13 @@ impl ModuleRegistry {
 
             for provider in module.providers()? {
                 let provider = self.provider_override_or(provider);
+                let enhancers = provider.enhancer_markers().to_vec();
                 module_ref.register_async(provider).await?;
+                for enhancer in enhancers {
+                    self.provider_enhancers
+                        .push(enhancer.bind(module_ref.clone()));
+                }
             }
-            module_ref.initialize_local_singletons_async().await?;
 
             let export_tokens = module.exports()?;
             for token in &export_tokens {
@@ -397,73 +331,69 @@ impl ModuleRegistry {
                 }
             }
 
-            module_ref.initialize_local_providers()?;
-            module.on_module_init(&module_ref)?;
-
-            let mut module_pipeline = PipelineComponents::default();
-            for middleware in module.middleware() {
-                module_pipeline.push_middleware_arc(middleware);
-            }
-            let mut middleware_consumer = MiddlewareConsumer::new();
-            module.configure(&mut middleware_consumer, &module_ref)?;
-
-            for controller in module.controllers(&module_ref)? {
-                let context = RouteRegistrationContext {
-                    module_name: name,
-                    module_ref: &module_ref,
-                    global_pipeline,
-                    module_pipeline: &module_pipeline,
-                    middleware_consumer: &middleware_consumer,
-                    route_prefix: &route_prefix,
-                };
-                register_controller(&context, controller, sink.routes)?;
-            }
-
-            for route in module.routes()? {
-                let context = RouteRegistrationContext {
-                    module_name: name,
-                    module_ref: &module_ref,
-                    global_pipeline,
-                    module_pipeline: &module_pipeline,
-                    middleware_consumer: &middleware_consumer,
-                    route_prefix: &route_prefix,
-                };
-                sink.routes.push(context.prepare_route(route)?);
-            }
-            sink.gateways.extend(
-                module
-                    .gateways(&module_ref)?
-                    .into_iter()
-                    .map(|gateway| gateway.with_module_name(name)),
-            );
-            sink.message_patterns.extend(
-                module
-                    .message_patterns(&module_ref)?
-                    .into_iter()
-                    .map(|pattern| pattern.with_module_name(name)),
-            );
-
             let import_names = imported_modules
                 .iter()
                 .map(|module| module.name.clone())
                 .collect::<Vec<_>>();
-            let route_prefix = (!route_prefix.is_empty()).then_some(route_prefix);
             let registered = RegisteredModule {
                 name: name.to_string(),
                 module_ref: module_ref.clone(),
                 exports,
             };
-            sink.modules.push(name.to_string());
-            sink.module_instances.push(ModuleInstance {
+            self.pending.push(PendingModuleRegistration {
                 module,
                 module_ref,
-                imports: import_names,
-                exports: exported_tokens,
-                is_global,
+                name: name.to_string(),
                 route_prefix,
+                import_names,
+                exported_tokens,
+                is_global,
             });
             self.registered.insert(name.to_string(), registered.clone());
             Ok(registered)
+        })
+    }
+
+    pub fn finalize(
+        &mut self,
+        global_pipeline: &PipelineComponents,
+        sink: &mut ModuleRegistrationSink<'_>,
+    ) -> Result<()> {
+        for pending in &self.pending {
+            pending.module_ref.validate_local_resolution_plans()?;
+        }
+        for pending in &self.pending {
+            pending.module_ref.initialize_local_singletons()?;
+        }
+
+        let pending = std::mem::take(&mut self.pending);
+        for pending in pending {
+            finalize_module(pending, global_pipeline, sink)?;
+        }
+        Ok(())
+    }
+
+    pub fn finalize_async<'a>(
+        &'a mut self,
+        global_pipeline: &'a PipelineComponents,
+        sink: &'a mut ModuleRegistrationSink<'_>,
+    ) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            for pending in &self.pending {
+                pending.module_ref.validate_local_resolution_plans()?;
+            }
+            for pending in &self.pending {
+                pending.module_ref.seed_local_async_singletons().await?;
+            }
+            for pending in &self.pending {
+                pending.module_ref.initialize_local_singletons()?;
+            }
+
+            let pending = std::mem::take(&mut self.pending);
+            for pending in pending {
+                finalize_module(pending, global_pipeline, sink)?;
+            }
+            Ok(())
         })
     }
 
@@ -486,10 +416,10 @@ impl ModuleRegistry {
     }
 
     fn provider_override_or(&self, provider: ProviderDefinition) -> ProviderDefinition {
-        self.provider_overrides
-            .get(provider.token())
-            .cloned()
-            .unwrap_or(provider)
+        match self.provider_overrides.get(provider.token()) {
+            Some(replacement) => replacement.clone().with_enhancers_from(&provider),
+            None => provider,
+        }
     }
 
     fn module_override_or(&self, module: Arc<dyn Module>) -> Arc<dyn Module> {
@@ -498,6 +428,75 @@ impl ModuleRegistry {
             .cloned()
             .unwrap_or(module)
     }
+}
+
+fn finalize_module(
+    pending: PendingModuleRegistration,
+    global_pipeline: &PipelineComponents,
+    sink: &mut ModuleRegistrationSink<'_>,
+) -> Result<()> {
+    let PendingModuleRegistration {
+        module,
+        name,
+        route_prefix,
+        module_ref,
+        import_names,
+        exported_tokens,
+        is_global,
+    } = pending;
+
+    module_ref.initialize_local_providers()?;
+    module.on_module_init(&module_ref)?;
+
+    let mut module_pipeline = PipelineComponents::default();
+    for middleware in module.middleware() {
+        module_pipeline.push_middleware_arc(middleware);
+    }
+    let mut middleware_consumer = MiddlewareConsumer::new();
+    module.configure(&mut middleware_consumer, &module_ref)?;
+
+    let context = RouteRegistrationContext {
+        module_name: &name,
+        module_ref: &module_ref,
+        global_pipeline,
+        module_pipeline: &module_pipeline,
+        middleware_consumer: &middleware_consumer,
+        route_prefix: &route_prefix,
+    };
+    for controller in module.controllers(&module_ref)? {
+        register_controller(&context, controller, sink.routes)?;
+    }
+    for route in module.routes()? {
+        sink.routes.push(context.prepare_route(route)?);
+    }
+    sink.gateways
+        .extend(module.gateways(&module_ref)?.into_iter().map(|gateway| {
+            gateway
+                .with_module_name(&name)
+                .with_module_ref(module_ref.clone())
+        }));
+    sink.message_patterns
+        .extend(
+            module
+                .message_patterns(&module_ref)?
+                .into_iter()
+                .map(|pattern| {
+                    pattern
+                        .with_module_name(&name)
+                        .with_module_ref(module_ref.clone())
+                }),
+        );
+
+    sink.modules.push(name);
+    sink.module_instances.push(ModuleInstance {
+        module,
+        module_ref,
+        imports: import_names,
+        exports: exported_tokens,
+        is_global,
+        route_prefix: (!route_prefix.is_empty()).then_some(route_prefix),
+    });
+    Ok(())
 }
 
 #[derive(Clone)]
