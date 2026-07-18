@@ -49,8 +49,8 @@ tcp-transport = ["dep:tokio"]
 [dependencies]
 a3s-acl = { version = "0.2.1", optional = true }
 a3s-boot-macros = { version = "0.1.2", path = "macros", optional = true }
-a3s-event = { version = "0.3.0", path = "../event", default-features = false, optional = true }
-a3s-lane = { version = "0.5.1", path = "../lane", default-features = false, optional = true }
+a3s-event = { version = "0.3.0", default-features = false, optional = true }
+a3s-lane = { version = "0.5.1", default-features = false, optional = true }
 async-nats = { version = "0.49.1", default-features = false, optional = true }
 axum = { version = "0.8", features = ["ws"], optional = true }
 bytes = { version = "1", optional = true }
