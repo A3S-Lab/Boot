@@ -1,15 +1,49 @@
 use super::definition::RouteDefinition;
 use crate::routing::path::{join_paths, route_shape_key, route_specificity};
-use crate::{BootError, BootRequest, BootResponse, ExecutionContext, MiddlewareOutcome, Result};
+use crate::{
+    BootError, BootRequest, BootResponse, CallHandler, ContextId, ContextIdFactory,
+    ExecutionContext, MiddlewareOutcome, Result,
+};
+use std::sync::{Arc, Mutex};
+
+#[derive(Clone)]
+struct PipelineErrorContext {
+    context: Arc<Mutex<ExecutionContext>>,
+}
+
+impl PipelineErrorContext {
+    fn new(context: ExecutionContext) -> Self {
+        Self {
+            context: Arc::new(Mutex::new(context)),
+        }
+    }
+
+    fn replace(&self, context: ExecutionContext) {
+        *self
+            .context
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = context;
+    }
+
+    fn snapshot(&self) -> ExecutionContext {
+        self.context
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
 
 impl RouteDefinition {
     pub async fn call(&self, mut request: BootRequest) -> Result<BootResponse> {
+        let context_id = ContextIdFactory::create();
+        request = self.attach_request_context(request, &context_id);
         if !self.method.matches(request.method) {
             let message = format!("{} {}", request.method.as_str(), request.path);
             return self
                 .handle_error(
                     self.execution_context(request),
                     BootError::MethodNotAllowed(message),
+                    &context_id,
                 )
                 .await;
         }
@@ -22,12 +56,13 @@ impl RouteDefinition {
                     .handle_error(
                         self.execution_context(request),
                         BootError::NotFound(message),
+                        &context_id,
                     )
                     .await;
             }
             Err(error) => {
                 return self
-                    .handle_error(self.execution_context(request), error)
+                    .handle_error(self.execution_context(request), error, &context_id)
                     .await;
             }
         };
@@ -40,20 +75,17 @@ impl RouteDefinition {
                     .handle_error(
                         self.execution_context(request),
                         BootError::NotFound(message),
+                        &context_id,
                     )
                     .await;
             }
             Err(error) => {
                 return self
-                    .handle_error(self.execution_context(request), error)
+                    .handle_error(self.execution_context(request), error, &context_id)
                     .await;
             }
         };
         request = request.with_host_params(host_params);
-        if let Some(module_ref) = &self.module_ref {
-            request = request.with_module_ref(module_ref.request_scope());
-        }
-
         #[cfg(feature = "request-context")]
         {
             let context = crate::RequestContext::from_route_request(
@@ -63,24 +95,31 @@ impl RouteDefinition {
                 self.controller_prefix.clone(),
                 self.metadata.clone(),
             );
-            return crate::RequestContext::scope(context, self.call_pipeline(request)).await;
+            return crate::RequestContext::scope(context, self.call_pipeline(request, context_id))
+                .await;
         }
 
         #[cfg(not(feature = "request-context"))]
         {
-            self.call_pipeline(request).await
+            self.call_pipeline(request, context_id).await
         }
     }
 
-    async fn call_pipeline(&self, mut request: BootRequest) -> Result<BootResponse> {
+    async fn call_pipeline(
+        &self,
+        mut request: BootRequest,
+        context_id: ContextId,
+    ) -> Result<BootResponse> {
         for middleware in &self.middleware {
             let context_request = request.clone();
             request = match middleware.handle(request).await {
-                Ok(MiddlewareOutcome::Continue(request)) => request,
+                Ok(MiddlewareOutcome::Continue(request)) => {
+                    self.attach_request_context(request, &context_id)
+                }
                 Ok(MiddlewareOutcome::Respond(response)) => return Ok(response),
                 Err(error) => {
                     return self
-                        .handle_error(self.execution_context(context_request), error)
+                        .handle_error(self.execution_context(context_request), error, &context_id)
                         .await;
                 }
             };
@@ -89,48 +128,92 @@ impl RouteDefinition {
         let context = self.execution_context(request.clone());
 
         for guard in &self.guards {
-            let can_activate = match guard.inner().can_activate(context.clone()).await {
+            let guard = match guard.resolve(&context_id) {
+                Ok(guard) => guard,
+                Err(error) => {
+                    return self.handle_error(context.clone(), error, &context_id).await;
+                }
+            };
+            let can_activate = match guard.can_activate(context.clone()).await {
                 Ok(can_activate) => can_activate,
-                Err(error) => return self.handle_error(context.clone(), error).await,
+                Err(error) => {
+                    return self.handle_error(context.clone(), error, &context_id).await;
+                }
             };
 
             if !can_activate {
                 let message = format!("{} {}", context.method.as_str(), context.request_path);
                 return self
-                    .handle_error(context, BootError::Forbidden(message))
+                    .handle_error(context, BootError::Forbidden(message), &context_id)
                     .await;
             }
         }
 
-        for (index, interceptor) in self.interceptors.iter().enumerate() {
-            if let Err(error) = interceptor.inner().before(context.clone()).await {
-                return self.handle_error(context.clone(), error).await;
+        let mut resolved_interceptors = Vec::with_capacity(self.interceptors.len());
+        for interceptor in &self.interceptors {
+            match interceptor.resolve(&context_id) {
+                Ok(interceptor) => resolved_interceptors.push(interceptor),
+                Err(error) => {
+                    return self.handle_error(context.clone(), error, &context_id).await;
+                }
             }
-
-            let mut response = match interceptor.inner().short_circuit(context.clone()).await {
-                Ok(Some(response)) => response,
-                Ok(None) => continue,
-                Err(error) => return self.handle_error(context.clone(), error).await,
-            };
-
-            for interceptor in self.interceptors[..index].iter().rev() {
-                response = match interceptor.inner().after(context.clone(), response).await {
-                    Ok(response) => response,
-                    Err(error) => return self.handle_error(context.clone(), error).await,
-                };
-            }
-
-            return Ok(response);
         }
 
+        let error_context = PipelineErrorContext::new(context.clone());
+        let terminal_context = context.clone();
+        let terminal_error_context = error_context.clone();
+        let handler_context_id = context_id.clone();
+        let mut next = CallHandler::from_fn(move || {
+            terminal_error_context.replace(terminal_context.clone());
+            self.call_handler_pipeline(
+                request.clone(),
+                terminal_error_context.clone(),
+                handler_context_id.clone(),
+            )
+        });
+        for interceptor in resolved_interceptors.iter().rev() {
+            let interceptor_context = context.clone();
+            let success_context = context.clone();
+            let interceptor_error_context = error_context.clone();
+            let downstream = next.clone();
+            next = CallHandler::from_fn(move || {
+                interceptor_error_context.replace(interceptor_context.clone());
+                let future = interceptor.intercept(interceptor_context.clone(), downstream.clone());
+                let success_context = success_context.clone();
+                let interceptor_error_context = interceptor_error_context.clone();
+                async move {
+                    let result = future.await;
+                    if result.is_ok() {
+                        interceptor_error_context.replace(success_context);
+                    }
+                    result
+                }
+            });
+        }
+
+        match next.handle().await {
+            Ok(response) => Ok(response),
+            Err(error) => {
+                self.handle_error(error_context.snapshot(), error, &context_id)
+                    .await
+            }
+        }
+    }
+
+    async fn call_handler_pipeline(
+        &self,
+        mut request: BootRequest,
+        error_context: PipelineErrorContext,
+        context_id: ContextId,
+    ) -> Result<BootResponse> {
         for pipe in &self.pipes {
             let context_request = request.clone();
-            request = match pipe.inner().transform(request).await {
-                Ok(request) => request,
+            let pipe = pipe.resolve(&context_id)?;
+            request = match pipe.transform(request).await {
+                Ok(request) => self.attach_request_context(request, &context_id),
                 Err(error) => {
-                    return self
-                        .handle_error(self.execution_context(context_request), error)
-                        .await;
+                    error_context.replace(self.execution_context(context_request));
+                    return Err(error);
                 }
             };
         }
@@ -141,27 +224,14 @@ impl RouteDefinition {
                 request = match validator(request, self.validation_options) {
                     Ok(request) => request,
                     Err(error) => {
-                        return self
-                            .handle_error(self.execution_context(context_request), error)
-                            .await;
+                        error_context.replace(self.execution_context(context_request));
+                        return Err(error);
                     }
                 };
             }
         }
 
-        let mut response = match self.handler.call(request).await {
-            Ok(response) => response,
-            Err(error) => return self.handle_error(context, error).await,
-        };
-
-        for interceptor in self.interceptors.iter().rev() {
-            response = match interceptor.inner().after(context.clone(), response).await {
-                Ok(response) => response,
-                Err(error) => return self.handle_error(context.clone(), error).await,
-            };
-        }
-
-        Ok(response)
+        self.handler.call(request).await
     }
 
     /// Dispatch a request through this route and convert unhandled errors into Boot HTTP responses.
@@ -227,10 +297,11 @@ impl RouteDefinition {
         &self,
         context: ExecutionContext,
         error: BootError,
+        context_id: &ContextId,
     ) -> Result<BootResponse> {
         for filter in self.filters.iter().rev() {
+            let filter = filter.resolve(context_id)?;
             if let Some(response) = filter
-                .inner()
                 .catch(context.clone(), error.clone_for_filter())
                 .await?
             {
@@ -238,5 +309,12 @@ impl RouteDefinition {
             }
         }
         Err(error)
+    }
+
+    fn attach_request_context(&self, request: BootRequest, context_id: &ContextId) -> BootRequest {
+        match &self.module_ref {
+            Some(module_ref) => request.with_module_ref(module_ref.context_scope(context_id)),
+            None => request,
+        }
     }
 }

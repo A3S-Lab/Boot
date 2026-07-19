@@ -27,6 +27,7 @@ pub(crate) fn expand_message_controller(
 
     let self_ty = item_impl.self_ty.clone();
     let mut patterns = Vec::new();
+    let mut provider_patterns = Vec::new();
     let mut errors: Option<syn::Error> = None;
     let (impl_attrs, impl_decorator_errors) = expand_apply_decorators_attrs(&item_impl.attrs);
     for error in impl_decorator_errors {
@@ -135,14 +136,31 @@ pub(crate) fn expand_message_controller(
             match message_pattern_registration(
                 method,
                 input.clone(),
-                spec,
+                spec.clone(),
                 validation_options,
                 &controller_metadata,
                 &metadata_specs,
                 &controller_pipeline,
                 &pipeline_specs,
+                MessageControllerPatternKind::Instance,
             ) {
-                Ok(pattern) => patterns.push(pattern),
+                Ok(pattern) => {
+                    patterns.push(pattern);
+                    match message_pattern_registration(
+                        method,
+                        input.clone(),
+                        spec,
+                        validation_options,
+                        &controller_metadata,
+                        &metadata_specs,
+                        &controller_pipeline,
+                        &pipeline_specs,
+                        MessageControllerPatternKind::Provider,
+                    ) {
+                        Ok(pattern) => provider_patterns.push(pattern),
+                        Err(error) => push_error(&mut errors, error),
+                    }
+                }
                 Err(error) => push_error(&mut errors, error),
             }
         }
@@ -165,8 +183,26 @@ pub(crate) fn expand_message_controller(
                 )*
                 Ok(__a3s_boot_patterns)
             }
+
+            pub fn provider_message_patterns(
+            ) -> ::a3s_boot::Result<::std::vec::Vec<::a3s_boot::MessagePatternDefinition>>
+            where
+                Self: ::std::marker::Send + ::std::marker::Sync + 'static,
+            {
+                let mut __a3s_boot_patterns = ::std::vec::Vec::new();
+                #(
+                    __a3s_boot_patterns.push(#provider_patterns);
+                )*
+                Ok(__a3s_boot_patterns)
+            }
         }
     })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum MessageControllerPatternKind {
+    Instance,
+    Provider,
 }
 
 fn take_message_pattern_attrs(
@@ -213,6 +249,7 @@ fn message_pattern_registration(
     metadata_specs: &[MetadataSpec],
     controller_pipeline: &[proc_macro2::TokenStream],
     pipeline_specs: &[PipelineSpec],
+    controller_pattern_kind: MessageControllerPatternKind,
 ) -> Result<proc_macro2::TokenStream> {
     let method_ident = &method.sig.ident;
     let pattern = spec.args.pattern;
@@ -220,15 +257,41 @@ fn message_pattern_registration(
     let args = message_handler_args(input)?;
     let definition = match spec.kind {
         MessagePatternAttrKind::Message => {
-            let handler = message_request_handler(method_ident, raw, args.clone());
-            quote! {
-                ::a3s_boot::MessagePatternDefinition::request(#pattern, #handler)?
+            let handler = match controller_pattern_kind {
+                MessageControllerPatternKind::Instance => {
+                    message_request_handler(method_ident, raw, args.clone())
+                }
+                MessageControllerPatternKind::Provider => {
+                    provider_message_request_factory(method_ident, raw, args.clone())
+                }
+            };
+            if controller_pattern_kind == MessageControllerPatternKind::Provider {
+                quote! {
+                    ::a3s_boot::MessagePatternDefinition::request_scoped(#pattern, #handler)?
+                }
+            } else {
+                quote! {
+                    ::a3s_boot::MessagePatternDefinition::request(#pattern, #handler)?
+                }
             }
         }
         MessagePatternAttrKind::Event => {
-            let handler = message_event_handler(method_ident, args.clone());
-            quote! {
-                ::a3s_boot::MessagePatternDefinition::event(#pattern, #handler)?
+            let handler = match controller_pattern_kind {
+                MessageControllerPatternKind::Instance => {
+                    message_event_handler(method_ident, args.clone())
+                }
+                MessageControllerPatternKind::Provider => {
+                    provider_message_event_factory(method_ident, args.clone())
+                }
+            };
+            if controller_pattern_kind == MessageControllerPatternKind::Provider {
+                quote! {
+                    ::a3s_boot::MessagePatternDefinition::event_scoped(#pattern, #handler)?
+                }
+            } else {
+                quote! {
+                    ::a3s_boot::MessagePatternDefinition::event(#pattern, #handler)?
+                }
             }
         }
     };
@@ -285,6 +348,31 @@ fn message_request_handler(
     }
 }
 
+fn provider_message_request_factory(
+    method_ident: &Ident,
+    raw: bool,
+    args: MessageHandlerArgs,
+) -> proc_macro2::TokenStream {
+    let controller_name = format_ident!("__a3s_boot_message_{}", method_ident);
+    let bindings = args.bindings();
+    let call_args = args.call_args();
+    let call = message_request_call(method_ident, &controller_name, raw, quote!(#(#call_args),*));
+    quote! {
+        {
+            move |__a3s_boot_module_ref: &::a3s_boot::ModuleRef| {
+                let #controller_name = __a3s_boot_module_ref.get::<Self>()?;
+                Ok(move |__a3s_boot_message: ::a3s_boot::TransportMessage| {
+                    let #controller_name = ::std::sync::Arc::clone(&#controller_name);
+                    async move {
+                        #(#bindings)*
+                        #call
+                    }
+                })
+            }
+        }
+    }
+}
+
 fn message_request_call(
     method_ident: &Ident,
     controller_name: &Ident,
@@ -322,6 +410,30 @@ fn message_event_handler(
                     let _ = #controller_name.#method_ident(#(#call_args),*).await?;
                     Ok(())
                 }
+            }
+        }
+    }
+}
+
+fn provider_message_event_factory(
+    method_ident: &Ident,
+    args: MessageHandlerArgs,
+) -> proc_macro2::TokenStream {
+    let controller_name = format_ident!("__a3s_boot_event_{}", method_ident);
+    let bindings = args.bindings();
+    let call_args = args.call_args();
+    quote! {
+        {
+            move |__a3s_boot_module_ref: &::a3s_boot::ModuleRef| {
+                let #controller_name = __a3s_boot_module_ref.get::<Self>()?;
+                Ok(move |__a3s_boot_message: ::a3s_boot::TransportMessage| {
+                    let #controller_name = ::std::sync::Arc::clone(&#controller_name);
+                    async move {
+                        #(#bindings)*
+                        let _ = #controller_name.#method_ident(#(#call_args),*).await?;
+                        Ok(())
+                    }
+                })
             }
         }
     }
@@ -540,11 +652,13 @@ impl MessagePatternAttrKind {
     }
 }
 
+#[derive(Clone)]
 struct MessagePatternSpec {
     kind: MessagePatternAttrKind,
     args: MessagePatternArgs,
 }
 
+#[derive(Clone)]
 struct MessagePatternArgs {
     pattern: LitStr,
     raw: Option<Ident>,

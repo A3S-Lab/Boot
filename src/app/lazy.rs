@@ -99,6 +99,9 @@ impl LazyModuleLoader {
     ///
     /// Lazy-loaded modules are provider-only: controllers, routes, gateways,
     /// middleware, message patterns, and lifecycle hooks are not registered.
+    /// Newly loaded global modules are rejected because changing global
+    /// visibility after singleton initialization would make the existing
+    /// provider graph inconsistent.
     pub fn load<M>(&self, module: M) -> Result<LazyLoadedModule>
     where
         M: Module,
@@ -108,8 +111,19 @@ impl LazyModuleLoader {
 
     /// Load a shared module on demand and return its provider container.
     pub fn load_arc(&self, module: Arc<dyn Module>) -> Result<LazyLoadedModule> {
-        let mut visiting = Vec::new();
-        self.load_arc_inner(module, &mut visiting)
+        let name = validate_lazy_module_name(module.name())?;
+        if let Some(cached) = self.registry.cached(name)? {
+            return Ok(cached);
+        }
+
+        let mut graph = LazyModuleGraph::default();
+        let loaded = self.register_arc_inner(module, &mut graph, false)?;
+        graph.validate()?;
+        graph.initialize()?;
+        self.registry.cache_modules(&graph.pending)?;
+        self.registry
+            .cached(loaded.name())?
+            .ok_or_else(|| missing_cached_lazy_module(loaded.name()))
     }
 
     /// Load a module with async singleton provider factories on demand.
@@ -122,122 +136,165 @@ impl LazyModuleLoader {
 
     /// Load a shared module with async singleton provider factories on demand.
     pub async fn load_arc_async(&self, module: Arc<dyn Module>) -> Result<LazyLoadedModule> {
-        let mut visiting = Vec::new();
-        self.load_arc_async_inner(module, &mut visiting).await
-    }
-
-    fn load_arc_inner(
-        &self,
-        module: Arc<dyn Module>,
-        visiting: &mut Vec<String>,
-    ) -> Result<LazyLoadedModule> {
         let name = validate_lazy_module_name(module.name())?;
         if let Some(cached) = self.registry.cached(name)? {
             return Ok(cached);
         }
 
-        enter_lazy_module(visiting, name)?;
-        let result = self.build_lazy_module(module, name, visiting);
-        visiting.pop();
-        result
+        let mut graph = LazyModuleGraph::default();
+        let loaded = self
+            .register_arc_async_inner(module, &mut graph, false)
+            .await?;
+        graph.validate()?;
+        graph.initialize_async().await?;
+        self.registry.cache_modules(&graph.pending)?;
+        self.registry
+            .cached(loaded.name())?
+            .ok_or_else(|| missing_cached_lazy_module(loaded.name()))
     }
 
-    fn build_lazy_module(
+    fn register_arc_inner(
         &self,
         module: Arc<dyn Module>,
-        name: &str,
-        visiting: &mut Vec<String>,
+        graph: &mut LazyModuleGraph,
+        allow_active: bool,
     ) -> Result<LazyLoadedModule> {
-        let mut imported_modules = Vec::new();
-        for imported in module.imports() {
-            imported_modules.push(self.load_arc_inner(imported, visiting)?);
+        let name = validate_lazy_module_name(module.name())?;
+        if let Some(cached) = self.registry.cached(name)? {
+            return Ok(cached);
         }
-
-        let module_ref = self.create_module_ref(&imported_modules)?;
-        for provider in module.providers()? {
-            module_ref.register(provider)?;
+        if let Some(registered) = graph.registered.get(name) {
+            return Ok(registered.clone());
         }
-        module_ref.initialize_local_singletons()?;
-
-        let exports = self.create_exports(&module_ref, module.exports()?)?;
-        if module.is_global() {
-            self.export_global(&exports)?;
+        if let Some(active) = graph.active.get(name) {
+            if allow_active {
+                return Ok(active.clone());
+            }
+            return Err(cyclic_lazy_module_error(&graph.visiting, name));
         }
+        reject_lazy_global(module.as_ref(), name)?;
 
-        let loaded = LazyLoadedModule::new(name.to_string(), module_ref, exports);
-        self.registry.cache_module(loaded)
+        enter_lazy_module(&mut graph.visiting, name)?;
+        let loaded = LazyLoadedModule::new(name.to_string(), ModuleRef::new(), ModuleRef::new());
+        graph.active.insert(name.to_string(), loaded.clone());
+        let result = self.register_lazy_module(module, &loaded, graph);
+        graph.active.remove(name);
+        graph.visiting.pop();
+        result?;
+
+        graph.registered.insert(name.to_string(), loaded.clone());
+        graph.pending.push(loaded.clone());
+        Ok(loaded)
     }
 
-    fn load_arc_async_inner<'a>(
+    fn register_lazy_module(
+        &self,
+        module: Arc<dyn Module>,
+        loaded: &LazyLoadedModule,
+        graph: &mut LazyModuleGraph,
+    ) -> Result<()> {
+        let mut imported_modules = Vec::new();
+        for imported in module.imports() {
+            imported_modules.push(self.register_arc_inner(imported, graph, false)?);
+        }
+        for imported in module.forward_imports() {
+            imported_modules.push(self.register_arc_inner(imported, graph, true)?);
+        }
+
+        self.prepare_module_ref(&loaded.module_ref, &imported_modules)?;
+        for provider in module.providers()? {
+            reject_lazy_provider_enhancers(&provider, loaded.name())?;
+            loaded.module_ref.register(provider)?;
+        }
+        self.populate_exports(&loaded.exports, &loaded.module_ref, module.exports()?)
+    }
+
+    fn register_arc_async_inner<'a>(
         &'a self,
         module: Arc<dyn Module>,
-        visiting: &'a mut Vec<String>,
+        graph: &'a mut LazyModuleGraph,
+        allow_active: bool,
     ) -> BoxFuture<'a, Result<LazyLoadedModule>> {
         Box::pin(async move {
             let name = validate_lazy_module_name(module.name())?;
             if let Some(cached) = self.registry.cached(name)? {
                 return Ok(cached);
             }
+            if let Some(registered) = graph.registered.get(name) {
+                return Ok(registered.clone());
+            }
+            if let Some(active) = graph.active.get(name) {
+                if allow_active {
+                    return Ok(active.clone());
+                }
+                return Err(cyclic_lazy_module_error(&graph.visiting, name));
+            }
+            reject_lazy_global(module.as_ref(), name)?;
 
-            enter_lazy_module(visiting, name)?;
-            let result = self.build_lazy_module_async(module, name, visiting).await;
-            visiting.pop();
-            result
+            enter_lazy_module(&mut graph.visiting, name)?;
+            let loaded =
+                LazyLoadedModule::new(name.to_string(), ModuleRef::new(), ModuleRef::new());
+            graph.active.insert(name.to_string(), loaded.clone());
+            let result = self
+                .register_lazy_module_async(module, &loaded, graph)
+                .await;
+            graph.active.remove(name);
+            graph.visiting.pop();
+            result?;
+
+            graph.registered.insert(name.to_string(), loaded.clone());
+            graph.pending.push(loaded.clone());
+            Ok(loaded)
         })
     }
 
-    fn build_lazy_module_async<'a>(
+    fn register_lazy_module_async<'a>(
         &'a self,
         module: Arc<dyn Module>,
-        name: &'a str,
-        visiting: &'a mut Vec<String>,
-    ) -> BoxFuture<'a, Result<LazyLoadedModule>> {
+        loaded: &'a LazyLoadedModule,
+        graph: &'a mut LazyModuleGraph,
+    ) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
             let mut imported_modules = Vec::new();
             for imported in module.imports() {
-                imported_modules.push(self.load_arc_async_inner(imported, visiting).await?);
+                imported_modules.push(
+                    self.register_arc_async_inner(imported, graph, false)
+                        .await?,
+                );
+            }
+            for imported in module.forward_imports() {
+                imported_modules.push(self.register_arc_async_inner(imported, graph, true).await?);
             }
 
-            let module_ref = self.create_module_ref(&imported_modules)?;
+            self.prepare_module_ref(&loaded.module_ref, &imported_modules)?;
             for provider in module.providers()? {
-                module_ref.register_async(provider).await?;
+                reject_lazy_provider_enhancers(&provider, loaded.name())?;
+                loaded.module_ref.register_async(provider).await?;
             }
-            module_ref.initialize_local_singletons_async().await?;
-
-            let exports = self.create_exports(&module_ref, module.exports()?)?;
-            if module.is_global() {
-                self.export_global(&exports)?;
-            }
-
-            let loaded = LazyLoadedModule::new(name.to_string(), module_ref, exports);
-            self.registry.cache_module(loaded)
+            self.populate_exports(&loaded.exports, &loaded.module_ref, module.exports()?)
         })
     }
 
-    fn create_module_ref(&self, imported_modules: &[LazyLoadedModule]) -> Result<ModuleRef> {
-        let module_ref = ModuleRef::new();
+    fn prepare_module_ref(
+        &self,
+        module_ref: &ModuleRef,
+        imported_modules: &[LazyLoadedModule],
+    ) -> Result<()> {
         module_ref.add_visible_scope(self.registry.global_ref.clone())?;
         for imported in imported_modules {
             module_ref.add_visible_scope(imported.exports.clone())?;
         }
-        Ok(module_ref)
+        Ok(())
     }
 
-    fn create_exports(
+    fn populate_exports(
         &self,
+        exports: &ModuleRef,
         module_ref: &ModuleRef,
         tokens: Vec<ProviderToken>,
-    ) -> Result<ModuleRef> {
-        let exports = ModuleRef::new();
+    ) -> Result<()> {
         for token in tokens {
             exports.export_from(module_ref, &token)?;
-        }
-        Ok(exports)
-    }
-
-    fn export_global(&self, exports: &ModuleRef) -> Result<()> {
-        for token in exports.local_tokens()? {
-            self.registry.global_ref.export_from(exports, &token)?;
         }
         Ok(())
     }
@@ -271,13 +328,14 @@ impl LazyModuleRegistry {
         Ok(())
     }
 
-    fn cache_module(&self, module: LazyLoadedModule) -> Result<LazyLoadedModule> {
+    fn cache_modules(&self, pending: &[LazyLoadedModule]) -> Result<()> {
         let mut modules = self.write_modules()?;
-        if let Some(cached) = modules.get(module.name()).cloned() {
-            return Ok(cached);
+        for module in pending {
+            modules
+                .entry(module.name.clone())
+                .or_insert_with(|| module.clone());
         }
-        modules.insert(module.name.clone(), module.clone());
-        Ok(module)
+        Ok(())
     }
 
     fn read_modules(
@@ -297,6 +355,40 @@ impl LazyModuleRegistry {
     }
 }
 
+#[derive(Default)]
+struct LazyModuleGraph {
+    registered: BTreeMap<String, LazyLoadedModule>,
+    active: BTreeMap<String, LazyLoadedModule>,
+    pending: Vec<LazyLoadedModule>,
+    visiting: Vec<String>,
+}
+
+impl LazyModuleGraph {
+    fn validate(&self) -> Result<()> {
+        for module in &self.pending {
+            module.module_ref.validate_local_resolution_plans()?;
+        }
+        Ok(())
+    }
+
+    fn initialize(&self) -> Result<()> {
+        for module in &self.pending {
+            module.module_ref.initialize_local_singletons()?;
+        }
+        Ok(())
+    }
+
+    async fn initialize_async(&self) -> Result<()> {
+        for module in &self.pending {
+            module.module_ref.seed_local_async_singletons().await?;
+        }
+        for module in &self.pending {
+            module.module_ref.initialize_local_singletons()?;
+        }
+        Ok(())
+    }
+}
+
 fn validate_lazy_module_name(name: &'static str) -> Result<&'static str> {
     if name.trim().is_empty() {
         return Err(BootError::EmptyModuleName);
@@ -306,14 +398,49 @@ fn validate_lazy_module_name(name: &'static str) -> Result<&'static str> {
 
 fn enter_lazy_module(visiting: &mut Vec<String>, name: &str) -> Result<()> {
     if let Some(index) = visiting.iter().position(|active| active == name) {
-        let mut chain = visiting[index..].to_vec();
-        chain.push(name.to_string());
-        return Err(BootError::Internal(format!(
-            "cyclic lazy module import detected: {}",
-            chain.join(" -> ")
-        )));
+        return Err(cyclic_lazy_module_error(&visiting[index..], name));
     }
 
     visiting.push(name.to_string());
     Ok(())
+}
+
+fn cyclic_lazy_module_error(visiting: &[String], name: &str) -> BootError {
+    let index = visiting
+        .iter()
+        .position(|active| active == name)
+        .unwrap_or(0);
+    let mut chain = visiting[index..].to_vec();
+    chain.push(name.to_string());
+    BootError::Internal(format!(
+        "cyclic lazy module import detected: {}",
+        chain.join(" -> ")
+    ))
+}
+
+fn reject_lazy_global(module: &dyn Module, name: &str) -> Result<()> {
+    if module.is_global() {
+        return Err(BootError::Internal(format!(
+            "lazy-loaded global module `{name}` would change the finalized application provider graph; register global modules eagerly"
+        )));
+    }
+    Ok(())
+}
+
+fn reject_lazy_provider_enhancers(
+    provider: &crate::ProviderDefinition,
+    module_name: &str,
+) -> Result<()> {
+    if !provider.enhancer_markers().is_empty() {
+        return Err(BootError::Internal(format!(
+            "lazy-loaded module `{module_name}` declares an application-wide provider enhancer; register modules with APP_* providers eagerly"
+        )));
+    }
+    Ok(())
+}
+
+fn missing_cached_lazy_module(name: &str) -> BootError {
+    BootError::Internal(format!(
+        "lazy module `{name}` was initialized but not cached"
+    ))
 }

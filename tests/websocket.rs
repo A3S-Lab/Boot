@@ -1,13 +1,14 @@
 use a3s_boot::{
-    BootApplication, BootError, BootErrorKind, BootRequest, BoxFuture, ExecutionContext,
-    ExecutionProtocol, Guard, HttpMethod, Module, ModuleRef, ProviderDefinition, Result, Validate,
-    ValidationOptions, ValidationSchema, WebSocketContext, WebSocketExceptionResponse,
-    WebSocketGatewayConnection, WebSocketGatewayDefinition, WebSocketGatewayInitContext,
-    WebSocketGatewayServer, WebSocketInterceptor, WebSocketMessage,
+    BootApplication, BootError, BootErrorKind, BootRequest, BoxFuture, CallHandler,
+    ExecutionContext, ExecutionProtocol, Guard, HttpMethod, Module, ModuleRef, ProviderDefinition,
+    Result, Validate, ValidationOptions, ValidationSchema, WebSocketContext,
+    WebSocketExceptionResponse, WebSocketGatewayConnection, WebSocketGatewayDefinition,
+    WebSocketGatewayInitContext, WebSocketGatewayServer, WebSocketInterceptor, WebSocketMessage,
     WebSocketSubscriptionDefinition,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -684,6 +685,117 @@ async fn global_websocket_guards_and_interceptors_wrap_gateway_and_subscription_
             "after:global"
         ]
     );
+}
+
+struct RecoverWsInterceptor;
+
+impl WebSocketInterceptor for RecoverWsInterceptor {
+    fn intercept<'a>(
+        &'a self,
+        _context: WebSocketContext,
+        next: CallHandler<'a, Option<WebSocketMessage>>,
+    ) -> BoxFuture<'a, Result<Option<WebSocketMessage>>> {
+        Box::pin(async move {
+            match next.handle().await {
+                Ok(reply) => Ok(reply),
+                Err(error) => Ok(Some(WebSocketMessage::text("recovered", error.to_string()))),
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn websocket_interceptors_can_recover_errors_before_filters() {
+    let filter_calls = Arc::new(AtomicUsize::new(0));
+    let filter_log = Arc::clone(&filter_calls);
+    let gateway = WebSocketGatewayDefinition::new("/events")
+        .unwrap()
+        .with_interceptor(RecoverWsInterceptor)
+        .with_filter(move |_, _| {
+            let filter_log = Arc::clone(&filter_log);
+            async move {
+                filter_log.fetch_add(1, Ordering::SeqCst);
+                Ok(Some(WebSocketExceptionResponse::message(
+                    WebSocketMessage::text("filtered", "unexpected"),
+                )))
+            }
+        })
+        .subscribe("ping", |_| async {
+            Err::<WebSocketMessage, _>(BootError::BadRequest("broken handler".to_string()))
+        })
+        .unwrap();
+
+    let reply = gateway
+        .dispatch(
+            BootRequest::new(HttpMethod::Get, "/events"),
+            WebSocketMessage::new("ping", json!(null)),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(reply.event, "recovered");
+    assert!(reply.data.as_str().unwrap().contains("broken handler"));
+    assert_eq!(filter_calls.load(Ordering::SeqCst), 0);
+}
+
+struct RetryWsInterceptor;
+
+impl WebSocketInterceptor for RetryWsInterceptor {
+    fn intercept<'a>(
+        &'a self,
+        _context: WebSocketContext,
+        next: CallHandler<'a, Option<WebSocketMessage>>,
+    ) -> BoxFuture<'a, Result<Option<WebSocketMessage>>> {
+        Box::pin(async move {
+            match next.handle().await {
+                Ok(reply) => Ok(reply),
+                Err(_) => next.handle().await,
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn websocket_call_handler_replays_pipes_and_handler_for_retries() {
+    let pipe_calls = Arc::new(AtomicUsize::new(0));
+    let pipe_log = Arc::clone(&pipe_calls);
+    let handler_calls = Arc::new(AtomicUsize::new(0));
+    let handler_log = Arc::clone(&handler_calls);
+    let gateway = WebSocketGatewayDefinition::new("/events")
+        .unwrap()
+        .with_interceptor(RetryWsInterceptor)
+        .with_pipe(move |message: WebSocketMessage| {
+            let pipe_log = Arc::clone(&pipe_log);
+            async move {
+                pipe_log.fetch_add(1, Ordering::SeqCst);
+                Ok(message)
+            }
+        })
+        .subscribe("ping", move |message: WebSocketMessage| {
+            let handler_log = Arc::clone(&handler_log);
+            async move {
+                if handler_log.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Err(BootError::ServiceUnavailable("retry".to_string()))
+                } else {
+                    Ok(WebSocketMessage::new("pong", message.data))
+                }
+            }
+        })
+        .unwrap();
+
+    let reply = gateway
+        .dispatch(
+            BootRequest::new(HttpMethod::Get, "/events"),
+            WebSocketMessage::new("ping", json!({ "id": 1 })),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(reply, WebSocketMessage::new("pong", json!({ "id": 1 })));
+    assert_eq!(pipe_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(handler_calls.load(Ordering::SeqCst), 2);
 }
 
 #[tokio::test]

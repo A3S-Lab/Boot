@@ -2,6 +2,7 @@ use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::{Attribute, Ident, LitInt, LitStr, Result, Token};
 
+#[derive(Clone)]
 pub(super) struct RouteArgs {
     pub(super) path: LitStr,
     pub(super) status: Option<LitInt>,
@@ -72,6 +73,7 @@ impl Parse for RouteArgs {
     }
 }
 
+#[derive(Clone)]
 pub(super) struct RouteSpec {
     pub(super) kind: RouteKind,
     pub(super) args: RouteArgs,
@@ -96,6 +98,19 @@ pub(super) enum RouteKind {
 }
 
 impl RouteKind {
+    pub(super) fn http_method_ident(self) -> Ident {
+        match self {
+            Self::All => format_ident!("All"),
+            Self::Get | Self::Sse | Self::GetJson => format_ident!("Get"),
+            Self::Post | Self::PostJson => format_ident!("Post"),
+            Self::Put | Self::PutJson => format_ident!("Put"),
+            Self::Patch | Self::PatchJson => format_ident!("Patch"),
+            Self::Delete | Self::DeleteJson => format_ident!("Delete"),
+            Self::Options => format_ident!("Options"),
+            Self::Head => format_ident!("Head"),
+        }
+    }
+
     pub(super) fn from_attribute(attr: &Attribute) -> Option<Self> {
         let ident = attr.path().segments.last()?.ident.to_string();
         match ident.as_str() {

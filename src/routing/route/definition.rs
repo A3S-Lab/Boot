@@ -11,7 +11,7 @@ use std::sync::Arc;
 #[cfg(feature = "cache")]
 use std::time::Duration;
 
-use crate::routing::handler::{RequestScopedRouteHandler, RouteHandler};
+use crate::routing::handler::{ProviderRouteHandler, RequestScopedRouteHandler, RouteHandler};
 use crate::routing::host::{
     host_param_names, host_shape_key, host_specificity, match_host_params, match_host_shape,
     validate_host_pattern,
@@ -29,7 +29,7 @@ pub struct RouteDefinition {
     pub(super) method: HttpMethod,
     pub(super) path: String,
     pub(super) host: Option<String>,
-    pub(super) handler: Arc<dyn RouteHandler>,
+    pub(crate) handler: Arc<dyn RouteHandler>,
     pub(super) middleware: Vec<Arc<dyn Middleware>>,
     pub(super) pipes: Vec<PipelineComponent<dyn Pipe>>,
     pub(super) guards: Vec<PipelineComponent<dyn Guard>>,
@@ -85,6 +85,20 @@ impl RouteDefinition {
         H: RouteHandler,
     {
         Self::new(method, path, RequestScopedRouteHandler::new(factory))
+    }
+
+    /// Build a route whose handler resolves a provider from the current request
+    /// scope before constructing the concrete route handler.
+    pub fn new_provider<T, F>(
+        method: HttpMethod,
+        path: impl Into<String>,
+        factory: F,
+    ) -> Result<Self>
+    where
+        T: Send + Sync + 'static,
+        F: Fn(Arc<T>) -> Result<RouteDefinition> + Send + Sync + 'static,
+    {
+        Self::new(method, path, ProviderRouteHandler::<T, F>::new(factory))
     }
 
     pub fn method(&self) -> HttpMethod {

@@ -1,9 +1,9 @@
 use a3s_boot::{
-    BootApplication, BootError, BootErrorKind, BoxFuture, ExecutionContext, ExecutionInterceptor,
-    ExecutionProtocol, ExecutionTransportKind, Guard, InProcessTransport, MessagePatternDefinition,
-    MessageTransport, Module, ModuleRef, ProviderDefinition, Result, TransportContext,
-    TransportExceptionResponse, TransportInterceptor, TransportMessage, TransportReply, Validate,
-    ValidationOptions, ValidationSchema,
+    BootApplication, BootError, BootErrorKind, BoxFuture, CallHandler, ExecutionContext,
+    ExecutionInterceptor, ExecutionProtocol, ExecutionTransportKind, Guard, InProcessTransport,
+    MessagePatternDefinition, MessageTransport, Module, ModuleRef, ProviderDefinition, Result,
+    TransportContext, TransportExceptionResponse, TransportInterceptor, TransportMessage,
+    TransportReply, Validate, ValidationOptions, ValidationSchema,
 };
 #[cfg(feature = "grpc-transport")]
 use a3s_boot::{GrpcTransport, GrpcTransportClient, GrpcTransportOptions};
@@ -21,6 +21,7 @@ use a3s_boot::{RedisTransport, RedisTransportClient, RedisTransportOptions};
 use a3s_boot::{TcpTransport, TcpTransportClient};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 #[cfg(any(
     feature = "grpc-transport",
@@ -438,6 +439,147 @@ async fn transport_pipeline_runs_in_order() {
             "after:message"
         ]
     );
+}
+
+struct RecoveringTransportInterceptor;
+
+impl TransportInterceptor for RecoveringTransportInterceptor {
+    fn intercept<'a>(
+        &'a self,
+        _context: TransportContext,
+        next: CallHandler<'a, Option<TransportReply>>,
+    ) -> BoxFuture<'a, Result<Option<TransportReply>>> {
+        Box::pin(async move {
+            match next.handle().await {
+                Ok(reply) => Ok(reply),
+                Err(error) => Ok(Some(TransportReply::text(format!("recovered: {error}")))),
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn transport_interceptors_can_recover_errors_before_filters() {
+    let filter_calls = Arc::new(AtomicUsize::new(0));
+    let filter_log = Arc::clone(&filter_calls);
+    let pattern = MessagePatternDefinition::request("cats.recover", |_message| async {
+        Err::<TransportReply, BootError>(BootError::BadRequest("invalid cat payload".to_string()))
+    })
+    .unwrap()
+    .with_interceptor(RecoveringTransportInterceptor)
+    .with_filter(move |_context: TransportContext, _error: BootError| {
+        let filter_log = Arc::clone(&filter_log);
+        async move {
+            filter_log.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(TransportExceptionResponse::reply(
+                TransportReply::text("filtered"),
+            )))
+        }
+    });
+
+    let reply = pattern
+        .dispatch(TransportMessage::new("cats.recover", json!({ "id": 1 })))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        reply.data(),
+        &json!("recovered: bad request: invalid cat payload")
+    );
+    assert_eq!(filter_calls.load(Ordering::SeqCst), 0);
+}
+
+struct RetryUnavailableTransportInterceptor;
+
+impl TransportInterceptor for RetryUnavailableTransportInterceptor {
+    fn intercept<'a>(
+        &'a self,
+        _context: TransportContext,
+        next: CallHandler<'a, Option<TransportReply>>,
+    ) -> BoxFuture<'a, Result<Option<TransportReply>>> {
+        Box::pin(async move {
+            match next.handle().await {
+                Err(BootError::ServiceUnavailable(_)) => next.handle().await,
+                result => result,
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn transport_call_handlers_can_replay_the_downstream_pipeline() {
+    let pipe_calls = Arc::new(AtomicUsize::new(0));
+    let handler_calls = Arc::new(AtomicUsize::new(0));
+    let pipe_log = Arc::clone(&pipe_calls);
+    let handler_log = Arc::clone(&handler_calls);
+    let pattern = MessagePatternDefinition::request("cats.retry", move |message| {
+        let handler_log = Arc::clone(&handler_log);
+        async move {
+            let attempt = handler_log.fetch_add(1, Ordering::SeqCst) + 1;
+            if attempt == 1 {
+                return Err(BootError::ServiceUnavailable(
+                    "temporary failure".to_string(),
+                ));
+            }
+            Ok(TransportReply::new(message.data))
+        }
+    })
+    .unwrap()
+    .with_interceptor(RetryUnavailableTransportInterceptor)
+    .with_pipe(move |mut message: TransportMessage| {
+        let pipe_log = Arc::clone(&pipe_log);
+        async move {
+            let attempt = pipe_log.fetch_add(1, Ordering::SeqCst) + 1;
+            message.data = json!({ "pipeAttempt": attempt });
+            Ok(message)
+        }
+    });
+
+    let reply = pattern
+        .dispatch(TransportMessage::new("cats.retry", json!({ "id": 1 })))
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(reply.data(), &json!({ "pipeAttempt": 2 }));
+    assert_eq!(pipe_calls.load(Ordering::SeqCst), 2);
+    assert_eq!(handler_calls.load(Ordering::SeqCst), 2);
+}
+
+struct ShortCircuitTransportInterceptor;
+
+impl TransportInterceptor for ShortCircuitTransportInterceptor {
+    fn intercept<'a>(
+        &'a self,
+        _context: TransportContext,
+        _next: CallHandler<'a, Option<TransportReply>>,
+    ) -> BoxFuture<'a, Result<Option<TransportReply>>> {
+        Box::pin(async { Ok(Some(TransportReply::text("ignored event reply"))) })
+    }
+}
+
+#[tokio::test]
+async fn event_patterns_discard_short_circuit_interceptor_replies() {
+    let handler_calls = Arc::new(AtomicUsize::new(0));
+    let handler_log = Arc::clone(&handler_calls);
+    let pattern = MessagePatternDefinition::event("cats.created", move |_message| {
+        let handler_log = Arc::clone(&handler_log);
+        async move {
+            handler_log.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    })
+    .unwrap()
+    .with_interceptor(ShortCircuitTransportInterceptor);
+
+    let reply = pattern
+        .dispatch(TransportMessage::new("cats.created", json!({ "id": 1 })))
+        .await
+        .unwrap();
+
+    assert_eq!(reply, None);
+    assert_eq!(handler_calls.load(Ordering::SeqCst), 0);
 }
 
 #[tokio::test]

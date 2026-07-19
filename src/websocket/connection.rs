@@ -3,7 +3,10 @@ use super::gateway::WebSocketGatewayDefinition;
 use super::message::{send_to_outbounds, WebSocketMessage, WebSocketOutbound};
 use super::server::WebSocketGatewayServer;
 use super::state::normalize_room;
-use crate::{BootError, BootRequest, BoxFuture, Result};
+use crate::{
+    BootError, BootRequest, BoxFuture, CallHandler, ContextId, ContextIdFactory, Result,
+    WebSocketInterceptor,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -116,17 +119,32 @@ impl WebSocketGatewayConnection {
     }
 
     pub async fn dispatch(&self, message: WebSocketMessage) -> Result<Option<WebSocketMessage>> {
-        let context = WebSocketContext::new(&self.gateway, self.request.clone(), &message.event);
-        match self.dispatch_pipeline(message, context.clone()).await {
+        let context_id = ContextIdFactory::create();
+        let mut connection = self.clone();
+        if let Some(module_ref) = &connection.gateway.module_ref {
+            connection.request = connection
+                .request
+                .with_module_ref(module_ref.context_scope(&context_id));
+        }
+        let context = WebSocketContext::new(
+            &connection.gateway,
+            connection.request.clone(),
+            &message.event,
+        );
+        match connection
+            .dispatch_pipeline(message, context.clone(), context_id.clone())
+            .await
+        {
             Ok(reply) => Ok(reply),
-            Err(error) => self.handle_error(context, error).await,
+            Err(error) => connection.handle_error(context, error, &context_id).await,
         }
     }
 
     async fn dispatch_pipeline(
         &self,
-        mut message: WebSocketMessage,
+        message: WebSocketMessage,
         context: WebSocketContext,
+        context_id: ContextId,
     ) -> Result<Option<WebSocketMessage>> {
         let event = message.event.clone();
         let handler = self.gateway.handlers.get(&event).cloned().ok_or_else(|| {
@@ -134,7 +152,10 @@ impl WebSocketGatewayConnection {
         })?;
 
         for guard in &self.gateway.guards {
-            let can_activate = guard.inner().can_activate(context.clone()).await?;
+            let can_activate = guard
+                .resolve(&context_id)?
+                .can_activate(context.clone())
+                .await?;
             if !can_activate {
                 return Err(BootError::Forbidden(format!(
                     "websocket event {} {}",
@@ -143,7 +164,10 @@ impl WebSocketGatewayConnection {
             }
         }
         for guard in &handler.guards {
-            let can_activate = guard.inner().can_activate(context.clone()).await?;
+            let can_activate = guard
+                .resolve(&context_id)?
+                .can_activate(context.clone())
+                .await?;
             if !can_activate {
                 return Err(BootError::Forbidden(format!(
                     "websocket event {} {}",
@@ -152,45 +176,54 @@ impl WebSocketGatewayConnection {
             }
         }
 
-        for interceptor in &self.gateway.interceptors {
-            interceptor.inner().before(context.clone()).await?;
-        }
-        for interceptor in &handler.interceptors {
-            interceptor.inner().before(context.clone()).await?;
-        }
+        let interceptors = self
+            .gateway
+            .interceptors
+            .iter()
+            .chain(handler.interceptors.iter())
+            .map(|interceptor| interceptor.resolve(&context_id))
+            .collect::<Result<Vec<_>>>()?;
 
-        for pipe in &self.gateway.pipes {
-            message = pipe.inner().transform(message).await?;
-        }
-        for pipe in &handler.pipes {
-            message = pipe.inner().transform(message).await?;
-        }
+        let connection = self.clone();
+        let replay_handler = handler.clone();
+        let replay_message = message.clone();
+        let replay_context_id = context_id.clone();
+        let terminal = CallHandler::from_fn(move || {
+            let connection = connection.clone();
+            let handler = replay_handler.clone();
+            let mut message = replay_message.clone();
+            let context_id = replay_context_id.clone();
+            async move {
+                for pipe in &connection.gateway.pipes {
+                    message = pipe.resolve(&context_id)?.transform(message).await?;
+                }
+                for pipe in &handler.pipes {
+                    message = pipe.resolve(&context_id)?.transform(message).await?;
+                }
 
-        if handler.validation_enabled {
-            for validator in &handler.validators {
-                message = validator(message, handler.validation_options)?;
+                if handler.validation_enabled {
+                    for validator in &handler.validators {
+                        message = validator(message, handler.validation_options)?;
+                    }
+                }
+
+                handler.handler.call(connection, message).await
             }
-        }
+        });
 
-        let mut reply = handler.handler.call(self.clone(), message).await?;
-        for interceptor in handler.interceptors.iter().rev() {
-            reply = interceptor.inner().after(context.clone(), reply).await?;
-        }
-        for interceptor in self.gateway.interceptors.iter().rev() {
-            reply = interceptor.inner().after(context.clone(), reply).await?;
-        }
-        Ok(reply)
+        run_interceptor_chain(&interceptors, context, terminal).await
     }
 
     async fn handle_error(
         &self,
         context: WebSocketContext,
         error: BootError,
+        context_id: &ContextId,
     ) -> Result<Option<WebSocketMessage>> {
         if let Some(handler) = self.gateway.handlers.get(&context.event) {
             for filter in handler.filters.iter().rev() {
+                let filter = filter.resolve(context_id)?;
                 if let Some(response) = filter
-                    .inner()
                     .catch(context.clone(), error.clone_for_filter())
                     .await?
                 {
@@ -199,8 +232,8 @@ impl WebSocketGatewayConnection {
             }
         }
         for filter in self.gateway.filters.iter().rev() {
+            let filter = filter.resolve(context_id)?;
             if let Some(response) = filter
-                .inner()
                 .catch(context.clone(), error.clone_for_filter())
                 .await?
             {
@@ -209,6 +242,23 @@ impl WebSocketGatewayConnection {
         }
         Err(error)
     }
+}
+
+fn run_interceptor_chain<'a>(
+    interceptors: &'a [Arc<dyn WebSocketInterceptor>],
+    context: WebSocketContext,
+    terminal: CallHandler<'a, Option<WebSocketMessage>>,
+) -> BoxFuture<'a, Result<Option<WebSocketMessage>>> {
+    let Some((interceptor, remaining)) = interceptors.split_first() else {
+        return terminal.handle();
+    };
+
+    let next_context = context.clone();
+    let next_terminal = terminal.clone();
+    let next = CallHandler::from_fn(move || {
+        run_interceptor_chain(remaining, next_context.clone(), next_terminal.clone())
+    });
+    interceptor.intercept(context, next)
 }
 
 impl WebSocketConnection for WebSocketGatewayConnection {

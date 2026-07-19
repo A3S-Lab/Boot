@@ -169,6 +169,193 @@ struct LazyLifecycleModule {
     controller_calls: Arc<AtomicUsize>,
 }
 
+#[derive(Debug)]
+struct LazyForwardRequest {
+    id: usize,
+}
+
+#[derive(Debug)]
+struct LazyForwardContext {
+    request: Arc<LazyForwardRequest>,
+}
+
+#[derive(Debug)]
+struct LazyForwardContextRoot {
+    calls: Arc<AtomicUsize>,
+}
+
+impl Module for LazyForwardContextRoot {
+    fn name(&self) -> &'static str {
+        "lazy-forward-context-root"
+    }
+
+    fn forward_imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(LazyForwardContextFeature {
+            calls: Arc::clone(&self.calls),
+        })]
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        Ok(vec![ProviderDefinition::factory::<LazyForwardContext, _>(
+            |module_ref| {
+                Ok(LazyForwardContext {
+                    request: module_ref.get::<LazyForwardRequest>()?,
+                })
+            },
+        )
+        .depends_on::<LazyForwardRequest>()])
+    }
+}
+
+#[derive(Debug)]
+struct LazyForwardContextFeature {
+    calls: Arc<AtomicUsize>,
+}
+
+impl Module for LazyForwardContextFeature {
+    fn name(&self) -> &'static str {
+        "lazy-forward-context-feature"
+    }
+
+    fn forward_imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(LazyForwardContextRoot {
+            calls: Arc::clone(&self.calls),
+        })]
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        let calls = Arc::clone(&self.calls);
+        Ok(vec![ProviderDefinition::request_scoped::<
+            LazyForwardRequest,
+            _,
+        >(move |_| {
+            Ok(LazyForwardRequest {
+                id: calls.fetch_add(1, Ordering::SeqCst) + 1,
+            })
+        })])
+    }
+
+    fn exports(&self) -> Result<Vec<ProviderToken>> {
+        Ok(vec![ProviderToken::of::<LazyForwardRequest>()])
+    }
+}
+
+#[derive(Debug)]
+struct LazyForwardAsyncConfig {
+    value: &'static str,
+}
+
+#[derive(Debug)]
+struct LazyForwardAsyncService {
+    config: Arc<LazyForwardAsyncConfig>,
+}
+
+#[derive(Debug)]
+struct LazyForwardAsyncRoot {
+    log: Arc<std::sync::Mutex<Vec<&'static str>>>,
+}
+
+impl Module for LazyForwardAsyncRoot {
+    fn name(&self) -> &'static str {
+        "lazy-forward-async-root"
+    }
+
+    fn forward_imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(LazyForwardAsyncFeature {
+            log: Arc::clone(&self.log),
+        })]
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        let log = Arc::clone(&self.log);
+        Ok(vec![ProviderDefinition::async_factory::<
+            LazyForwardAsyncConfig,
+            _,
+            _,
+        >(move |_| {
+            let log = Arc::clone(&log);
+            async move {
+                log.lock().unwrap().push("config");
+                Ok(LazyForwardAsyncConfig { value: "ready" })
+            }
+        })])
+    }
+
+    fn exports(&self) -> Result<Vec<ProviderToken>> {
+        Ok(vec![ProviderToken::of::<LazyForwardAsyncConfig>()])
+    }
+}
+
+#[derive(Debug)]
+struct LazyForwardAsyncFeature {
+    log: Arc<std::sync::Mutex<Vec<&'static str>>>,
+}
+
+impl Module for LazyForwardAsyncFeature {
+    fn name(&self) -> &'static str {
+        "lazy-forward-async-feature"
+    }
+
+    fn forward_imports(&self) -> Vec<Arc<dyn Module>> {
+        vec![Arc::new(LazyForwardAsyncRoot {
+            log: Arc::clone(&self.log),
+        })]
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        let log = Arc::clone(&self.log);
+        Ok(vec![ProviderDefinition::async_factory::<
+            LazyForwardAsyncService,
+            _,
+            _,
+        >(move |module_ref| {
+            let log = Arc::clone(&log);
+            async move {
+                let config = module_ref.get::<LazyForwardAsyncConfig>()?;
+                log.lock().unwrap().push("service");
+                Ok(LazyForwardAsyncService { config })
+            }
+        })
+        .depends_on::<LazyForwardAsyncConfig>()])
+    }
+
+    fn exports(&self) -> Result<Vec<ProviderToken>> {
+        Ok(vec![ProviderToken::of::<LazyForwardAsyncService>()])
+    }
+}
+
+#[derive(Debug)]
+struct LateLazyGlobalValue;
+
+#[derive(Debug)]
+struct LateLazyGlobalModule {
+    calls: Arc<AtomicUsize>,
+}
+
+impl Module for LateLazyGlobalModule {
+    fn name(&self) -> &'static str {
+        "late-lazy-global"
+    }
+
+    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
+        let calls = Arc::clone(&self.calls);
+        Ok(vec![ProviderDefinition::factory::<LateLazyGlobalValue, _>(
+            move |_| {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(LateLazyGlobalValue)
+            },
+        )])
+    }
+
+    fn exports(&self) -> Result<Vec<ProviderToken>> {
+        Ok(vec![ProviderToken::of::<LateLazyGlobalValue>()])
+    }
+
+    fn is_global(&self) -> bool {
+        true
+    }
+}
+
 impl Module for LazyLifecycleModule {
     fn name(&self) -> &'static str {
         "lazy-lifecycle"
@@ -344,4 +531,100 @@ fn lazy_modules_do_not_register_controllers_or_lifecycle_hooks() {
     assert_eq!(module_calls.load(Ordering::SeqCst), 0);
     assert_eq!(provider_calls.load(Ordering::SeqCst), 0);
     assert_eq!(controller_calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn lazy_forward_graph_is_complete_before_contextual_scope_is_planned() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let app = BootApplication::builder().build().unwrap();
+    let loaded = app
+        .lazy_module_loader()
+        .unwrap()
+        .load(LazyForwardContextRoot {
+            calls: Arc::clone(&calls),
+        })
+        .unwrap();
+
+    assert!(loaded
+        .module_ref()
+        .provider_is_contextual::<LazyForwardContext>()
+        .unwrap());
+    assert!(
+        matches!(loaded.get::<LazyForwardContext>(), Err(BootError::Internal(message)) if message.contains("requires an active request scope"))
+    );
+
+    let first = loaded.module_ref().resolve::<LazyForwardContext>().unwrap();
+    let second = loaded.module_ref().resolve::<LazyForwardContext>().unwrap();
+
+    assert_eq!(first.request.id, 1);
+    assert_eq!(second.request.id, 2);
+    assert!(!Arc::ptr_eq(&first, &second));
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn lazy_async_forward_dependencies_seed_after_the_full_graph_is_registered() {
+    let log = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let app = BootApplication::builder().build().unwrap();
+    let loaded = app
+        .lazy_module_loader()
+        .unwrap()
+        .load_async(LazyForwardAsyncRoot {
+            log: Arc::clone(&log),
+        })
+        .await
+        .unwrap();
+
+    let config = loaded.get::<LazyForwardAsyncConfig>().unwrap();
+    let service = loaded.get::<LazyForwardAsyncService>().unwrap();
+
+    assert_eq!(config.value, "ready");
+    assert!(Arc::ptr_eq(&config, &service.config));
+    assert_eq!(log.lock().unwrap().as_slice(), ["config", "service"]);
+}
+
+#[test]
+fn lazy_loader_rejects_late_global_modules_before_factories_run() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let app = BootApplication::builder().build().unwrap();
+    let result = app
+        .lazy_module_loader()
+        .unwrap()
+        .load(LateLazyGlobalModule {
+            calls: Arc::clone(&calls),
+        });
+
+    assert!(
+        matches!(result, Err(BootError::Internal(message)) if message.contains("register global modules eagerly"))
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(matches!(
+        app.get::<LateLazyGlobalValue>(),
+        Err(BootError::MissingProvider(_))
+    ));
+}
+
+#[test]
+fn lazy_loader_can_reuse_an_eagerly_registered_global_module() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let app = BootApplication::builder()
+        .import(LateLazyGlobalModule {
+            calls: Arc::clone(&calls),
+        })
+        .build()
+        .unwrap();
+    let eager = app.get::<LateLazyGlobalValue>().unwrap();
+
+    let loaded = app
+        .lazy_module_loader()
+        .unwrap()
+        .load(LateLazyGlobalModule {
+            calls: Arc::clone(&calls),
+        })
+        .unwrap()
+        .get::<LateLazyGlobalValue>()
+        .unwrap();
+
+    assert!(Arc::ptr_eq(&eager, &loaded));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }

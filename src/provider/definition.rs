@@ -1,5 +1,10 @@
 use super::{AnyProvider, ModuleRef, ProviderToken};
-use crate::{BootError, BoxFuture, Result};
+use crate::pipeline::ProviderEnhancerMarker;
+use crate::{
+    BootError, BoxFuture, ExceptionFilter, Guard, Interceptor, Pipe, Result,
+    TransportExceptionFilter, TransportGuard, TransportInterceptor, TransportPipe,
+    WebSocketExceptionFilter, WebSocketGuard, WebSocketInterceptor, WebSocketPipe,
+};
 use std::fmt;
 use std::future::Future;
 use std::sync::Arc;
@@ -68,6 +73,14 @@ pub trait ProviderOnApplicationShutdown: Send + Sync + 'static {
 /// Builds an injectable value from the module provider graph.
 pub trait FromModuleRef: Sized + Send + Sync + 'static {
     fn from_module_ref(module_ref: &ModuleRef) -> Result<Self>;
+
+    /// Dependencies captured while constructing this provider.
+    ///
+    /// `#[injectable]` implements this automatically. Manual implementations
+    /// can return `None` when the dependency graph is opaque.
+    fn provider_dependencies() -> Option<Vec<ProviderDependency>> {
+        None
+    }
 }
 
 /// Lifetime strategy for provider resolution.
@@ -78,6 +91,57 @@ pub enum ProviderScope {
     Transient,
 }
 
+/// One provider dependency used to calculate contextual scope propagation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderDependency {
+    token: ProviderToken,
+    optional: bool,
+    lazy: bool,
+}
+
+impl ProviderDependency {
+    /// Declare a required typed dependency.
+    pub fn typed<T>() -> Self
+    where
+        T: Send + Sync + 'static,
+    {
+        Self::named(ProviderToken::of::<T>().as_str())
+    }
+
+    /// Declare a required named dependency.
+    pub fn named(token: impl Into<String>) -> Self {
+        Self {
+            token: ProviderToken::named(token),
+            optional: false,
+            lazy: false,
+        }
+    }
+
+    /// Mark this dependency as optional when its token is not visible.
+    pub fn optional(mut self) -> Self {
+        self.optional = true;
+        self
+    }
+
+    /// Mark this as a lazy handle that does not participate in scope bubbling.
+    pub fn lazy(mut self) -> Self {
+        self.lazy = true;
+        self
+    }
+
+    pub fn token(&self) -> &ProviderToken {
+        &self.token
+    }
+
+    pub fn is_optional(&self) -> bool {
+        self.optional
+    }
+
+    pub fn is_lazy(&self) -> bool {
+        self.lazy
+    }
+}
+
 /// A provider registration, similar to a Nest provider entry.
 #[derive(Clone)]
 pub struct ProviderDefinition {
@@ -86,6 +150,8 @@ pub struct ProviderDefinition {
     scope: ProviderScope,
     lifecycle: ProviderLifecycleHooks,
     alias_target: Option<ProviderToken>,
+    dependencies: Option<Arc<[ProviderDependency]>>,
+    enhancers: Arc<[ProviderEnhancerMarker]>,
 }
 
 #[derive(Clone)]
@@ -140,6 +206,14 @@ impl fmt::Debug for ProviderDefinition {
             .field("scope", &self.scope)
             .field("async", &self.factory.is_async())
             .field("alias_target", &self.alias_target)
+            .field("enhancers", &self.enhancers.len())
+            .field(
+                "dependencies",
+                &self
+                    .dependencies
+                    .as_ref()
+                    .map(|dependencies| dependencies.len()),
+            )
             .finish_non_exhaustive()
     }
 }
@@ -187,6 +261,8 @@ impl ProviderDefinition {
             scope: ProviderScope::Singleton,
             lifecycle: ProviderLifecycleHooks::default(),
             alias_target: None,
+            dependencies: Some(Arc::from([])),
+            enhancers: Arc::from([]),
         }
     }
 
@@ -219,6 +295,8 @@ impl ProviderDefinition {
             scope: ProviderScope::Singleton,
             lifecycle: ProviderLifecycleHooks::default(),
             alias_target: None,
+            dependencies: None,
+            enhancers: Arc::from([]),
         }
     }
 
@@ -235,6 +313,8 @@ impl ProviderDefinition {
             scope: ProviderScope::Singleton,
             lifecycle: ProviderLifecycleHooks::default(),
             alias_target: None,
+            dependencies: None,
+            enhancers: Arc::from([]),
         }
     }
 
@@ -271,6 +351,8 @@ impl ProviderDefinition {
             scope: ProviderScope::Singleton,
             lifecycle: ProviderLifecycleHooks::default(),
             alias_target: None,
+            dependencies: None,
+            enhancers: Arc::from([]),
         }
     }
 
@@ -289,6 +371,8 @@ impl ProviderDefinition {
             scope: ProviderScope::Singleton,
             lifecycle: ProviderLifecycleHooks::default(),
             alias_target: None,
+            dependencies: None,
+            enhancers: Arc::from([]),
         }
     }
 
@@ -296,14 +380,22 @@ impl ProviderDefinition {
     where
         T: FromModuleRef,
     {
-        Self::factory::<T, _>(T::from_module_ref)
+        let definition = Self::factory::<T, _>(T::from_module_ref);
+        match T::provider_dependencies() {
+            Some(dependencies) => definition.with_dependencies(dependencies),
+            None => definition,
+        }
     }
 
     pub fn named_injectable<T>(token: impl Into<String>) -> Self
     where
         T: FromModuleRef,
     {
-        Self::named_factory::<T, _>(token, T::from_module_ref)
+        let definition = Self::named_factory::<T, _>(token, T::from_module_ref);
+        match T::provider_dependencies() {
+            Some(dependencies) => definition.with_dependencies(dependencies),
+            None => definition,
+        }
     }
 
     pub fn alias<T>(target: ProviderToken) -> Self
@@ -323,7 +415,13 @@ impl ProviderDefinition {
             })),
             scope: ProviderScope::Singleton,
             lifecycle: ProviderLifecycleHooks::default(),
-            alias_target: Some(target),
+            alias_target: Some(target.clone()),
+            dependencies: Some(Arc::from([ProviderDependency {
+                token: target,
+                optional: false,
+                lazy: false,
+            }])),
+            enhancers: Arc::from([]),
         }
     }
 
@@ -419,8 +517,253 @@ impl ProviderDefinition {
         Self::named_injectable::<T>(token).with_scope(ProviderScope::Request)
     }
 
+    /// Register an injectable provider as an application-wide HTTP guard.
+    pub fn app_guard<T>() -> Self
+    where
+        T: FromModuleRef + Guard,
+    {
+        Self::injectable::<T>().with_app_guard::<T>()
+    }
+
+    /// Register an injectable provider as an application-wide HTTP pipe.
+    pub fn app_pipe<T>() -> Self
+    where
+        T: FromModuleRef + Pipe,
+    {
+        Self::injectable::<T>().with_app_pipe::<T>()
+    }
+
+    /// Register an injectable provider as an application-wide HTTP interceptor.
+    pub fn app_interceptor<T>() -> Self
+    where
+        T: FromModuleRef + Interceptor,
+    {
+        Self::injectable::<T>().with_app_interceptor::<T>()
+    }
+
+    /// Register an injectable provider as an application-wide HTTP exception filter.
+    pub fn app_filter<T>() -> Self
+    where
+        T: FromModuleRef + ExceptionFilter,
+    {
+        Self::injectable::<T>().with_app_filter::<T>()
+    }
+
+    /// Register an injectable provider as an application-wide WebSocket guard.
+    pub fn app_websocket_guard<T>() -> Self
+    where
+        T: FromModuleRef + WebSocketGuard,
+    {
+        Self::injectable::<T>().with_app_websocket_guard::<T>()
+    }
+
+    /// Register an injectable provider as an application-wide WebSocket pipe.
+    pub fn app_websocket_pipe<T>() -> Self
+    where
+        T: FromModuleRef + WebSocketPipe,
+    {
+        Self::injectable::<T>().with_app_websocket_pipe::<T>()
+    }
+
+    /// Register an injectable provider as an application-wide WebSocket interceptor.
+    pub fn app_websocket_interceptor<T>() -> Self
+    where
+        T: FromModuleRef + WebSocketInterceptor,
+    {
+        Self::injectable::<T>().with_app_websocket_interceptor::<T>()
+    }
+
+    /// Register an injectable provider as an application-wide WebSocket exception filter.
+    pub fn app_websocket_filter<T>() -> Self
+    where
+        T: FromModuleRef + WebSocketExceptionFilter,
+    {
+        Self::injectable::<T>().with_app_websocket_filter::<T>()
+    }
+
+    /// Register an injectable provider as an application-wide transport guard.
+    pub fn app_transport_guard<T>() -> Self
+    where
+        T: FromModuleRef + TransportGuard,
+    {
+        Self::injectable::<T>().with_app_transport_guard::<T>()
+    }
+
+    /// Register an injectable provider as an application-wide transport pipe.
+    pub fn app_transport_pipe<T>() -> Self
+    where
+        T: FromModuleRef + TransportPipe,
+    {
+        Self::injectable::<T>().with_app_transport_pipe::<T>()
+    }
+
+    /// Register an injectable provider as an application-wide transport interceptor.
+    pub fn app_transport_interceptor<T>() -> Self
+    where
+        T: FromModuleRef + TransportInterceptor,
+    {
+        Self::injectable::<T>().with_app_transport_interceptor::<T>()
+    }
+
+    /// Register an injectable provider as an application-wide transport exception filter.
+    pub fn app_transport_filter<T>() -> Self
+    where
+        T: FromModuleRef + TransportExceptionFilter,
+    {
+        Self::injectable::<T>().with_app_transport_filter::<T>()
+    }
+
+    /// Mark this provider as an application-wide HTTP guard.
+    pub fn with_app_guard<T>(self) -> Self
+    where
+        T: Guard,
+    {
+        let token = self.token.clone();
+        self.with_enhancer(ProviderEnhancerMarker::guard::<T>(token))
+    }
+
+    /// Mark this provider as an application-wide HTTP pipe.
+    pub fn with_app_pipe<T>(self) -> Self
+    where
+        T: Pipe,
+    {
+        let token = self.token.clone();
+        self.with_enhancer(ProviderEnhancerMarker::pipe::<T>(token))
+    }
+
+    /// Mark this provider as an application-wide HTTP interceptor.
+    pub fn with_app_interceptor<T>(self) -> Self
+    where
+        T: Interceptor,
+    {
+        let token = self.token.clone();
+        self.with_enhancer(ProviderEnhancerMarker::interceptor::<T>(token))
+    }
+
+    /// Mark this provider as an application-wide HTTP exception filter.
+    pub fn with_app_filter<T>(self) -> Self
+    where
+        T: ExceptionFilter,
+    {
+        let token = self.token.clone();
+        self.with_enhancer(ProviderEnhancerMarker::filter::<T>(token))
+    }
+
+    /// Mark this provider as an application-wide WebSocket guard.
+    pub fn with_app_websocket_guard<T>(self) -> Self
+    where
+        T: WebSocketGuard,
+    {
+        let token = self.token.clone();
+        self.with_enhancer(ProviderEnhancerMarker::websocket_guard::<T>(token))
+    }
+
+    /// Mark this provider as an application-wide WebSocket pipe.
+    pub fn with_app_websocket_pipe<T>(self) -> Self
+    where
+        T: WebSocketPipe,
+    {
+        let token = self.token.clone();
+        self.with_enhancer(ProviderEnhancerMarker::websocket_pipe::<T>(token))
+    }
+
+    /// Mark this provider as an application-wide WebSocket interceptor.
+    pub fn with_app_websocket_interceptor<T>(self) -> Self
+    where
+        T: WebSocketInterceptor,
+    {
+        let token = self.token.clone();
+        self.with_enhancer(ProviderEnhancerMarker::websocket_interceptor::<T>(token))
+    }
+
+    /// Mark this provider as an application-wide WebSocket exception filter.
+    pub fn with_app_websocket_filter<T>(self) -> Self
+    where
+        T: WebSocketExceptionFilter,
+    {
+        let token = self.token.clone();
+        self.with_enhancer(ProviderEnhancerMarker::websocket_filter::<T>(token))
+    }
+
+    /// Mark this provider as an application-wide transport guard.
+    pub fn with_app_transport_guard<T>(self) -> Self
+    where
+        T: TransportGuard,
+    {
+        let token = self.token.clone();
+        self.with_enhancer(ProviderEnhancerMarker::transport_guard::<T>(token))
+    }
+
+    /// Mark this provider as an application-wide transport pipe.
+    pub fn with_app_transport_pipe<T>(self) -> Self
+    where
+        T: TransportPipe,
+    {
+        let token = self.token.clone();
+        self.with_enhancer(ProviderEnhancerMarker::transport_pipe::<T>(token))
+    }
+
+    /// Mark this provider as an application-wide transport interceptor.
+    pub fn with_app_transport_interceptor<T>(self) -> Self
+    where
+        T: TransportInterceptor,
+    {
+        let token = self.token.clone();
+        self.with_enhancer(ProviderEnhancerMarker::transport_interceptor::<T>(token))
+    }
+
+    /// Mark this provider as an application-wide transport exception filter.
+    pub fn with_app_transport_filter<T>(self) -> Self
+    where
+        T: TransportExceptionFilter,
+    {
+        let token = self.token.clone();
+        self.with_enhancer(ProviderEnhancerMarker::transport_filter::<T>(token))
+    }
+
     pub fn with_scope(mut self, scope: ProviderScope) -> Self {
         self.scope = scope;
+        self
+    }
+
+    fn with_enhancer(mut self, enhancer: ProviderEnhancerMarker) -> Self {
+        let mut enhancers = self.enhancers.to_vec();
+        enhancers.push(enhancer);
+        self.enhancers = enhancers.into();
+        self
+    }
+
+    /// Declare the dependencies captured by this provider factory.
+    pub fn with_dependencies<I>(mut self, dependencies: I) -> Self
+    where
+        I: IntoIterator<Item = ProviderDependency>,
+    {
+        self.dependencies = Some(dependencies.into_iter().collect::<Vec<_>>().into());
+        self
+    }
+
+    /// Add one required typed dependency to this provider factory.
+    pub fn depends_on<T>(self) -> Self
+    where
+        T: Send + Sync + 'static,
+    {
+        self.with_dependency(ProviderDependency::typed::<T>())
+    }
+
+    /// Add one required named dependency to this provider factory.
+    pub fn depends_on_named(self, token: impl Into<String>) -> Self {
+        self.with_dependency(ProviderDependency::named(token))
+    }
+
+    /// Add one dependency while retaining previously declared metadata.
+    pub fn with_dependency(mut self, dependency: ProviderDependency) -> Self {
+        let mut dependencies = self
+            .dependencies
+            .as_deref()
+            .map(<[ProviderDependency]>::to_vec)
+            .unwrap_or_default();
+        dependencies.push(dependency);
+        self.dependencies = Some(dependencies.into());
         self
     }
 
@@ -500,6 +843,11 @@ impl ProviderDefinition {
         self.scope
     }
 
+    /// Declared dependency metadata, or `None` for an opaque factory.
+    pub fn dependencies(&self) -> Option<&[ProviderDependency]> {
+        self.dependencies.as_deref()
+    }
+
     pub(super) fn is_alias(&self) -> bool {
         self.alias_target.is_some()
     }
@@ -514,6 +862,15 @@ impl ProviderDefinition {
 
     pub(super) fn lifecycle(&self) -> &ProviderLifecycleHooks {
         &self.lifecycle
+    }
+
+    pub(crate) fn enhancer_markers(&self) -> &[ProviderEnhancerMarker] {
+        &self.enhancers
+    }
+
+    pub(crate) fn with_enhancers_from(mut self, source: &Self) -> Self {
+        self.enhancers = Arc::clone(&source.enhancers);
+        self
     }
 
     pub(super) fn build(&self, module_ref: &ModuleRef) -> Result<Arc<AnyProvider>> {

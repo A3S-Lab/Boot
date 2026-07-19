@@ -1,5 +1,5 @@
 use a3s_boot::{
-    BootApplication, BootError, BootErrorKind, BootRequest, BootResponse, BoxFuture,
+    BootApplication, BootError, BootErrorKind, BootRequest, BootResponse, BoxFuture, CallHandler,
     ControllerDefinition, ExecutionContext, ExecutionInterceptor, Guard, HttpMethod, Interceptor,
     MessagePatternDefinition, Middleware, MiddlewareConsumer, MiddlewareOutcome, MiddlewareRoute,
     Module, ModuleRef, Result, RouteDefinition, TransportMessage, TransportReply,
@@ -397,6 +397,100 @@ async fn route_filters_handle_pipe_errors() {
 }
 
 #[tokio::test]
+async fn route_filters_see_the_request_snapshot_before_the_failing_pipe() {
+    let route = RouteDefinition::get("/", |_| async { Ok(BootResponse::text("unreachable")) })
+        .unwrap()
+        .with_pipe(|request: BootRequest| async move {
+            Ok(request.with_header("x-pipeline-stage", "first"))
+        })
+        .with_pipe(|_| async { Err(BootError::BadRequest("second pipe failed".to_string())) })
+        .with_filter(|context: ExecutionContext, _| async move {
+            Ok(Some(BootResponse::text(
+                context
+                    .request
+                    .header("x-pipeline-stage")
+                    .unwrap_or("missing"),
+            )))
+        });
+
+    let response = route
+        .call(BootRequest::new(HttpMethod::Get, "/"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.body, b"first");
+}
+
+#[tokio::test]
+async fn retried_interceptor_errors_reset_stale_pipe_filter_context() {
+    struct RetryOnce;
+
+    impl Interceptor for RetryOnce {
+        fn intercept<'a>(
+            &'a self,
+            _context: ExecutionContext,
+            next: CallHandler<'a>,
+        ) -> BoxFuture<'a, Result<BootResponse>> {
+            Box::pin(async move {
+                match next.handle().await {
+                    Ok(response) => Ok(response),
+                    Err(_) => next.handle().await,
+                }
+            })
+        }
+    }
+
+    struct FailSecondBefore {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Interceptor for FailSecondBefore {
+        fn before(&self, _context: ExecutionContext) -> BoxFuture<'static, Result<()>> {
+            let calls = Arc::clone(&self.calls);
+            Box::pin(async move {
+                if calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    Ok(())
+                } else {
+                    Err(BootError::Internal("second before failed".to_string()))
+                }
+            })
+        }
+    }
+
+    let before_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let route = RouteDefinition::get("/", |_| async { Ok(BootResponse::text("unreachable")) })
+        .unwrap()
+        .with_interceptor(RetryOnce)
+        .with_interceptor(FailSecondBefore {
+            calls: Arc::clone(&before_calls),
+        })
+        .with_pipe(|request: BootRequest| async move {
+            Ok(request.with_header("x-pipeline-stage", "stale"))
+        })
+        .with_pipe(|_| async { Err(BootError::BadRequest("retry".to_string())) })
+        .with_filter(|context: ExecutionContext, error: BootError| async move {
+            Ok(Some(BootResponse::text(format!(
+                "{}:{error}",
+                context
+                    .request
+                    .header("x-pipeline-stage")
+                    .unwrap_or("missing")
+            ))))
+        });
+
+    let response = route
+        .call(BootRequest::new(HttpMethod::Get, "/"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        response.body,
+        b"missing:internal error: second before failed"
+    );
+    assert_eq!(before_calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn route_filters_handle_interceptor_errors() {
     struct FailingAfterInterceptor;
 
@@ -426,6 +520,279 @@ async fn route_filters_handle_interceptor_errors() {
 
     assert_eq!(response.status, 500);
     assert_eq!(response.body, b"/: internal error: response failed");
+}
+
+#[tokio::test]
+async fn around_interceptors_can_recover_pipe_errors_before_filters() {
+    struct RecoverBadRequest;
+
+    impl Interceptor for RecoverBadRequest {
+        fn intercept<'a>(
+            &'a self,
+            _context: ExecutionContext,
+            next: CallHandler<'a>,
+        ) -> BoxFuture<'a, Result<BootResponse>> {
+            Box::pin(async move {
+                match next.handle().await {
+                    Err(BootError::BadRequest(message)) => {
+                        Ok(BootResponse::text(format!("recovered: {message}")).with_status(422))
+                    }
+                    result => result,
+                }
+            })
+        }
+    }
+
+    let filter_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let filter_counter = Arc::clone(&filter_calls);
+    let route = RouteDefinition::post("/", |_| async { Ok(BootResponse::text("unreachable")) })
+        .unwrap()
+        .with_interceptor(RecoverBadRequest)
+        .with_pipe(|_| async { Err(BootError::BadRequest("invalid input".to_string())) })
+        .with_filter(move |_, _| {
+            let filter_counter = Arc::clone(&filter_counter);
+            async move {
+                filter_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(Some(BootResponse::text("filtered").with_status(400)))
+            }
+        });
+
+    let response = route
+        .call(BootRequest::new(HttpMethod::Post, "/"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 422);
+    assert_eq!(response.body, b"recovered: invalid input");
+    assert_eq!(filter_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn around_interceptors_can_retry_the_downstream_pipeline() {
+    struct RetryOnce;
+
+    impl Interceptor for RetryOnce {
+        fn intercept<'a>(
+            &'a self,
+            _context: ExecutionContext,
+            next: CallHandler<'a>,
+        ) -> BoxFuture<'a, Result<BootResponse>> {
+            Box::pin(async move {
+                match next.handle().await {
+                    Ok(response) => Ok(response),
+                    Err(_) => next.handle().await,
+                }
+            })
+        }
+    }
+
+    struct CountDownstreamInterceptor {
+        before_calls: Arc<std::sync::atomic::AtomicUsize>,
+        after_calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl Interceptor for CountDownstreamInterceptor {
+        fn before(&self, _context: ExecutionContext) -> BoxFuture<'static, Result<()>> {
+            let calls = Arc::clone(&self.before_calls);
+            Box::pin(async move {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+        }
+
+        fn after(
+            &self,
+            _context: ExecutionContext,
+            response: BootResponse,
+        ) -> BoxFuture<'static, Result<BootResponse>> {
+            let calls = Arc::clone(&self.after_calls);
+            Box::pin(async move {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(response)
+            })
+        }
+    }
+
+    let pipe_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let pipe_counter = Arc::clone(&pipe_calls);
+    let handler_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let handler_counter = Arc::clone(&handler_calls);
+    let inner_before_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let inner_after_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let route = RouteDefinition::get("/", move |_| {
+        let handler_counter = Arc::clone(&handler_counter);
+        async move {
+            let attempt = handler_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if attempt == 0 {
+                return Err(BootError::Internal("try again".to_string()));
+            }
+            Ok(BootResponse::text("ok"))
+        }
+    })
+    .unwrap()
+    .with_interceptor(RetryOnce)
+    .with_interceptor(CountDownstreamInterceptor {
+        before_calls: Arc::clone(&inner_before_calls),
+        after_calls: Arc::clone(&inner_after_calls),
+    })
+    .with_pipe(move |request: BootRequest| {
+        let pipe_counter = Arc::clone(&pipe_counter);
+        async move {
+            pipe_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(request)
+        }
+    });
+
+    let response = route
+        .call(BootRequest::new(HttpMethod::Get, "/"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.body, b"ok");
+    assert_eq!(pipe_calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(handler_calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    assert_eq!(
+        inner_before_calls.load(std::sync::atomic::Ordering::SeqCst),
+        2
+    );
+    assert_eq!(
+        inner_after_calls.load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+}
+
+#[tokio::test]
+async fn call_handler_rejects_concurrent_calls_and_resets_after_cancellation() {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<CallHandler<'static>>();
+
+    let attempts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let observed = Arc::clone(&attempts);
+    let handler = CallHandler::from_fn(move || {
+        let observed = Arc::clone(&observed);
+        async move {
+            let attempt = observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if attempt == 0 {
+                std::future::pending::<()>().await;
+            }
+            Ok(BootResponse::text("completed"))
+        }
+    });
+
+    let running_handler = handler.clone();
+    let running = tokio::spawn(async move { running_handler.handle().await });
+    while attempts.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+
+    let error = handler.handle().await.unwrap_err();
+    assert!(matches!(
+        error,
+        BootError::Internal(message) if message == "call handler is already running"
+    ));
+
+    running.abort();
+    assert!(running.await.unwrap_err().is_cancelled());
+
+    let response = handler.handle().await.unwrap();
+    assert_eq!(response.body, b"completed");
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn around_interceptor_short_circuits_still_unwind_outer_legacy_hooks() {
+    struct OuterHeader;
+
+    impl Interceptor for OuterHeader {
+        fn after(
+            &self,
+            _context: ExecutionContext,
+            response: BootResponse,
+        ) -> BoxFuture<'static, Result<BootResponse>> {
+            Box::pin(async move { Ok(response.with_header("x-outer", "yes")) })
+        }
+    }
+
+    struct ShortCircuit;
+
+    impl Interceptor for ShortCircuit {
+        fn intercept<'a>(
+            &'a self,
+            _context: ExecutionContext,
+            _next: CallHandler<'a>,
+        ) -> BoxFuture<'a, Result<BootResponse>> {
+            Box::pin(async { Ok(BootResponse::text("cached").with_status(202)) })
+        }
+    }
+
+    let handler_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let handler_counter = Arc::clone(&handler_calls);
+    let route = RouteDefinition::get("/", move |_| {
+        let handler_counter = Arc::clone(&handler_counter);
+        async move {
+            handler_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(BootResponse::text("handler"))
+        }
+    })
+    .unwrap()
+    .with_interceptor(OuterHeader)
+    .with_interceptor(ShortCircuit);
+
+    let response = route
+        .call(BootRequest::new(HttpMethod::Get, "/"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 202);
+    assert_eq!(response.body, b"cached");
+    assert_eq!(response.header("x-outer"), Some("yes"));
+    assert_eq!(handler_calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn unrecovered_around_interceptor_errors_reach_filters_once() {
+    struct MapToConflict;
+
+    impl Interceptor for MapToConflict {
+        fn intercept<'a>(
+            &'a self,
+            _context: ExecutionContext,
+            next: CallHandler<'a>,
+        ) -> BoxFuture<'a, Result<BootResponse>> {
+            Box::pin(async move {
+                match next.handle().await {
+                    Err(BootError::BadRequest(message)) => {
+                        Err(BootError::Conflict(format!("mapped: {message}")))
+                    }
+                    result => result,
+                }
+            })
+        }
+    }
+
+    let filter_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let filter_counter = Arc::clone(&filter_calls);
+    let route = RouteDefinition::get("/", |_| async {
+        Err(BootError::BadRequest("invalid".to_string()))
+    })
+    .unwrap()
+    .with_interceptor(MapToConflict)
+    .with_filter(move |_, error: BootError| {
+        let filter_counter = Arc::clone(&filter_counter);
+        async move {
+            filter_counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Some(BootResponse::text(error.to_string()).with_status(409)))
+        }
+    });
+
+    let response = route
+        .call(BootRequest::new(HttpMethod::Get, "/"))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 409);
+    assert_eq!(response.body, b"resource conflict: mapped: invalid");
+    assert_eq!(filter_calls.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 #[tokio::test]

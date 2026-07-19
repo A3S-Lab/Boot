@@ -9,7 +9,7 @@ use crate::percent::validate_percent_encoding;
 use crate::routing::host::normalize_host_header;
 #[cfg(feature = "auth")]
 use crate::AuthPrincipal;
-use crate::{validate_value, BootError, ModuleRef, ProviderToken, Result, Validate};
+use crate::{validate_value, BootError, ContextId, ModuleRef, ProviderToken, Result, Validate};
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -101,6 +101,11 @@ impl BootRequest {
 
     pub fn module_ref(&self) -> Option<&ModuleRef> {
         self.module_ref.as_ref()
+    }
+
+    /// Dependency-injection context attached while this request is dispatched.
+    pub fn context_id(&self) -> Option<&ContextId> {
+        self.module_ref.as_ref().and_then(ModuleRef::context_id)
     }
 
     pub fn get<T>(&self) -> Result<Arc<T>>

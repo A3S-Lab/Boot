@@ -314,6 +314,8 @@ impl TestingModuleBuilder {
                 .into_iter()
                 .map(|pattern| pattern.with_pipeline_overrides(&self.pipeline_overrides))
                 .collect();
+            self.pipeline_overrides
+                .apply_to_filters(&mut app.global_filters);
         }
         Ok(TestingModule { app })
     }
@@ -336,6 +338,8 @@ impl TestingModuleBuilder {
                 .into_iter()
                 .map(|pattern| pattern.with_pipeline_overrides(&self.pipeline_overrides))
                 .collect();
+            self.pipeline_overrides
+                .apply_to_filters(&mut app.global_filters);
         }
         Ok(TestingModule { app })
     }

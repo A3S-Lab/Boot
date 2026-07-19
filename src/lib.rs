@@ -169,16 +169,17 @@ pub use openapi_security::{
     OpenApiSecurityScheme,
 };
 pub use pipeline::{
-    catch_errors, CatchFilter, ExceptionFilter, ExecutionContext, ExecutionInterceptor,
-    ExecutionProtocol, ExecutionTransportKind, Guard, Interceptor, Middleware, MiddlewareConsumer,
-    MiddlewareConsumerBuilder, MiddlewareOutcome, MiddlewareRoute, Pipe, TransportExceptionFilter,
-    TransportExceptionResponse, TransportExecutionContext, WebSocketExceptionFilter,
-    WebSocketExceptionResponse, WebSocketExecutionContext,
+    catch_errors, CallHandler, CatchFilter, ExceptionFilter, ExecutionContext,
+    ExecutionInterceptor, ExecutionProtocol, ExecutionTransportKind, Guard, Interceptor,
+    Middleware, MiddlewareConsumer, MiddlewareConsumerBuilder, MiddlewareOutcome, MiddlewareRoute,
+    Pipe, TransportExceptionFilter, TransportExceptionResponse, TransportExecutionContext,
+    WebSocketExceptionFilter, WebSocketExceptionResponse, WebSocketExecutionContext,
 };
 pub use provider::{
-    FromModuleRef, ModuleRef, ProviderBeforeApplicationShutdown, ProviderDefinition,
-    ProviderOnApplicationBootstrap, ProviderOnApplicationShutdown, ProviderOnModuleDestroy,
-    ProviderOnModuleInit, ProviderRef, ProviderScope, ProviderToken,
+    ContextId, ContextIdFactory, FromModuleRef, ModuleRef, ProviderBeforeApplicationShutdown,
+    ProviderDefinition, ProviderDependency, ProviderOnApplicationBootstrap,
+    ProviderOnApplicationShutdown, ProviderOnModuleDestroy, ProviderOnModuleInit, ProviderRef,
+    ProviderScope, ProviderToken,
 };
 #[cfg(feature = "queue")]
 pub use queue::{

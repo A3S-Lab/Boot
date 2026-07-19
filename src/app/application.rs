@@ -1,10 +1,12 @@
 use super::builder::BootApplicationBuilder;
+use crate::pipeline::PipelineComponent;
 use crate::versioning::ApiVersionCandidate;
 use crate::{
-    ApiVersioning, BootError, BootRequest, BootResponse, DiscoveryService, HttpAdapter, HttpMethod,
-    LazyModuleLoader, MessagePatternDefinition, MessageTransport, Module, ModuleRef,
-    OpenApiDocument, OpenApiInfo, ProviderToken, Reflector, Result, RouteDefinition,
-    TransportMessage, TransportReply, WebSocketGatewayDefinition,
+    ApiVersioning, BootError, BootRequest, BootResponse, ContextIdFactory, DiscoveryService,
+    ExceptionFilter, ExecutionContext, HttpAdapter, HttpMethod, LazyModuleLoader,
+    MessagePatternDefinition, MessageTransport, Module, ModuleRef, OpenApiDocument, OpenApiInfo,
+    ProviderToken, Reflector, Result, RouteDefinition, SerializationOptions, TransportMessage,
+    TransportReply, WebSocketGatewayDefinition,
 };
 use std::collections::BTreeMap;
 use std::fmt;
@@ -65,6 +67,7 @@ pub struct BootApplication {
     pub(crate) module_ref: ModuleRef,
     pub(crate) module_instances: Vec<ModuleInstance>,
     pub(crate) api_versioning: Option<ApiVersioning>,
+    pub(crate) global_filters: Vec<PipelineComponent<dyn ExceptionFilter>>,
 }
 
 impl BootApplication {
@@ -252,11 +255,9 @@ impl BootApplication {
             self.api_versioning.as_ref(),
             host,
         ) else {
-            return Err(BootError::NotFound(format!(
-                "{} {}",
-                request.method.as_str(),
-                request.path
-            )));
+            let error =
+                BootError::NotFound(format!("{} {}", request.method.as_str(), request.path));
+            return self.handle_global_error(request, error).await;
         };
         let candidate = &candidates[candidate_index];
 
@@ -296,11 +297,35 @@ impl BootApplication {
             return route.call(request).await;
         }
 
-        Err(BootError::NotFound(format!(
-            "{} {}",
-            request.method.as_str(),
-            request.path
-        )))
+        let error = BootError::NotFound(format!("{} {}", request.method.as_str(), request.path));
+        self.handle_global_error(request, error).await
+    }
+
+    async fn handle_global_error(
+        &self,
+        request: BootRequest,
+        error: BootError,
+    ) -> Result<BootResponse> {
+        let context_id = ContextIdFactory::create();
+        let request = request.with_module_ref(self.module_ref.context_scope(&context_id));
+        let context = ExecutionContext::new(
+            request.clone(),
+            request.path.clone(),
+            None,
+            None,
+            SerializationOptions::default(),
+            BTreeMap::new(),
+        );
+        for filter in self.global_filters.iter().rev() {
+            let filter = filter.resolve(&context_id)?;
+            if let Some(response) = filter
+                .catch(context.clone(), error.clone_for_filter())
+                .await?
+            {
+                return Ok(response);
+            }
+        }
+        Err(error)
     }
 
     /// Dispatch a request and convert unhandled errors into Boot HTTP responses.
