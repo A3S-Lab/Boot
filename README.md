@@ -113,7 +113,7 @@ are opt-in.
 | Lifecycle | `shutdown-hooks` | SIGINT and SIGTERM shutdown handling |
 | Configuration | `config` | ACL-backed typed configuration parsing |
 | Authentication | `auth` | Strategy-backed authentication guards |
-| Security | `security` | CORS, CSRF, rate limiting, and security headers |
+| Security | `security` | CORS, CSRF, local or provider-backed rate limiting, and security headers |
 | Sessions | `session` | Session middleware and replaceable stores |
 | Cache | `cache` | Cache abstraction, interceptor, and in-memory store |
 | Database | `database` | Replaceable database facade and in-memory backend |
@@ -283,6 +283,23 @@ from `schemars::JsonSchema` types.
 
 Optional HTTP modules add multipart uploads, static files, gzip compression,
 views, sessions, security policies, request context, and an outbound HTTP client.
+
+### Provider-backed rate limiting
+
+The `security` feature keeps `use_global_rate_limit` process-local by default.
+Applications that need one budget across multiple processes can implement the
+public `RateLimitProvider` contract and register it with
+`use_global_rate_limit_provider`. Each atomic acquisition receives a stable
+policy identifier, a policy-scoped SHA-256 subject digest, and the configured
+request limit and window. Selected header values and bearer credentials do not
+cross the provider boundary in plaintext.
+
+Every process using the same policy identifier must use identical limits and
+windows. Provider errors reject guarded requests instead of bypassing the
+limit. Boot deliberately does not select or bundle a distributed backend; the
+built-in `InMemoryRateLimitProvider` does not share state between processes.
+This boundary does not cover the separate streaming-disconnect, backpressure,
+or graceful-drain work.
 
 ## Protocols
 

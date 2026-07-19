@@ -956,7 +956,8 @@ Nest equivalent areas:
 - streamable file and download responses (implemented)
 - file upload (implemented)
 - static assets and SPA shells (implemented)
-- security helpers such as CORS, CSRF, helmet-like headers, and rate limiting
+- security helpers such as CORS, CSRF, helmet-like headers, process-local rate
+  limiting, and a provider-neutral atomic boundary for shared rate limits
   (implemented)
 - sessions (implemented)
 
@@ -1042,7 +1043,9 @@ Acceptance:
   hidden dotfile defaults, and root traversal protection. (Covered)
 - Security helpers can handle CORS preflight and actual response headers, add
   helmet-like response headers, reject invalid CSRF tokens on unsafe methods,
-  and enforce in-memory fixed-window rate limits. (Covered)
+  enforce in-memory fixed-window rate limits, and delegate atomic acquisitions
+  to an application-supplied shared provider without exposing plaintext
+  credentials. Boot does not select a distributed backend. (Covered)
 - Sessions can register a provider-backed `SessionManager`, expose
   request-bound `Session` handles through `BootRequest::session()` and
   Nest-style `#[session]` arguments, bind session ids before handlers, persist

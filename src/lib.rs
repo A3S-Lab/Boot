@@ -198,8 +198,8 @@ pub use schedule::{
 #[cfg(feature = "security")]
 pub use security::{
     CorsMiddleware, CorsOptions, CorsPreflightRoute, CorsResponseInterceptor, CsrfGuard,
-    CsrfOptions, RateLimitGuard, RateLimitOptions, SecurityHeadersInterceptor,
-    SecurityHeadersOptions,
+    CsrfOptions, InMemoryRateLimitProvider, RateLimitDecision, RateLimitGuard, RateLimitOptions,
+    RateLimitProvider, RateLimitRequest, SecurityHeadersInterceptor, SecurityHeadersOptions,
 };
 pub use serialization::{SerializationInterceptor, SerializationOptions};
 #[cfg(feature = "session")]

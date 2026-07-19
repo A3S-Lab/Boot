@@ -7,4 +7,7 @@ mod rate_limit;
 pub use cors::{CorsMiddleware, CorsOptions, CorsPreflightRoute, CorsResponseInterceptor};
 pub use csrf::{CsrfGuard, CsrfOptions};
 pub use headers::{SecurityHeadersInterceptor, SecurityHeadersOptions};
-pub use rate_limit::{RateLimitGuard, RateLimitOptions};
+pub use rate_limit::{
+    InMemoryRateLimitProvider, RateLimitDecision, RateLimitGuard, RateLimitOptions,
+    RateLimitProvider, RateLimitRequest,
+};
