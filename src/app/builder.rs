@@ -18,7 +18,7 @@ use crate::{CompressionInterceptor, CompressionOptions};
 #[cfg(feature = "security")]
 use crate::{
     CorsMiddleware, CorsOptions, CorsPreflightRoute, CorsResponseInterceptor, CsrfGuard,
-    CsrfOptions, RateLimitGuard, RateLimitOptions, SecurityHeadersInterceptor,
+    CsrfOptions, RateLimitGuard, RateLimitOptions, RateLimitProvider, SecurityHeadersInterceptor,
     SecurityHeadersOptions,
 };
 #[cfg(feature = "session")]
@@ -312,6 +312,21 @@ impl BootApplicationBuilder {
     pub fn use_global_rate_limit(mut self, options: RateLimitOptions) -> Self {
         self.global_pipeline
             .push_guard(RateLimitGuard::with_options(options));
+        self
+    }
+
+    /// Add an application-wide rate limit guard backed by a shared provider.
+    #[cfg(feature = "security")]
+    pub fn use_global_rate_limit_provider<P>(
+        mut self,
+        options: RateLimitOptions,
+        provider: P,
+    ) -> Self
+    where
+        P: RateLimitProvider,
+    {
+        self.global_pipeline
+            .push_guard(RateLimitGuard::with_provider(options, provider));
         self
     }
 

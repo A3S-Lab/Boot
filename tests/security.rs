@@ -1,10 +1,14 @@
 #![cfg(feature = "security")]
 
 use a3s_boot::{
-    BootApplication, BootRequest, BootResponse, CorsOptions, CsrfOptions, HttpMethod,
-    RateLimitOptions, RouteDefinition, SecurityHeadersOptions,
+    BootApplication, BootError, BootRequest, BootResponse, BoxFuture, CorsOptions, CsrfOptions,
+    HttpMethod, InMemoryRateLimitProvider, RateLimitDecision, RateLimitOptions, RateLimitProvider,
+    RateLimitRequest, Result, RouteDefinition, SecurityHeadersOptions,
 };
 use serde_json::json;
+use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 #[tokio::test]
@@ -212,4 +216,141 @@ async fn rate_limit_guard_rejects_requests_after_the_window_limit() {
         })
     );
     assert_eq!(separate_key.status(), 200);
+}
+
+#[derive(Clone, Default)]
+struct SharedRateLimitProvider {
+    counts: Arc<Mutex<BTreeMap<(String, String), u32>>>,
+    requests: Arc<Mutex<Vec<RateLimitRequest>>>,
+}
+
+impl RateLimitProvider for SharedRateLimitProvider {
+    fn acquire(&self, request: RateLimitRequest) -> BoxFuture<'static, Result<RateLimitDecision>> {
+        let counts = Arc::clone(&self.counts);
+        let requests = Arc::clone(&self.requests);
+        Box::pin(async move {
+            requests.lock().unwrap().push(request.clone());
+            let key = (
+                request.policy_id().to_string(),
+                request.subject_hash().to_string(),
+            );
+            let mut counts = counts.lock().unwrap();
+            let count = counts.entry(key).or_default();
+            if *count >= request.max_requests() {
+                return Ok(RateLimitDecision::Limited);
+            }
+            *count += 1;
+            Ok(RateLimitDecision::Allowed)
+        })
+    }
+}
+
+fn limited_app<P>(provider: P, policy_id: &str, max_requests: u32) -> BootApplication
+where
+    P: RateLimitProvider,
+{
+    BootApplication::builder()
+        .use_global_rate_limit_provider(
+            RateLimitOptions::new()
+                .with_policy_id(policy_id)
+                .with_max_requests(max_requests)
+                .with_window(Duration::from_secs(60)),
+            provider,
+        )
+        .route(
+            RouteDefinition::get("/limited", |_| async { Ok(BootResponse::text("ok")) }).unwrap(),
+        )
+        .build()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn public_rate_limit_provider_shares_state_without_receiving_credentials() {
+    let provider = SharedRateLimitProvider::default();
+    let first_process = limited_app(provider.clone(), "cloud-api", 1);
+    let second_process = limited_app(provider.clone(), "cloud-api", 1);
+    let request = || {
+        BootRequest::new(HttpMethod::Get, "/limited")
+            .with_header("authorization", "Bearer tenant-secret-token")
+    };
+
+    assert_eq!(first_process.call(request()).await.unwrap().status(), 200);
+    assert_eq!(second_process.handle(request()).await.status(), 429);
+
+    let requests = provider.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests
+        .iter()
+        .all(|request| request.policy_id() == "cloud-api"));
+    assert!(requests
+        .iter()
+        .all(|request| request.subject_hash().len() == 64));
+    assert!(requests
+        .iter()
+        .all(|request| !request.subject_hash().contains("tenant-secret-token")));
+    assert_eq!(requests[0].subject_hash(), requests[1].subject_hash());
+}
+
+#[tokio::test]
+async fn in_memory_provider_rejects_conflicting_clients_for_one_policy() {
+    let provider = InMemoryRateLimitProvider::new();
+    let first_client = limited_app(provider.clone(), "cloud-api", 1);
+    let conflicting_client = limited_app(provider, "cloud-api", 2);
+
+    assert_eq!(
+        first_client
+            .call(BootRequest::new(HttpMethod::Get, "/limited"))
+            .await
+            .unwrap()
+            .status(),
+        200
+    );
+
+    let error = conflicting_client
+        .call(BootRequest::new(HttpMethod::Get, "/limited"))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, BootError::Internal(_)));
+}
+
+#[derive(Clone)]
+struct UnavailableRateLimitProvider;
+
+impl RateLimitProvider for UnavailableRateLimitProvider {
+    fn acquire(&self, _request: RateLimitRequest) -> BoxFuture<'static, Result<RateLimitDecision>> {
+        Box::pin(async {
+            Err(BootError::ServiceUnavailable(
+                "rate limit provider unavailable".to_string(),
+            ))
+        })
+    }
+}
+
+#[tokio::test]
+async fn provider_failure_rejects_work_instead_of_bypassing_the_limit() {
+    let handler_calls = Arc::new(AtomicUsize::new(0));
+    let handler_calls_for_route = Arc::clone(&handler_calls);
+    let app = BootApplication::builder()
+        .use_global_rate_limit_provider(
+            RateLimitOptions::new().with_policy_id("cloud-api"),
+            UnavailableRateLimitProvider,
+        )
+        .route(
+            RouteDefinition::get("/limited", move |_| {
+                let handler_calls = Arc::clone(&handler_calls_for_route);
+                async move {
+                    handler_calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(BootResponse::text("ok"))
+                }
+            })
+            .unwrap(),
+        )
+        .build()
+        .unwrap();
+
+    let response = app
+        .handle(BootRequest::new(HttpMethod::Get, "/limited"))
+        .await;
+    assert_eq!(response.status(), 503);
+    assert_eq!(handler_calls.load(Ordering::SeqCst), 0);
 }
