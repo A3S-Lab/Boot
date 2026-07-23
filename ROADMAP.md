@@ -222,6 +222,11 @@ Implemented today:
   topics plus optional gRPC unary request/reply and event calls. Transport error
   envelopes round-trip through the same `BootError` HTTP exception mapping used
   by HTTP routes.
+- Optional native Tencent Weixin iLink support with an injectable client,
+  QR-login and redirect handling, authenticated update polling, text replies,
+  typing calls, lifecycle notifications, bounded responses, and strict URL
+  validation. Browser APIs, credential storage, and product authorization
+  remain host-application responsibilities.
 - ACL-backed typed configuration modules with `ConfigModule`, named/global
   provider exports, environment/default function support, and validation hooks.
 - Provider-backed outbound HTTP clients with `HttpModule`, `HttpService`,
