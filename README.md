@@ -123,6 +123,7 @@ are opt-in.
 | Scheduling | `schedule` | Cron, interval, and timeout jobs |
 | Observability | `logging`, `health` | Structured logging and health indicators |
 | HTTP utilities | `http-client`, `compression` | Outbound HTTP and gzip responses |
+| Channels | `ilink` | Tencent Weixin iLink QR login, polling, messaging, and lifecycle client |
 | Content | `file-upload`, `static` | Multipart uploads and static files |
 | Context | `request-context` | Task-local access to the current request |
 | OpenAPI | `openapi-schemas` | `schemars`-based component schemas |
@@ -321,6 +322,27 @@ and gRPC transports behind the common `MessageTransport` contract.
 Transport implementations share typed payload handling, scoped providers,
 validation, guards, interceptors, pipes, exception filters, and client APIs.
 Protocol delivery and durability semantics still depend on the selected backend.
+
+### Weixin iLink
+
+The optional `ilink` feature provides the native Rust protocol boundary used by
+the Tencent Weixin channel. `IlinkModule` exports a typed `IlinkClient`
+provider; the client owns QR login requests, authenticated headers, strict
+server URL validation, update polling, text replies, typing calls, and channel
+start/stop notifications.
+
+```rust
+use a3s_boot::ilink::IlinkModule;
+
+let module = IlinkModule::weixin("A3S/0.10.1");
+```
+
+The wire defaults are compatible with Tencent `openclaw-weixin` v2.4.6:
+`iLink-App-Id: bot`, `bot_type=3`, and packed client version `2.4.6`. The
+product-specific `bot_agent` remains `A3S/<version>` so upstream diagnostics do
+not misidentify the caller. Boot deliberately does not own browser APIs,
+credential persistence, owner authorization, or agent/session commands; those
+policies stay in the host application.
 
 ## Architecture
 

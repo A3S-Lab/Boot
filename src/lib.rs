@@ -34,6 +34,8 @@ mod health;
 mod http;
 #[cfg(feature = "http-client")]
 mod http_client;
+#[cfg(feature = "ilink")]
+pub mod ilink;
 #[cfg(feature = "logging")]
 mod logging;
 mod module;
