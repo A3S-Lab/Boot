@@ -142,7 +142,7 @@ is not a claim of support for every production backend.
 
 ```toml
 [dependencies]
-a3s-boot = "0.1.2"
+a3s-boot = "0.1.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -150,14 +150,14 @@ For a core-only build without Axum, macros, or shutdown signal handling:
 
 ```toml
 [dependencies]
-a3s-boot = { version = "0.1.2", default-features = false }
+a3s-boot = { version = "0.1.3", default-features = false }
 ```
 
 Enable only the optional modules an application uses:
 
 ```toml
 [dependencies]
-a3s-boot = { version = "0.1.2", features = ["auth", "security", "openapi-schemas"] }
+a3s-boot = { version = "0.1.3", features = ["auth", "security", "openapi-schemas"] }
 serde = { version = "1", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
