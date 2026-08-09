@@ -119,7 +119,8 @@ are opt-in.
 | Database | `database` | Replaceable database facade and in-memory backend |
 | Events | `events` | A3S Event-backed emitter and listeners |
 | CQRS | `cqrs` | Command, query, and event buses |
-| Queue | `queue` | A3S Lane-backed jobs, retries, priorities, and processors |
+| Queue | `queue` | A3S Lane-backed in-process jobs, retries, priorities, and processors |
+| Queue persistence | `queue-postgres` | A3S ORM-backed shared PostgreSQL leasing, recovery, fencing, and retention |
 | Scheduling | `schedule` | Cron, interval, and timeout jobs |
 | Observability | `logging`, `health` | Structured logging and health indicators |
 | HTTP utilities | `http-client`, `compression` | Outbound HTTP and gzip responses |
@@ -133,8 +134,9 @@ are opt-in.
 
 A feature exposes the corresponding framework integration; external transports
 still require their broker or service to be available. Database, cache, session,
-queue, and scheduler APIs are backend abstractions, and the bundled implementation
-is not a claim of support for every production backend.
+queue, and scheduler APIs are backend abstractions. The `queue-postgres` feature
+is the durable shared queue implementation; other bundled implementations are
+not a claim of support for every production backend.
 
 ## Quick Start
 
@@ -248,6 +250,58 @@ handlers.
 Modules and providers can observe initialization, bootstrap, destruction, and
 application shutdown. Shutdown hooks can listen for SIGINT and SIGTERM when the
 `shutdown-hooks` feature is enabled.
+
+### Durable PostgreSQL queues
+
+Enable `queue-postgres` when workers in multiple processes must share durable
+work. `PostgresQueueBackend` stores jobs through A3S ORM, leases ready jobs with
+PostgreSQL `SKIP LOCKED`, renews live leases, fences stale workers, and recovers
+expired leases after worker or process death.
+
+```toml
+[dependencies]
+a3s-boot = { version = "0.1.3", features = ["queue-postgres"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+```rust,no_run
+use std::time::Duration;
+
+use a3s_boot::{
+    ModuleRef, PostgresQueueBackend, Queue, QueueContext, QueueJob, QueueOptions,
+    Result,
+};
+use serde_json::json;
+
+async fn run_worker(database_url: &str) -> Result<()> {
+    let options = QueueOptions::new()
+        .with_worker_count(4)
+        .with_lease_duration(Duration::from_secs(30));
+    let backend = PostgresQueueBackend::connect(database_url, "workflow", options).await?;
+    let queue = Queue::new("workflow", backend);
+    queue.process("resume", |job: QueueJob, _context: QueueContext| async move {
+        println!("resuming {}", job.data["runId"]);
+        Ok(())
+    })?;
+    queue.start(ModuleRef::new()).await?;
+    queue.enqueue("resume", &json!({"runId": "run-42"})).await?;
+    queue.shutdown().await
+}
+```
+
+Use a database URL whose search path selects a schema dedicated to Boot. The
+host application creates that schema; Boot owns the queue tables and its A3S ORM
+migration ledger inside it. Sharing the Flow or application schema can make one
+component accept another component's migration history.
+
+The backend supports caller-assigned idempotency keys, priority and FIFO/LIFO
+ordering, delay, retry, processor timeout, terminal retention, deduplication,
+active keep-latest successors, and graceful lease release. Delivery is
+at-least-once, so processors must make business effects idempotent. Repeat jobs
+and Lane parent/child flow options are rejected explicitly. Async services can
+use `jobs_async`, `failures_async`, `stats_async`, and `clear_async` on a retained
+backend handle for non-blocking diagnostics.
 
 ### Request pipeline
 

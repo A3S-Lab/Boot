@@ -249,9 +249,11 @@ Implemented today:
   in-process timeout/interval/cron jobs, named/global provider exports,
   Nest-style `#[schedule]` / `#[cron]` / `#[interval]` / `#[timeout]` macros,
   and lifecycle-managed shutdown.
-- Provider-backed queues with `QueueModule`, `Queue`, `a3s-lane` backed job
-  storage and workers, typed serde JSON payloads, named/global provider
-  exports, and lifecycle-managed processors.
+- Provider-backed queues with `QueueModule`, `Queue`, `a3s-lane` backed
+  in-process workers, and an optional A3S ORM-backed PostgreSQL backend with
+  shared leasing, fencing, process-death recovery, retry, timeout, retention,
+  idempotency, and deduplication. Queues retain typed serde JSON payloads,
+  named/global provider exports, and lifecycle-managed processors.
 - Provider-backed application events with `EventModule`, Nest-style
   `EventEmitter`, injectable `a3s-event` `EventBus`, listener macros, and
   pluggable providers.
@@ -1008,7 +1010,11 @@ Acceptance:
   participate in module imports/exports. (Covered)
 - Queue can register typed providers, enqueue serde JSON jobs through
   `a3s-lane`, run named processors through lifecycle-managed workers, and
-  participate in module imports/exports. (Covered)
+  participate in module imports/exports. Its optional PostgreSQL backend uses
+  A3S ORM migrations and parameterized SQL, shares work across independent
+  workers, fences stale leases, recovers process death, and preserves typed
+  retry, timeout, retention, job-id idempotency, and deduplication semantics.
+  (Covered against PostgreSQL 17)
 - Application events can register an `a3s-event` backed `EventEmitter`
   provider, dispatch typed JSON payloads to exact or wildcard listeners, expose
   Nest-style listener macros, retain events through the underlying `EventBus`,

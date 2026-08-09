@@ -1,10 +1,12 @@
-use crate::{BootError, BoxFuture, Module, ModuleRef, ProviderDefinition, ProviderToken, Result};
+use crate::{BootError, BoxFuture, ModuleRef, Result};
+pub use a3s_lane::{
+    DeduplicationOptions as QueueDeduplicationOptions, JobOptions as QueueJobOptions,
+    JobPriority as QueueJobPriority, JobRetention as QueueJobRetention,
+    RetryPolicy as QueueRetryPolicy,
+};
 use a3s_lane::{
     InMemoryJobQueue, Job, JobListOptions, JobQueueBackend as LaneJobQueueBackend,
     JobQueueStats as LaneJobQueueStats, JobState as LaneJobState, LaneError,
-};
-pub use a3s_lane::{
-    JobOptions as QueueJobOptions, JobPriority as QueueJobPriority, RetryPolicy as QueueRetryPolicy,
 };
 use chrono::Utc;
 use serde::de::DeserializeOwned;
@@ -12,12 +14,21 @@ use serde::Serialize;
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fmt;
-use std::future::Future;
+use std::future::{pending, Future};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use tokio::runtime::{Builder as TokioRuntimeBuilder, Handle};
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
+
+#[cfg(feature = "queue-postgres")]
+mod postgres;
+
+mod module;
+
+pub use module::QueueModule;
+#[cfg(feature = "queue-postgres")]
+pub use postgres::PostgresQueueBackend;
 
 /// Queue runtime options shared by queue modules and Lane-backed queue backends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -707,6 +718,11 @@ async fn run_queue_worker_once(
 ) -> Result<()> {
     state
         .backend
+        .recover_stalled_jobs(Utc::now())
+        .await
+        .map_err(lane_error)?;
+    state
+        .backend
         .promote_due_jobs(Utc::now())
         .await
         .map_err(lane_error)?;
@@ -752,23 +768,79 @@ async fn process_claimed_job(
         queue_name: queue_name.to_string(),
         module_ref: module_ref.clone(),
     };
-    match processor.process(queue_job, context).await {
-        Ok(()) => {
-            state
-                .backend
-                .complete_job(&job.id, &lock_token, Value::Null, Utc::now())
-                .await
-                .map_err(lane_error)?;
+    let processing = processor.process(queue_job, context);
+    tokio::pin!(processing);
+    let timeout = job.options.timeout;
+    let timeout_future = async move {
+        match timeout {
+            Some(timeout) => tokio::time::sleep(timeout).await,
+            None => pending::<()>().await,
         }
-        Err(error) => {
-            state
-                .backend
-                .fail_job_discarding_retry(&job.id, &lock_token, error.to_string(), Utc::now())
-                .await
-                .map_err(lane_error)?;
+    };
+    tokio::pin!(timeout_future);
+    let heartbeat_every = queue_heartbeat_interval(options.lease_duration);
+    let mut heartbeat = tokio::time::interval_at(
+        tokio::time::Instant::now() + heartbeat_every,
+        heartbeat_every,
+    );
+    loop {
+        tokio::select! {
+            result = &mut processing => {
+                match result {
+                    Ok(()) => state
+                        .backend
+                        .complete_job(&job.id, &lock_token, Value::Null, Utc::now())
+                        .await
+                        .map_err(lane_error)?,
+                    Err(error) => state
+                        .backend
+                        .fail_job(&job.id, &lock_token, error.to_string(), Utc::now())
+                        .await
+                        .map_err(lane_error)?,
+                };
+                return Ok(());
+            }
+            () = &mut timeout_future => {
+                state
+                    .backend
+                    .fail_job(
+                        &job.id,
+                        &lock_token,
+                        format!("queue processor timed out after {timeout:?}"),
+                        Utc::now(),
+                    )
+                    .await
+                    .map_err(lane_error)?;
+                return Ok(());
+            }
+            _ = heartbeat.tick() => {
+                state
+                    .backend
+                    .renew_lease(&job.id, &lock_token, options.lease_duration, Utc::now())
+                    .await
+                    .map_err(lane_error)?;
+            }
+            _ = state.notify.notified() => {
+                if !state.is_running() {
+                    state
+                        .backend
+                        .release_active_job(&job.id, &lock_token, Utc::now())
+                        .await
+                        .map_err(lane_error)?;
+                    return Ok(());
+                }
+            }
         }
     }
-    Ok(())
+}
+
+fn queue_heartbeat_interval(lease_duration: Duration) -> Duration {
+    let interval = lease_duration / 3;
+    if interval.is_zero() {
+        Duration::from_millis(1)
+    } else {
+        interval
+    }
 }
 
 async fn wait_for_processor(
@@ -831,110 +903,4 @@ where
         .build()
         .map_err(|error| BootError::Internal(format!("failed to create queue runtime: {error}")))?;
     runtime.block_on(future)
-}
-
-/// Module that registers and exports a [`Queue`] provider.
-#[derive(Clone)]
-pub struct QueueModule {
-    name: &'static str,
-    token: ProviderToken,
-    queue: Arc<Queue>,
-    processors: Vec<(String, Arc<dyn QueueProcessor>)>,
-    global: bool,
-}
-
-impl fmt::Debug for QueueModule {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("QueueModule")
-            .field("name", &self.name)
-            .field("token", &self.token)
-            .field("queue", &self.queue)
-            .field("processors", &self.processors.len())
-            .field("global", &self.global)
-            .finish_non_exhaustive()
-    }
-}
-
-impl QueueModule {
-    pub fn in_process(name: &'static str) -> Self {
-        Self::from_queue(name, Queue::in_process(name))
-    }
-
-    pub fn in_process_with_options(name: &'static str, options: QueueOptions) -> Self {
-        Self::from_queue(name, Queue::in_process_with_options(name, options))
-    }
-
-    pub fn from_lane_backend_arc(
-        name: &'static str,
-        backend: Arc<dyn LaneJobQueueBackend>,
-    ) -> Self {
-        Self::from_queue(name, Queue::from_lane_backend_arc(name, backend))
-    }
-
-    pub fn from_queue(name: &'static str, queue: Queue) -> Self {
-        Self {
-            name,
-            token: ProviderToken::of::<Queue>(),
-            queue: Arc::new(queue),
-            processors: Vec::new(),
-            global: false,
-        }
-    }
-
-    pub fn processor<P>(mut self, name: impl Into<String>, processor: P) -> Self
-    where
-        P: QueueProcessor,
-    {
-        self.processors.push((name.into(), Arc::new(processor)));
-        self
-    }
-
-    pub fn named(mut self, token: impl Into<String>) -> Self {
-        self.token = ProviderToken::named(token);
-        self
-    }
-
-    pub fn global(mut self) -> Self {
-        self.global = true;
-        self
-    }
-}
-
-impl Module for QueueModule {
-    fn name(&self) -> &'static str {
-        self.name
-    }
-
-    fn providers(&self) -> Result<Vec<ProviderDefinition>> {
-        Ok(vec![ProviderDefinition::named_from_arc(
-            self.token.as_str(),
-            Arc::clone(&self.queue),
-        )])
-    }
-
-    fn exports(&self) -> Result<Vec<ProviderToken>> {
-        Ok(vec![self.token.clone()])
-    }
-
-    fn is_global(&self) -> bool {
-        self.global
-    }
-
-    fn on_module_init(&self, _module_ref: &ModuleRef) -> Result<()> {
-        for (name, processor) in &self.processors {
-            self.queue
-                .process_arc(name.clone(), Arc::clone(processor))?;
-        }
-        Ok(())
-    }
-
-    fn on_application_bootstrap(&self, module_ref: ModuleRef) -> BoxFuture<'static, Result<()>> {
-        let queue = Arc::clone(&self.queue);
-        Box::pin(async move { queue.start(module_ref).await })
-    }
-
-    fn on_application_shutdown(&self, _module_ref: ModuleRef) -> BoxFuture<'static, Result<()>> {
-        let queue = Arc::clone(&self.queue);
-        Box::pin(async move { queue.shutdown().await })
-    }
 }
