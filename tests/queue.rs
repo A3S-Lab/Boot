@@ -2,7 +2,8 @@
 
 use a3s_boot::{
     BootApplication, BootError, BoxFuture, Module, ModuleRef, ProviderDefinition, Queue,
-    QueueContext, QueueJob, QueueJobOptions, QueueJobState, QueueModule, QueueOptions, Result,
+    QueueContext, QueueJob, QueueJobOptions, QueueJobState, QueueModule, QueueOptions,
+    QueueRetryPolicy, Result,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -284,6 +285,61 @@ async fn queue_records_processor_failures_and_job_states() {
     let jobs = queue.jobs().unwrap();
     assert_eq!(jobs.len(), 1);
     assert_eq!(jobs[0].state, QueueJobState::Failed);
+}
+
+#[tokio::test]
+async fn queue_applies_retry_and_timeout_options_to_processors() {
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&attempts);
+    let queue = Queue::in_process_with_options(
+        "retry-queue",
+        QueueOptions::new().with_poll_interval(Duration::from_millis(5)),
+    );
+    queue
+        .process("retry", move |_job, _context| {
+            let observed = Arc::clone(&observed);
+            async move {
+                if observed.fetch_add(1, Ordering::SeqCst) == 0 {
+                    return Err(BootError::Internal("transient failure".to_string()));
+                }
+                Ok(())
+            }
+        })
+        .unwrap();
+    queue
+        .process("timeout", |_job, _context| async move {
+            std::future::pending::<Result<()>>().await
+        })
+        .unwrap();
+    queue
+        .enqueue_with_options(
+            "retry",
+            &EmailJob {
+                to: "retry@example.com".to_string(),
+            },
+            QueueJobOptions::new()
+                .with_retry_policy(QueueRetryPolicy::fixed(1, Duration::from_millis(5))),
+        )
+        .await
+        .unwrap();
+    queue
+        .enqueue_with_options(
+            "timeout",
+            &EmailJob {
+                to: "timeout@example.com".to_string(),
+            },
+            QueueJobOptions::new().with_timeout(Duration::from_millis(10)),
+        )
+        .await
+        .unwrap();
+    queue.start(ModuleRef::new()).await.unwrap();
+    wait_until(|| attempts.load(Ordering::SeqCst) == 2 && queue.stats().unwrap().failed == 1).await;
+    queue.shutdown().await.unwrap();
+
+    let stats = queue.stats().unwrap();
+    assert_eq!(stats.completed, 1);
+    assert_eq!(stats.failed, 1);
+    assert!(queue.failures().unwrap()[0].message.contains("timed out"));
 }
 
 #[test]

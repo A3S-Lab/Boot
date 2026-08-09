@@ -183,11 +183,14 @@ pub use provider::{
     ProviderOnApplicationShutdown, ProviderOnModuleDestroy, ProviderOnModuleInit, ProviderRef,
     ProviderScope, ProviderToken,
 };
+#[cfg(feature = "queue-postgres")]
+pub use queue::PostgresQueueBackend;
 #[cfg(feature = "queue")]
 pub use queue::{
-    InProcessQueueBackend, Queue, QueueBackend, QueueContext, QueueJob, QueueJobFailure,
-    QueueJobInfo, QueueJobOptions, QueueJobPriority, QueueJobReceipt, QueueJobState, QueueModule,
-    QueueOptions, QueueProcessor, QueueRetryPolicy, QueueStats,
+    InProcessQueueBackend, Queue, QueueBackend, QueueContext, QueueDeduplicationOptions, QueueJob,
+    QueueJobFailure, QueueJobInfo, QueueJobOptions, QueueJobPriority, QueueJobReceipt,
+    QueueJobRetention, QueueJobState, QueueModule, QueueOptions, QueueProcessor, QueueRetryPolicy,
+    QueueStats,
 };
 #[cfg(feature = "request-context")]
 pub use request_context::RequestContext;
