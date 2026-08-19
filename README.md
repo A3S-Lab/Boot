@@ -295,6 +295,13 @@ host application creates that schema; Boot owns the queue tables and its A3S ORM
 migration ledger inside it. Sharing the Flow or application schema can make one
 component accept another component's migration history.
 
+`connect` remains the single-process convenience boundary that applies the
+canonical migration set. Production hosts separate authority: a terminating
+migration process calls `migrate_postgres_queue`, while serving workers use
+`connect_verified` or `from_executor_verified`. The verified constructors reuse
+A3S ORM's read-only ledger admission and never create a table, acquire a
+migration lock, or write migration history.
+
 The backend supports caller-assigned idempotency keys, priority and FIFO/LIFO
 ordering, delay, retry, processor timeout, terminal retention, deduplication,
 active keep-latest successors, and graceful lease release. Delivery is

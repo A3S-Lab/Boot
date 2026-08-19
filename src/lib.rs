@@ -184,7 +184,7 @@ pub use provider::{
     ProviderScope, ProviderToken,
 };
 #[cfg(feature = "queue-postgres")]
-pub use queue::PostgresQueueBackend;
+pub use queue::{migrate_postgres_queue, PostgresQueueBackend};
 #[cfg(feature = "queue")]
 pub use queue::{
     InProcessQueueBackend, Queue, QueueBackend, QueueContext, QueueDeduplicationOptions, QueueJob,

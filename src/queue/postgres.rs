@@ -4,7 +4,7 @@ use std::future::{pending, Future};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-use a3s_orm::PostgresExecutor;
+use a3s_orm::{MigrationReport, PostgresExecutor};
 use serde_json::Value;
 use tokio::runtime::{Builder as TokioRuntimeBuilder, Handle};
 use tokio::sync::{watch, Notify};
@@ -72,6 +72,19 @@ impl PostgresQueueBackend {
         Ok(Self::from_store(store, options))
     }
 
+    /// Connect and verify that the complete Boot queue schema was applied by
+    /// a separate migrator, without acquiring DDL authority.
+    pub async fn connect_verified(
+        database_url: impl AsRef<str>,
+        queue_name: impl AsRef<str>,
+        options: QueueOptions,
+    ) -> Result<Self> {
+        let store =
+            PostgresQueueStore::connect_verified(database_url.as_ref(), queue_name.as_ref())
+                .await?;
+        Ok(Self::from_store(store, options))
+    }
+
     /// Use a configured A3S ORM executor and apply Boot migrations.
     pub async fn from_executor(
         executor: PostgresExecutor,
@@ -79,6 +92,18 @@ impl PostgresQueueBackend {
         options: QueueOptions,
     ) -> Result<Self> {
         let store = PostgresQueueStore::from_executor(executor, queue_name.as_ref()).await?;
+        Ok(Self::from_store(store, options))
+    }
+
+    /// Use a configured executor and verify the complete Boot queue schema
+    /// without applying migrations.
+    pub async fn from_executor_verified(
+        executor: PostgresExecutor,
+        queue_name: impl AsRef<str>,
+        options: QueueOptions,
+    ) -> Result<Self> {
+        let store =
+            PostgresQueueStore::from_executor_verified(executor, queue_name.as_ref()).await?;
         Ok(Self::from_store(store, options))
     }
 
@@ -131,6 +156,12 @@ impl PostgresQueueBackend {
         self.state.notify.notify_waiters();
         result
     }
+}
+
+/// Apply the canonical Boot PostgreSQL queue migration set with a dedicated
+/// migration executor.
+pub async fn migrate_postgres_queue(executor: &PostgresExecutor) -> Result<MigrationReport> {
+    store::migrate_schema(executor).await
 }
 
 impl QueueBackend for PostgresQueueBackend {

@@ -28,7 +28,7 @@ mod module;
 
 pub use module::QueueModule;
 #[cfg(feature = "queue-postgres")]
-pub use postgres::PostgresQueueBackend;
+pub use postgres::{migrate_postgres_queue, PostgresQueueBackend};
 
 /// Queue runtime options shared by queue modules and Lane-backed queue backends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

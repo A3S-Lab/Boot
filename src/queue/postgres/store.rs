@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use a3s_orm::{
-    sql_query, DecodeError, Executor, FromRow, FromValue, Migrator, PostgresDialect, PostgresError,
-    PostgresExecutor, PostgresRow, PostgresTransaction, PostgresTransactionError, Query, Row,
-    SqlQuery,
+    sql_query, DecodeError, Executor, FromRow, FromValue, MigrationReport, Migrator,
+    PostgresDialect, PostgresError, PostgresExecutor, PostgresRow, PostgresTransaction,
+    PostgresTransactionError, Query, Row, SqlQuery,
 };
 use chrono::Utc;
 use serde_json::Value;
@@ -106,26 +106,38 @@ impl PostgresQueueStore {
         Self::from_executor(executor, queue_name).await
     }
 
+    pub(super) async fn connect_verified(database_url: &str, queue_name: &str) -> Result<Self> {
+        let executor = PostgresExecutor::connect_no_tls(database_url, 5).map_err(|error| {
+            BootError::Internal(format!(
+                "could not configure PostgreSQL Boot queue: {error}"
+            ))
+        })?;
+        Self::from_executor_verified(executor, queue_name).await
+    }
+
     pub(super) async fn from_executor(
         executor: PostgresExecutor,
         queue_name: &str,
     ) -> Result<Self> {
-        let queue_name = queue_name.trim();
-        if queue_name.is_empty() {
-            return Err(BootError::BadRequest(
-                "PostgreSQL queue name cannot be empty".to_string(),
-            ));
-        }
-        Migrator::new(executor.clone())
-            .run(postgres_queue_migrations())
-            .await
-            .map_err(|error| {
-                BootError::Internal(format!("PostgreSQL Boot queue migration failed: {error}"))
-            })?;
-        Ok(Self {
+        let queue_name = validated_queue_name(queue_name)?;
+        migrate_schema(&executor).await?;
+        Ok(Self::new(executor, queue_name))
+    }
+
+    pub(super) async fn from_executor_verified(
+        executor: PostgresExecutor,
+        queue_name: &str,
+    ) -> Result<Self> {
+        let queue_name = validated_queue_name(queue_name)?;
+        verify_schema(&executor).await?;
+        Ok(Self::new(executor, queue_name))
+    }
+
+    fn new(executor: PostgresExecutor, queue_name: String) -> Self {
+        Self {
             executor,
-            queue_name: queue_name.to_string(),
-        })
+            queue_name,
+        }
     }
 
     pub(super) fn queue_name(&self) -> &str {
@@ -594,6 +606,36 @@ impl PostgresQueueStore {
         .await?;
         Ok(())
     }
+}
+
+fn validated_queue_name(queue_name: &str) -> Result<String> {
+    let queue_name = queue_name.trim();
+    if queue_name.is_empty() {
+        return Err(BootError::BadRequest(
+            "PostgreSQL queue name cannot be empty".to_string(),
+        ));
+    }
+    Ok(queue_name.to_string())
+}
+
+pub(super) async fn migrate_schema(executor: &PostgresExecutor) -> Result<MigrationReport> {
+    Migrator::new(executor.clone())
+        .run(postgres_queue_migrations())
+        .await
+        .map_err(|error| {
+            BootError::Internal(format!("PostgreSQL Boot queue migration failed: {error}"))
+        })
+}
+
+async fn verify_schema(executor: &PostgresExecutor) -> Result<()> {
+    Migrator::new(executor.clone())
+        .verify_required(postgres_queue_migrations())
+        .await
+        .map_err(|error| {
+            BootError::Internal(format!(
+                "PostgreSQL Boot queue schema admission failed: {error}; run the Boot migrator before serving"
+            ))
+        })
 }
 
 #[allow(clippy::too_many_arguments)]

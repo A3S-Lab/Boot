@@ -5,9 +5,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use a3s_boot::{
-    BootError, ModuleRef, PostgresQueueBackend, Queue, QueueJobOptions, QueueJobRetention,
-    QueueOptions,
+    migrate_postgres_queue, BootError, ModuleRef, PostgresQueueBackend, Queue, QueueJobOptions,
+    QueueJobRetention, QueueOptions,
 };
+use a3s_orm::PostgresExecutor;
 use serde_json::json;
 use uuid::Uuid;
 
@@ -32,6 +33,27 @@ async fn wait_until(mut predicate: impl FnMut() -> bool) {
     })
     .await
     .expect("PostgreSQL queue condition should become true");
+}
+
+#[tokio::test]
+async fn explicit_migrator_and_verified_serving_constructor_share_one_manifest() {
+    let Some(url) = postgres_url() else {
+        eprintln!("skipping PostgreSQL queue test; set A3S_BOOT_POSTGRES_URL");
+        return;
+    };
+    let executor = PostgresExecutor::connect_no_tls(&url, 2).expect("PostgreSQL executor");
+    migrate_postgres_queue(&executor)
+        .await
+        .expect("dedicated Boot migration");
+
+    let backend = PostgresQueueBackend::from_executor_verified(
+        executor,
+        queue_name("verified"),
+        QueueOptions::new(),
+    )
+    .await
+    .expect("read-only Boot schema admission");
+    assert_eq!(backend.stats_async().await.expect("queue stats").pending, 0);
 }
 
 #[tokio::test]
