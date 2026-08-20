@@ -1,0 +1,86 @@
+---
+title: HTTP and OpenAPI
+description: Describe HTTP contracts, generate OpenAPI, and use upload, static-file, SSE, view, and outbound-client capabilities.
+---
+
+# HTTP and OpenAPI
+
+Boot HTTP types and route metadata are independent of Axum. An application can generate an OpenAPI document during construction and can register the JSON and Swagger UI as ordinary Boot routes.
+
+## Generate a document
+
+```rust
+let app = BootApplication::builder()
+    .import(AppModule)
+    .serve_openapi(
+        "/openapi.json",
+        OpenApiInfo::new("Catalog API", "1.0.0"),
+    )
+    .serve_openapi_ui(
+        "/docs",
+        "/openapi.json",
+        OpenApiInfo::new("Catalog API", "1.0.0"),
+    )
+    .build()?;
+```
+
+You can also call `BootApplication::openapi(info)` and pass the `OpenApiDocument` to your own publishing or validation flow.
+
+Documentation is collected from final resolved routes, so it includes controller, module, and global prefixes, path parameters, and version settings. A construction conflict fails the application before it can publish a document that differs from runtime behavior.
+
+## Attribute metadata
+
+Controller and route attributes cover common OpenAPI metadata:
+
+| Scope      | Attribute examples                                                                                      |
+| ---------- | ------------------------------------------------------------------------------------------------------- |
+| Operation  | `operation`, `tag`, `hide_from_openapi`                                                                 |
+| Parameter  | `api_param`, `api_query`, `api_header`                                                                  |
+| Body       | `request_body`, JSON body-field and multipart macros                                                    |
+| Response   | `api_response_header`, status, content type, and example metadata                                       |
+| Security   | `bearer_auth`, `api_key_auth`, `api_cookie_auth`, `oauth2_auth`, `open_id_connect_auth`, `api_security` |
+| Components | `api_extra_model`, `api_extension`                                                                      |
+
+Explicit builders construct the same `OpenApiRouteMetadata`, schemas, parameters, request bodies, responses, security schemes, and reusable components.
+
+With `openapi-schemas`, Boot can collect schemas from DTOs that implement `schemars::JsonSchema`. Resolve schema-name conflicts explicitly instead of depending on registration order to overwrite one.
+
+## HTTP input and output
+
+`BootRequest` exposes paths, queries, headers, cookies, bodies, and a client IP hint. `BootResponse` supports status, headers, cookies, JSON, text, HTML, and bytes. Specialized capabilities include:
+
+- Server-sent events through `SseStream` and `SseEvent`
+- `StreamableFile`, downloads, and byte streams
+- `ResponsePassthrough` for modifying status, headers, or cookies while returning a DTO
+- URI, header, and media-type API versioning
+- Host-scoped controllers and catch-all paths
+
+Keep handler result types specific. Prefer a concrete DTO for an ordinary JSON endpoint, and return `BootResponse` only when the handler needs complete response control.
+
+## Multipart and static content
+
+`file-upload` provides `MultipartOptions`, `MultipartForm`, `UploadedFile`, `#[uploaded_file]`, and `#[uploaded_files]`. Set total body, field, file, count, and per-file limits. An uploaded filename is untrusted input and must never be concatenated directly into a filesystem path.
+
+`static` provides `StaticModule` and `StaticFileService` with GET, HEAD, index files, SPA fallback, cache-control, and content-type handling. The implementation rejects traversal and dotfiles. A CDN or reverse proxy should still carry high-volume static traffic in production.
+
+## Views, compression, and outbound HTTP
+
+- `ViewModule` and `ViewEngine` define a replaceable rendering boundary. `StringTemplateViewEngine` fits simple cases and tests.
+- `compression` compresses eligible responses according to `Accept-Encoding: gzip` and a minimum body size while maintaining `Vary` and content length.
+- `HttpModule` exports `HttpService` with a base URL, default headers, timeout, JSON helpers, async options, and a custom `HttpClientBackend` boundary.
+
+Configure outbound timeout, retry, and identity headers at the corresponding module boundary. Do not forward every inbound request header to a downstream service without filtering.
+
+## Cookies, caching, and proxies
+
+`CookieOptions` controls response cookies. `CacheInterceptor` caches eligible HTTP responses and can be overridden by `#[cache_key]` and `#[cache_ttl]`. A cache key must include identity, tenant, locale, version, and every other dimension that affects the representation.
+
+Boot only consumes a client IP hint supplied by an adapter. Behind a proxy, let the trusted network layer normalize forwarded headers. An application must not trust a same-named header sent by any client.
+
+## Contract verification
+
+- Generate and diff OpenAPI in CI, reviewing removed fields, narrower types, and status changes.
+- Write separate integration tests for JSON, empty bodies, streams, files, SSE, and error responses.
+- Confirm body and multipart limits take effect before unbounded parsing.
+- Protect Swagger UI and OpenAPI JSON with access control appropriate to the product.
+- Keep the actual API version strategy consistent with documented server URLs, paths, and media types.

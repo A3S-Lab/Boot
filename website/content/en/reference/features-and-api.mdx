@@ -1,0 +1,125 @@
+---
+title: Feature and API map
+description: Find A3S Boot Cargo features, core types, technique modules, protocol types, and attribute-macro entry points.
+---
+
+# Feature and API map
+
+This page navigates the crate's public surface. Use [docs.rs](https://docs.rs/a3s-boot) as the source of truth for exact trait bounds, method signatures, and Rustdoc.
+
+## Defaults and core
+
+| Feature          | Default | Primary exports                                                                          |
+| ---------------- | :-----: | ---------------------------------------------------------------------------------------- |
+| `axum`           |   Yes   | `AxumAdapter`                                                                            |
+| `macros`         |   Yes   | Module, provider, HTTP, WebSocket, message, and technique macros                         |
+| `shutdown-hooks` |   Yes   | `wait_for_shutdown_signal`, `ShutdownSignal`                                             |
+| Core             | Always  | Application, modules, DI, HTTP, pipeline, OpenAPI, validation, views, testing, discovery |
+
+## Application and DI
+
+| Area                 | Primary types                                                                                                                                             |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Application creation | `BootFactory`, `BootApplication`, `BootApplicationBuilder`                                                                                                |
+| Non-HTTP shells      | `BootApplicationContext`, `BootMicroservice`, `BootApplicationHandle`                                                                                     |
+| Modules              | `Module`, `DynamicModule`, `LazyModuleLoader`, `LazyLoadedModule`                                                                                         |
+| Providers            | `ProviderDefinition`, `ProviderToken`, `ProviderScope`, `ProviderDependency`                                                                              |
+| Resolution           | `ModuleRef`, `ProviderRef`, `FromModuleRef`, `ContextId`, `ContextIdFactory`                                                                              |
+| Lifecycle            | `ProviderOnModuleInit`, `ProviderOnApplicationBootstrap`, `ProviderOnModuleDestroy`, `ProviderBeforeApplicationShutdown`, `ProviderOnApplicationShutdown` |
+| Inspection           | `DiscoveryService`, `Reflector`, `ApplicationGraph`, and discovered types                                                                                 |
+
+## HTTP and pipeline
+
+| Area                 | Primary types                                                                                                                                                     |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Adapter              | `HttpAdapter`, `AxumAdapter`                                                                                                                                      |
+| Routes               | `ControllerDefinition`, `RouteDefinition`, `RouteHandler`, `HttpMethod`                                                                                           |
+| Request / Response   | `BootRequest`, `BootResponse`, `ResponsePassthrough`                                                                                                              |
+| Extraction and pipes | `RequestExtractor`, `RequestValuePipe`, `ParseIntPipe`, `ParseBoolPipe`, `ParseFloatPipe`, `ParseArrayPipe`, `ParseEnumPipe`, `ParseUuidPipe`, `DefaultValuePipe` |
+| Pipeline             | `Middleware`, `Guard`, `Interceptor`, `ExecutionInterceptor`, `Pipe`, `ExceptionFilter`, `CallHandler`, `ExecutionContext`                                        |
+| Middleware routing   | `MiddlewareConsumer`, `MiddlewareConsumerBuilder`, `MiddlewareRoute`, `MiddlewareOutcome`                                                                         |
+| Errors               | `BootError`, `BootErrorKind`, `Result<T>`, `catch_errors`                                                                                                         |
+| Streaming            | `SseEvent`, `SseStream`, `StreamableFile`, `StreamableFileStream`                                                                                                 |
+| Cookies              | `CookieOptions`, `CookieSameSite`                                                                                                                                 |
+| API versions         | `ApiVersioning`, `ApiVersioningStrategy`, `RouteVersioning`                                                                                                       |
+
+## Validation, OpenAPI, and views
+
+| Area             | Primary types                                                                                                 |
+| ---------------- | ------------------------------------------------------------------------------------------------------------- |
+| Validation       | `Validate`, `ValidationSchema`, `ValidationOptions`                                                           |
+| Serialization    | `SerializationInterceptor`, `SerializationOptions`                                                            |
+| OpenAPI          | `OpenApiDocument`, `OpenApiInfo`, `OpenApiOperation`, `OpenApiPathItem`, `OpenApiSchema`, `OpenApiComponents` |
+| OpenAPI security | `OpenApiSecurityScheme`, `OpenApiSecurityRequirement`, `OpenApiOAuthFlow`, `OpenApiOAuthFlows`                |
+| Views            | `ViewModule`, `ViewEngine`, `ViewRenderer`, `StringTemplateViewEngine`                                        |
+| Testing          | `TestingModule`, `TestingModuleBuilder`                                                                       |
+
+## Optional application modules
+
+| Feature           | Primary module and interfaces                                                        |
+| ----------------- | ------------------------------------------------------------------------------------ |
+| `auth`            | `AuthModule`, `AuthService`, `AuthGuard`, `AuthPrincipal`, `AuthStrategy`            |
+| `cache`           | `CacheModule`, `Cache`, `CacheStore`, `CacheInterceptor`, `InMemoryCacheStore`       |
+| `compression`     | `CompressionInterceptor`, `CompressionOptions`                                       |
+| `config`          | `ConfigModule` and ACL parsing helpers                                               |
+| `cqrs`            | `CqrsModule`, `CommandBus`, `QueryBus`, `EventBus`, `CqrsContext`                    |
+| `database`        | `DatabaseModule`, `Database`, `DatabaseBackend`, `DatabaseTransaction`               |
+| `events`          | `EventModule`, `EventEmitter`, `A3sEventBus`, `A3sEventProvider`                     |
+| `file-upload`     | `MultipartForm`, `MultipartField`, `UploadedFile`, `MultipartOptions`                |
+| `health`          | `HealthModule`, `HealthCheckService`, `HealthIndicator`, `HealthReport`              |
+| `http-client`     | `HttpModule`, `HttpService`, `HttpClientBackend`, `HttpClientOptions`                |
+| `logging`         | `LoggingModule`, `Logger`, `LogSink`, `LogRecord`, request logging enhancers         |
+| `queue`           | `QueueModule`, `Queue`, `QueueBackend`, `QueueJob`, `QueueOptions`, `QueueProcessor` |
+| `queue-postgres`  | `PostgresQueueBackend`                                                               |
+| `request-context` | `RequestContext`                                                                     |
+| `schedule`        | `ScheduleModule`, `Scheduler`, `ScheduledJob`, `ScheduleContext`                     |
+| `security`        | CORS, CSRF, rate-limit, and security-header types                                    |
+| `session`         | `SessionModule`, `SessionManager`, `SessionStore`, `SessionOptions`                  |
+| `static`          | `StaticModule`, `StaticFileService`, `StaticFileOptions`                             |
+| `ilink`           | Module, client, auth, login, message, and update types under `a3s_boot::ilink`       |
+
+## WebSocket and message transports
+
+| Area                     | Primary types                                                                                                                 |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| WebSocket definitions    | `WebSocketGatewayDefinition`, `WebSocketSubscriptionDefinition`                                                               |
+| Connections and messages | `WebSocketConnection`, `WebSocketMessage`, `WebSocketOutbound`, `WebSocketGatewayServer`                                      |
+| WebSocket pipeline       | `WebSocketContext`, `WebSocketGuard`, `WebSocketPipe`, `WebSocketInterceptor`, `WebSocketExceptionFilter`                     |
+| Message patterns         | `MessagePatternDefinition`, `MessagePatternKind`, `TransportMessage`, `TransportReply`                                        |
+| Transport contract       | `MessageTransport`, `TransportContext`, `TransportGuard`, `TransportPipe`, `TransportInterceptor`, `TransportExceptionFilter` |
+| Default transport        | `InProcessTransport`, `InProcessTransportClient`                                                                              |
+| Network transports       | TCP, Redis, NATS, MQTT, RabbitMQ, Kafka, and gRPC types behind their features                                                 |
+
+## Attribute macro index
+
+### Application declarations
+
+`module`, `injectable`, `controller`, `websocket_gateway`, `message_controller`, `event_listener`, `schedule`.
+
+### HTTP methods and extraction
+
+`all`, `get`, `post`, `put`, `patch`, `delete`, `head`, `options`, their JSON variants, `sse`, `body`, `request`, `param`, `params`, `query`, `header`, `headers`, `cookie`, `cookies`, `host_param`, `ip`, `extract`, `res`, `uploaded_file`, `uploaded_files`.
+
+### Routing and responses
+
+`host`, `http_code`, `redirect`, `render`, `serialize`, `version`, `versions`, `version_neutral`, `validate`, `skip_validation`, `metadata`, `cache_key`, `cache_ttl`.
+
+### Pipeline
+
+`use_guard`, `use_interceptor`, `use_pipe`, `use_filter`, `catch`, `apply_decorators`.
+
+### OpenAPI and authentication
+
+`operation`, `tag`, `request_body`, `api_param`, `api_query`, `api_header`, `api_response_header`, `api_extension`, `api_extra_model`, `hide_from_openapi`, `bearer_auth`, `api_security`, `api_cookie_auth`, `api_key_auth`, `oauth2_auth`, `open_id_connect_auth`.
+
+### WebSocket, messages, events, and scheduling
+
+`subscribe_message`, `message_body`, `payload`, `message_pattern`, `event_pattern`, `on_gateway_init`, `on_gateway_connection`, `on_gateway_disconnect`, `on_event`, `cron`, `interval`, `timeout`.
+
+## Feature selection rules
+
+- Start with defaults and add a module only for a real boundary.
+- A library crate should not force every Boot feature on downstream users.
+- Inspect feature unification with `cargo tree -e features -p a3s-boot`.
+- Run focused tests for production combinations, then `cargo check --all-features` for a release.
+- Successful compilation of an external transport feature does not prove its broker is configured correctly.

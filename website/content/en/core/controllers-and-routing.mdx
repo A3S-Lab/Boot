@@ -1,0 +1,113 @@
+---
+title: Controllers and routing
+description: Build HTTP routes with attributes or explicit definitions, extract typed input, and select response and versioning strategies.
+---
+
+# Controllers and routing
+
+A controller binds a group of HTTP routes to an ordinary Rust type. Route definitions belong to the Boot core. Only listening and network conversion are delegated to the Axum adapter.
+
+## Attribute routes
+
+```rust
+use a3s_boot::{body, controller, get, header, param, post, query, Result};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize)]
+struct ListQuery {
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateUser {
+    name: String,
+}
+
+#[derive(Debug, Serialize)]
+struct UserDto {
+    id: String,
+    name: String,
+}
+
+#[controller("/users")]
+impl UserController {
+    #[get("/{id}")]
+    async fn find(
+        &self,
+        #[param("id")] id: String,
+        #[query] query: ListQuery,
+        #[header("x-request-id")] request_id: Option<String>,
+    ) -> Result<UserDto> {
+        self.users.find(id, query.limit, request_id).await
+    }
+
+    #[post("/", status = 201)]
+    async fn create(&self, #[body] input: CreateUser) -> Result<UserDto> {
+        self.users.create(input).await
+    }
+}
+```
+
+HTTP method macros include `all`, `get`, `post`, `put`, `patch`, `delete`, `head`, `options`, and JSON convenience variants. Use `sse` for server-sent events.
+
+## Input extraction
+
+| Attribute                         | Input                                    |
+| --------------------------------- | ---------------------------------------- |
+| `#[body]`, `#[body("field")]`     | A complete JSON DTO or one JSON field    |
+| `#[param("name")]`, `#[params]`   | One or all path parameters               |
+| `#[query]`, `#[query("name")]`    | A complete query DTO or one value        |
+| `#[header("name")]`, `#[headers]` | One or all request headers               |
+| `#[cookie("name")]`, `#[cookies]` | One or all cookies                       |
+| `#[host_param("name")]`           | A captured host-pattern value            |
+| `#[ip]`                           | A client IP hint supplied by the adapter |
+| `#[request]`                      | The complete `BootRequest`               |
+| `#[extract(...)]`                 | A custom `RequestExtractor`              |
+
+Single-value extractors can declare `pipe = <expr>` and `default = <expr>`. Built-in pipes parse integers, booleans, floats, arrays, enums, UUIDs, and default values. A parsing failure becomes a normal `BootError` and enters the filter chain.
+
+## Route matching
+
+Boot checks controller prefixes, module prefixes, the global prefix, and route paths during construction. Static segments take precedence over parameters, and parameters take precedence over catch-all segments. An identical method and pattern conflict fails before listening.
+
+Use `#[host("{account}.example.com")]` or `with_host(...)` to constrain a host. An `all` route is a method fallback, so a route for a specific method retains precedence.
+
+```rust
+let app = BootApplication::builder()
+    .import(AppModule)
+    .global_prefix("/api")
+    .exclude_global_prefix([MiddlewareRoute::new("/health")?])
+    .build()?;
+```
+
+## API versions
+
+Boot supports URI, header, and media-type version strategies. Apply `#[version("1")]`, `#[versions("1", "2")]`, or `#[version_neutral]` to a controller or route.
+
+```rust
+let app = BootApplication::builder()
+    .import(AppModule)
+    .enable_api_versioning(ApiVersioning::uri().with_default_version("1"))
+    .build()?;
+```
+
+Application API versions and this documentation site's versions are separate concepts. API versioning only affects runtime route matching.
+
+## Response types
+
+A handler can return a serializable DTO, `String`, `BootResponse`, or a supported specialized response:
+
+- JSON, text, HTML, and raw bytes
+- Redirects, status codes, headers, and cookies
+- `ResponsePassthrough` to modify a response while returning a DTO
+- `SseStream` and `SseEvent`
+- `StreamableFile` and downloads
+- Views rendered through `ViewRenderer`
+
+Return a `BootError` for failures. Common HTTP constructors and the generic `http_exception(status, message)` helper produce consistent default JSON error responses.
+
+## Explicit builders
+
+`ControllerDefinition` and `RouteDefinition` support the same host, metadata, version, pipeline, validation, OpenAPI, and response settings. Attribute macros generate these definitions at compile time. Runtime dynamic routes should use builders directly without inventing another macro layer.
+
+Continue to [validation and serialization](/core/validation-and-serialization) and [HTTP and OpenAPI](/capabilities/openapi-and-http).

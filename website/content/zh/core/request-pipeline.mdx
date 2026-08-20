@@ -1,0 +1,104 @@
+---
+title: 请求管线
+description: 理解 Middleware、Guard、Interceptor、Pipe、验证、Handler 与 Filter 的确定性执行顺序。
+---
+
+# 请求管线
+
+Boot 为 HTTP、WebSocket 和消息传输提供一致的执行概念，并为每种协议保留专属上下文与响应类型。
+
+## HTTP 执行顺序
+
+```text
+request
+  |
+middleware
+  |
+guards
+  |
+interceptors before
+  |
+pipes
+  |
+validation
+  |
+handler
+  |
+interceptors after
+  |
+response
+
+unrecovered error -> exception filters
+```
+
+同类组件按应用级、Module、Controller、Route 的声明拓扑组合。显式顺序是 API 契约，不应让组件依赖未声明的全局副作用。
+
+## 每个阶段的职责
+
+| 阶段        | 合适的工作                               | 不合适的工作                 |
+| ----------- | ---------------------------------------- | ---------------------------- |
+| Middleware  | 请求修改、日志起点、短路、CORS preflight | 依赖 handler metadata 的授权 |
+| Guard       | 认证、授权、配额决策                     | 修改业务响应 body            |
+| Interceptor | 计时、缓存、包装、结果转换、受控重试     | 修改已经提取的参数类型       |
+| Pipe        | 单值转换与拒绝                           | 打开长生命周期资源           |
+| Validation  | DTO 结构和业务前置约束                   | 数据库唯一性等并发事实       |
+| Handler     | 调用应用服务并形成结果                   | 跨应用的日志和错误格式策略   |
+| Filter      | 把未恢复错误映射到协议响应               | 吞掉需要告警的内部失败       |
+
+## 注册全局组件
+
+```rust
+let app = BootApplication::builder()
+    .import(AppModule)
+    .use_global_middleware(RequestIdMiddleware)
+    .use_global_guard(AuthGuard::new())
+    .use_global_interceptor(TracingInterceptor)
+    .use_global_pipe(NormalizeInputPipe)
+    .use_global_validation()
+    .use_global_filter(ApiErrorFilter)
+    .build()?;
+```
+
+Controller 和 Route 可以通过 `#[use_guard]`、`#[use_interceptor]`、`#[use_pipe]` 与 `#[use_filter]` 添加局部组件。`#[apply_decorators(...)]` 可以组合一组经过复用的属性。
+
+需要从 DI 容器解析 application-wide enhancer 时，把对应 Provider 声明为 HTTP、WebSocket 或 transport enhancer。Provider-backed enhancer 支持 scope bubbling，并在每次调用的 context 中解析。直接传给 builder 的值不会从 Module 注入依赖。
+
+## Around Interceptor
+
+`Interceptor` 接收 `CallHandler`，因此可以：
+
+- 在下游之前与之后执行逻辑
+- 不调用 `next` 并直接短路
+- 转换成功响应
+- 恢复某类错误
+- 多次调用 `next.handle()` 实现顺序重试或 timeout wrapper
+
+重试具有 at-least-once 语义。Provider 内部状态、日志、数据库写入和外部副作用不会自动回滚。只对明确可重放的操作启用重试，并为副作用使用幂等键。
+
+Filter 只收到 Interceptor 未恢复的错误。局部 Filter 比全局 Filter 更接近 handler，`catch_errors(...)` 或 `#[catch]` 可以按 `BootErrorKind` 限定处理范围。
+
+## 协议中立与协议专属
+
+`ExecutionContext` 暴露协议种类和共用 metadata，适合跨 HTTP、WebSocket 与 transport 的 Guard 或 Interceptor。协议专属组件使用：
+
+| 协议      | Context                             | Pipe / Guard / Interceptor / Filter                                                   |
+| --------- | ----------------------------------- | ------------------------------------------------------------------------------------- |
+| HTTP      | `ExecutionContext` 与 `BootRequest` | `Pipe`, `Guard`, `Interceptor`, `ExceptionFilter`                                     |
+| WebSocket | `WebSocketContext`                  | `WebSocketPipe`, `WebSocketGuard`, `WebSocketInterceptor`, `WebSocketExceptionFilter` |
+| Message   | `TransportContext`                  | `TransportPipe`, `TransportGuard`, `TransportInterceptor`, `TransportExceptionFilter` |
+
+只有真正共享策略时才使用 protocol-neutral enhancer。WebSocket room、message acknowledgement 或 HTTP header 仍应留在协议专属层。
+
+## Middleware Consumer
+
+Module 的 `configure` 可以使用 `MiddlewareConsumer` 选择 include 与 exclude route。它适合只对一组 Controller 应用日志、兼容处理或请求标记，同时避免在 handler 中重复分支。
+
+## 错误边界
+
+- 适配器验证在 Middleware 和 handler 执行前完成。
+- Guard 返回拒绝时不会进入 handler。
+- Pipe 与 Validation 错误进入同一 Filter 链。
+- Interceptor 恢复后的结果不会再交给 Filter。
+- 没有 Filter 接管时，Boot 使用稳定的默认错误响应。
+
+继续在[验证与序列化](/core/validation-and-serialization)中配置 DTO 边界。

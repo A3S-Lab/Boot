@@ -28,6 +28,9 @@ Official Nest.js areas used as reference:
 
 Implemented today:
 
+- A versioned documentation website with complete Chinese and English guides,
+  default Chinese routing, same-page locale switching, and v0.2.0/v0.1.4
+  version switching.
 - `Module` with imports, providers, controllers, direct routes, module route
   prefixes, and lifecycle hooks.
 - `BootFactory` with NestFactory-style `create`, `create_application_context`,

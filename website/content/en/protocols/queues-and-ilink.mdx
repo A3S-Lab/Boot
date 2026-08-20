@@ -1,0 +1,119 @@
+---
+title: Queues and Weixin iLink
+description: Run in-process or persistent PostgreSQL queues and connect the Tencent Weixin iLink channel with explicit host responsibilities.
+---
+
+# Queues and Weixin iLink
+
+Queues handle retryable background work. iLink connects an external messaging channel. Both integrate through providers and lifecycle, but their delivery semantics and deployment responsibilities are completely different.
+
+## In-process queues
+
+With `queue`, `QueueModule` uses A3S Lane to provide workers, priorities, delays, retries, and processors.
+
+```rust
+use a3s_boot::{QueueContext, QueueJob, QueueModule, QueueOptions, Result};
+
+let module = QueueModule::in_process_with_options(
+    "mail-queue",
+    QueueOptions::new().with_worker_count(4),
+)
+.processor("email.send", |job: QueueJob, context: QueueContext| async move {
+    let email = job.data_as::<EmailJob>()?;
+    let mailer = context.module_ref.get::<Mailer>()?;
+    mailer.send(email).await
+});
+```
+
+`Queue` provides typed serde JSON enqueue, processor registration, start, shutdown, job queries, failure queries, statistics, and clear. `QueueJobOptions` controls:
+
+- Priority and FIFO or LIFO ordering
+- Delay and processor timeout
+- Fixed and other `QueueRetryPolicy` strategies
+- Terminal retention
+- Caller-assigned idempotency keys
+- Deduplication ids and active keep-latest successors
+
+The in-process backend does not retain jobs across restart and is not shared with another process.
+
+## Persistent PostgreSQL queues
+
+With `queue-postgres`, `PostgresQueueBackend` manages shared job tables and its migration ledger through A3S ORM.
+
+```rust
+use std::time::Duration;
+use a3s_boot::{ModuleRef, PostgresQueueBackend, Queue, QueueOptions, Result};
+
+async fn open_queue(database_url: &str) -> Result<Queue> {
+    let options = QueueOptions::new()
+        .with_worker_count(4)
+        .with_lease_duration(Duration::from_secs(30));
+    let backend = PostgresQueueBackend::connect(
+        database_url,
+        "workflow",
+        options,
+    ).await?;
+    let queue = Queue::new("workflow", backend);
+    queue.start(ModuleRef::new()).await?;
+    Ok(queue)
+}
+```
+
+The backend claims ready jobs with PostgreSQL `SKIP LOCKED`, renews leases to retain live ownership, fences stale workers from completing jobs owned by a newer worker, and recovers expired leases after worker or process death.
+
+<!-- @if orm-0-3 -->
+
+Boot {{DOC_VERSION}} uses A3S ORM 0.3.0. Internal claims can use typed UPDATE CTEs, `UPDATE FROM`, and expression assignments to keep candidate locking and state updates in one parameterized database operation.
+
+<!-- @endif -->
+
+<!-- @unless orm-0-3 -->
+
+Boot {{DOC_VERSION}} uses A3S ORM 0.2.0. The public queue API and lease, fencing, and recovery contracts remain the same. Internal claims use the ORM path available in that release.
+
+<!-- @endif -->
+
+Give Boot Queue a dedicated PostgreSQL schema and point the database URL search path at it. The host creates the schema. Boot owns the queue tables and its own A3S ORM migration ledger inside it. Sharing a schema with Flow or application tables can make one component accept another component's migration history incorrectly.
+
+When retaining a backend handle, async services should use `jobs_async`, `failures_async`, `stats_async`, and `clear_async` for non-blocking diagnostics.
+
+## Queue reliability
+
+Delivery is at least once. A processor timeout, lost worker, or crash after a business side effect but before completion can execute the same job again. Make business handlers idempotent with a job id, idempotency key, or domain-operation key.
+
+The PostgreSQL backend supports shared leasing, process-death recovery, retries, timeouts, retention, idempotency, and deduplication. Repeat jobs and Lane parent-child flow options are rejected explicitly and never degrade silently.
+
+Define these before production:
+
+- Queue capacity, worker concurrency, and poll interval
+- Lease duration with margin above maximum processing time
+- Retry count, backoff, and dead-letter or failure operations
+- Terminal retention and cleanup frequency
+- Schema backup, migration, and database-outage behavior
+- Shutdown order for stopping claims, renewing, and releasing leases
+
+## Tencent Weixin iLink
+
+With `ilink`, `IlinkModule` exports a typed `IlinkClient`:
+
+```rust
+use a3s_boot::ilink::IlinkModule;
+
+let module = IlinkModule::weixin("A3S/0.10.1");
+```
+
+The client owns QR login requests, redirects, authenticated headers, strict server URL validation, update polling, text replies, typing calls, and channel start and stop notifications. Sensitive authentication data uses constrained types and is zeroized where appropriate.
+
+Wire defaults are compatible with Tencent `openclaw-weixin` v2.4.6: `iLink-App-Id: bot`, `bot_type=3`, and packed client version `2.4.6`. The product-specific `bot_agent` remains `A3S/<version>` so upstream diagnostics identify the caller correctly.
+
+## iLink host responsibilities
+
+Boot intentionally does not own:
+
+- Browser APIs and QR presentation UI
+- Credential persistence and secret storage
+- Owner authorization
+- Agent or session commands
+- Product reconnection, alerting, and operational policy
+
+These policies belong to the host application. Store credentials in a platform secret store and test logout, revocation, expiry, server-URL changes, poll timeouts, and duplicate updates. Bound reply and typing-call payloads and apply timeouts.

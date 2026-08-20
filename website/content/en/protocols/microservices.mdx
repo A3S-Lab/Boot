@@ -1,0 +1,98 @@
+---
+title: Message services and transports
+description: Use message controllers, request-response and event patterns, and preserve real protocol semantics across network transports.
+---
+
+# Message services and transports
+
+Boot's microservice model separates handlers from a concrete broker without erasing protocol differences. A `MessagePatternDefinition` describes a request-response or event-only pattern. `MessageTransport` owns start, stop, dispatch, and client contracts.
+
+## Message controllers
+
+```rust
+use a3s_boot::{message_body, message_controller, message_pattern, Result};
+
+#[derive(Debug)]
+struct MathController;
+
+#[message_controller]
+impl MathController {
+    #[message_pattern("sum")]
+    async fn sum(&self, #[message_body] values: Vec<i64>) -> Result<i64> {
+        Ok(values.into_iter().sum())
+    }
+}
+```
+
+A module registers the generated controller with `message_controllers = [MathController]`. You can also construct `MessagePatternDefinition` directly.
+
+A request-response pattern returns a result that implements `IntoTransportReply`. An event pattern expresses one-way business handling without a reply. A concrete transport can still produce a protocol acknowledgement or error envelope.
+
+## Runtime modes
+
+```rust
+let mut service = BootFactory::create_microservice(
+    AppModule,
+    TcpTransport::new(TcpTransportOptions::new("127.0.0.1:4000")),
+)?;
+service.listen().await?;
+```
+
+An HTTP shell can also attach one or more microservices to form a hybrid application. A provider-only worker can inject a transport client without listening for HTTP.
+
+Choose a synchronous or async factory variant based on whether provider construction has an async factory, not on whether handlers are async.
+
+## Available implementations
+
+| Transport            | Feature              | Primary wire model                                       |
+| -------------------- | -------------------- | -------------------------------------------------------- |
+| `InProcessTransport` | None                 | Same-process dispatch for tests and worker communication |
+| `TcpTransport`       | `tcp-transport`      | Newline-delimited JSON frames                            |
+| `RedisTransport`     | `redis-transport`    | Pub/Sub channels                                         |
+| `NatsTransport`      | `nats-transport`     | Request/reply and event subjects                         |
+| `MqttTransport`      | `mqtt-transport`     | Request/reply and event topics with explicit QoS         |
+| `RabbitMqTransport`  | `rabbitmq-transport` | Request/reply and event queues                           |
+| `KafkaTransport`     | `kafka-transport`    | Request/reply and event topics                           |
+| `GrpcTransport`      | `grpc-transport`     | Unary request/reply and event calls                      |
+
+A feature only adds the implementation and dependency. Broker addresses, TLS, credentials, topic or queue creation, retention, replication, and monitoring remain deployment configuration.
+
+## Shared execution capabilities
+
+Each dispatch creates a `TransportContext` and scope. The pipeline supports:
+
+- Payload pipes and typed validation
+- `TransportGuard`
+- Around `TransportInterceptor`
+- `TransportExceptionFilter`
+- Application, controller, and pattern metadata
+- Scoped providers and provider-backed handlers
+
+Apply `#[use_guard]`, `#[use_pipe]`, `#[use_interceptor]`, `#[use_filter]`, and `#[metadata]` to a message controller or pattern. Use `use_global_transport_*` builder methods for global components.
+
+Transport error envelopes reuse HTTP `BootError` status and error-kind mapping, but they remain message replies and are not real HTTP responses.
+
+## Patterns and schemas
+
+A pattern name is a protocol contract. Choose stable, domain-prefixed names such as `billing.invoice.create`. Evolve payloads through an explicit version field or a new pattern instead of changing field meaning without existing consumers knowing.
+
+An event handler must accept possible duplicate delivery. A request-response client must configure a timeout and distinguish business errors, remote transport errors, connection failures, and timeouts.
+
+## Different protocols remain different
+
+`MessageTransport` unifies the calling surface, not durability:
+
+- Redis Pub/Sub is not a persistent queue.
+- MQTT QoS does not provide business idempotency automatically.
+- Kafka offsets, consumer groups, and partition ordering remain Kafka policy.
+- RabbitMQ acknowledgement, requeue, and dead-letter settings affect delivery.
+- NATS Core and other NATS persistence modes must not be treated as identical.
+- TCP frames require the application to define reconnection and request-correlation lifecycles.
+
+Record delivery, ordering, replay, backpressure, maximum payload, and failure-recovery requirements before selecting a transport.
+
+## Testing and shutdown
+
+Start with `InProcessTransport` to verify patterns, scopes, guards, interceptors, pipes, filters, and replies. Add integration tests for the actual transport covering connection, serialization, timeout, duplicates, broker restart, and shutdown.
+
+Graceful shutdown should stop new delivery, wait for active handlers within a bound, then commit or release unfinished work according to the protocol. Never assume a message was reliably acknowledged merely because the process exited.

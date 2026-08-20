@@ -1,0 +1,92 @@
+---
+title: Configuration, data, and operations modules
+description: Compose ACL configuration, logging, cache, database, health, outbound HTTP, files, and request-context modules.
+---
+
+# Configuration, data, and operations modules
+
+Boot technique modules follow one model: a module registers an interface or facade provider, applications inject it by typed or named token, and tests can replace its backend. Bundled implementations primarily serve default paths and tests. They do not automatically provide distributed production semantics.
+
+## ACL configuration
+
+With `config`, `ConfigModule<T>` parses an ACL document through `a3s-acl` and deserializes typed configuration.
+
+```rust
+use a3s_boot::ConfigModule;
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+struct AppConfig {
+    port: u16,
+    database_url: String,
+}
+
+let module = ConfigModule::<AppConfig>::from_acl_file(
+    "app-config",
+    "config/production.acl",
+).await?;
+```
+
+Modules can also use strings, default functions, environment overrides, and a validation hook that runs before registration. ACL is the A3S Agent Configuration Language. Parse it with `a3s-acl`, not an HCL parser.
+
+Do not commit secrets in configuration. Inject them from the host secret manager and avoid printing complete configuration through Debug or error messages.
+
+## Logging and health
+
+`LoggingModule` exports `Logger`. A `LogRecord` has a level, target, message, and structured fields. `LogSink` is the output boundary. `InMemoryLogSink` supports assertions and `NoopLogSink` makes disabled logging explicit.
+
+`RequestLoggingMiddleware` records request arrival. `RequestLoggingInterceptor` can record completion status and duration. Redact sensitive headers, queries, bodies, and tokens before they become fields.
+
+`HealthModule` combines async indicators and exposes a `/health` JSON route by default. Any down or failed indicator produces 503. Use `.without_route()` to inject only `HealthCheckService` and let the application choose its endpoint.
+
+Separate liveness from readiness. A liveness check should not depend on a transient external service, or an orchestrator can repeatedly restart a healthy process during a dependency outage.
+
+## Cache
+
+`CacheModule` exports `Cache` with a default TTL, named instances, and global exports. `CacheStore` is the backend contract. The bundled `InMemoryCacheStore` is local to the current process.
+
+`CacheInterceptor` can cache HTTP responses. `#[cache_key]` and `#[cache_ttl]` provide controller or route metadata. Define invalidation, and include tenant, identity, locale, API version, and every other representation dimension in cache keys.
+
+## Database facade
+
+`DatabaseModule` provides adapter-neutral `Database`, `DatabaseBackend`, statement, row, result, and transaction contracts. The bundled `InMemoryDatabaseBackend` tests execution and transaction behavior.
+
+This facade is not A3S ORM and does not bundle a production SQL driver. An application can implement the backend or inject its own A3S ORM runtime, repository, or pool as a provider. Do not downgrade a typed repository to untyped SQL strings merely to use the module system.
+
+## Outbound HTTP
+
+`HttpModule` exports `HttpService` with:
+
+- Base URL, default headers, and timeout
+- GET and JSON request helpers
+- Named and global exports
+- Async option factories
+- A replaceable `HttpClientBackend`
+
+A relative URL requires a configured base URL. Define timeout, retry conditions, concurrency limits, and log fields for each downstream service. Never wait without a bound or forward every inbound header automatically.
+
+## Files, views, and compression
+
+| Feature           | Module or type                  | Boundary                                                 |
+| ----------------- | ------------------------------- | -------------------------------------------------------- |
+| `file-upload`     | `MultipartForm`, `UploadedFile` | Bound size and count, treat filenames as untrusted       |
+| `static`          | `StaticModule`                  | Traversal protection, index, SPA fallback, cache headers |
+| Core              | `ViewModule`, `ViewEngine`      | Replaceable template-rendering backend                   |
+| `compression`     | `CompressionInterceptor`        | Negotiated response compression for eligible media       |
+| `request-context` | `RequestContext`                | Task-local request id, path, metadata, and principal     |
+
+`RequestContext` is valid only inside its asynchronous invocation scope. Do not leak references into detached tasks. Copy required values into an explicit job payload when background work must continue.
+
+## Production selection checklist
+
+| Capability | Bundled path             | Common multi-instance need                                  |
+| ---------- | ------------------------ | ----------------------------------------------------------- |
+| Cache      | In-memory store          | Shared cache or accepted instance-local caching             |
+| Database   | In-memory test backend   | Driver, pool, migration, and observation                    |
+| Session    | In-memory store          | Shared store, expiry, and revocation                        |
+| Rate limit | In-memory provider       | Atomic shared provider                                      |
+| Schedule   | In-process scheduler     | Leader or distributed lease                                 |
+| Queue      | In-process or PostgreSQL | Idempotent processing, capacity, and cleanup policy         |
+| Logging    | Noop or custom sink      | Structured collection, sampling, and sensitive-field policy |
+
+Technique modules exist to provide clear replacement boundaries. They do not make capacity, durability, or security decisions for the deployment environment.

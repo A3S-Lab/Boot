@@ -1,0 +1,90 @@
+---
+title: Architecture, production boundaries, and roadmap
+description: Understand A3S Boot source layers, extension contracts, production responsibilities, compatibility direction, and explicit non-goals.
+---
+
+# Architecture, production boundaries, and roadmap
+
+Boot aims to make application structure familiar while keeping Rust types, errors, scopes, and protocol adapters visible.
+
+## Runtime layers
+
+```text
+modules + typed providers
+          |
+controllers / gateways / message patterns
+          |
+protocol-neutral and protocol-specific pipelines
+          |
+BootRequest / WebSocketMessage / TransportMessage
+          |
+HTTP adapter / WebSocket adapter / MessageTransport
+```
+
+An upper layer does not depend on a concrete Axum request or broker client. An adapter converts wire input into Boot types and converts Boot replies back to the wire.
+
+## Source responsibilities
+
+| Directory or file   | Responsibility                                                                      |
+| ------------------- | ----------------------------------------------------------------------------------- |
+| `app/`              | Factories, builders, application shells, contexts, lifecycle, lazy modules          |
+| `module/`           | The module trait and `DynamicModule`                                                |
+| `provider/`         | Tokens, definitions, scopes, resolution, and `ModuleRef`                            |
+| `routing/`          | Controllers, routes, matching, handlers, and responses                              |
+| `pipeline/`         | Middleware, guards, interceptors, pipes, filters, and contexts                      |
+| `http/`             | Adapter-neutral requests, responses, extraction, cookies, SSE, and files            |
+| `websocket/`        | Gateways, connections, subscriptions, rooms, and WebSocket pipeline                 |
+| `transport/`        | Message patterns, clients, and network transports                                   |
+| Feature-gated files | Auth, cache, config, events, queue, schedule, security, and other technique modules |
+| `macros/`           | Separate proc-macro crate that generates explicit core definitions                  |
+
+Public `HttpAdapter`, `MessageTransport`, and backend traits are the primary extension points. New implementations should preserve `Send + Sync`, async cleanup, contextual errors, and the real semantics of the protocol.
+
+## When the graph freezes
+
+Module imports, provider visibility, routes, gateways, message patterns, and application enhancers resolve during construction. `DiscoveryService` and `ApplicationGraph` expose the final snapshot.
+
+A lazy module fits an isolated provider capability and must not change an already compiled global pipeline. Collect dynamic requirements during the builder stage, then construct the application once.
+
+## Production responsibility matrix
+
+| Concern     | Boot mechanism                             | Deployment responsibility                          |
+| ----------- | ------------------------------------------ | -------------------------------------------------- |
+| HTTP        | Axum adapter, requests, responses, routing | TLS, proxy, timeouts, connection limits            |
+| WebSocket   | Upgrade, gateways, rooms, pipeline         | Cross-instance fanout, backpressure, drain         |
+| Messages    | Transport contract and implementations     | Broker durability, topology, credentials, capacity |
+| DI          | Scopes, cycles, lifecycle                  | Clear module boundaries and resource closure       |
+| Security    | Auth, CORS, CSRF, headers, rate limiting   | Identity source, key rotation, shared backends     |
+| Data        | Facade and PostgreSQL queue backend        | Schema ownership, backup, migration, idempotency   |
+| Observation | Structured records and health indicators   | Sink, trace correlation, sampling, alerts          |
+
+## Current compatibility direction
+
+Implemented Nest-style surfaces include parameter extraction, OpenAPI metadata, validation, module encapsulation, dynamic modules, provider scopes, application enhancers, middleware, WebSocket gateways, microservice transports, and the major technique modules.
+
+Boot does not attempt to reproduce a JavaScript runtime item by item. Attributes generate static Rust definitions, `ModuleRef` follows types and visibility, and protocol errors and delivery semantics stay explicit.
+
+GraphQL is explicitly outside the current roadmap. The focus is HTTP, SSE, WebSocket, message transports, modules, and controller experience. If GraphQL is needed later, it should be evaluated as a separate companion crate instead of being inserted into the core.
+
+## Version compatibility
+
+This site currently provides v0.2.0 and v0.1.4.
+
+- The public Boot source capabilities are the same in both releases.
+- The `queue-postgres` feature in v0.2.0 depends on A3S ORM 0.3.0.
+- The `queue-postgres` feature in v0.1.4 depends on A3S ORM 0.2.0.
+- Validate Cargo features, the database queue schema, worker recovery, and the lockfile together during upgrade.
+
+Release tags, crate versions, and the site version switcher use the same number. Application API versioning is independent from documentation versions.
+
+## Change checklist
+
+When a framework capability is completed:
+
+1. Add unit or integration coverage for its behavior.
+2. Update crate-root exports and feature gating.
+3. Update the README, roadmap, and corresponding Chinese and English pages.
+4. Verify default-feature, focused-feature, and all-feature builds.
+5. Check Rustdoc, OpenAPI examples, and production-boundary guidance.
+
+See the repository [ROADMAP.md](https://github.com/A3S-Lab/Boot/blob/main/ROADMAP.md) for the detailed implementation plan and [GitHub Releases](https://github.com/A3S-Lab/Boot/releases) for release history.

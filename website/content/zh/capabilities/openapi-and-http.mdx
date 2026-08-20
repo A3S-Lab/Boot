@@ -1,0 +1,86 @@
+---
+title: HTTP 与 OpenAPI
+description: 描述 HTTP 契约、生成 OpenAPI 文档，并使用上传、静态文件、SSE、视图和出站客户端能力。
+---
+
+# HTTP 与 OpenAPI
+
+Boot 的 HTTP 类型与路由元数据独立于 Axum。应用可以在构建阶段生成 OpenAPI 文档，也可以把 JSON 和 Swagger UI 注册为普通 Boot 路由。
+
+## 生成文档
+
+```rust
+let app = BootApplication::builder()
+    .import(AppModule)
+    .serve_openapi(
+        "/openapi.json",
+        OpenApiInfo::new("Catalog API", "1.0.0"),
+    )
+    .serve_openapi_ui(
+        "/docs",
+        "/openapi.json",
+        OpenApiInfo::new("Catalog API", "1.0.0"),
+    )
+    .build()?;
+```
+
+也可以调用 `BootApplication::openapi(info)` 取得 `OpenApiDocument`，交给自己的发布或校验流程。
+
+文档从最终 resolved route 收集，因此包含 Controller、module prefix、global prefix、path parameter 和版本设置。构建顺序发生冲突时，应用会先失败，不会发布与运行时不同的文档。
+
+## 属性元数据
+
+Controller 与 Route 属性覆盖常用 OpenAPI 信息：
+
+| 范围       | 属性示例                                                                                                |
+| ---------- | ------------------------------------------------------------------------------------------------------- |
+| Operation  | `operation`, `tag`, `hide_from_openapi`                                                                 |
+| Parameter  | `api_param`, `api_query`, `api_header`                                                                  |
+| Body       | `request_body`, JSON body field 与 multipart 宏                                                         |
+| Response   | `api_response_header`, status、content type 与 example metadata                                         |
+| Security   | `bearer_auth`, `api_key_auth`, `api_cookie_auth`, `oauth2_auth`, `open_id_connect_auth`, `api_security` |
+| Components | `api_extra_model`, `api_extension`                                                                      |
+
+显式 builder 可以创建相同的 `OpenApiRouteMetadata`、schema、parameter、request body、response、security scheme 与 reusable component。
+
+启用 `openapi-schemas` 后，Boot 可以从 `schemars::JsonSchema` DTO 收集 schema。Schema 名称冲突必须解决，不应依赖注册顺序覆盖。
+
+## HTTP 输入与输出
+
+`BootRequest` 提供 path、query、header、cookie、body 与 client IP hint。`BootResponse` 支持 status、headers、cookies、JSON、text、HTML 和 bytes。专用能力包括：
+
+- `SseStream` 与 `SseEvent` 的 server-sent events
+- `StreamableFile`、download 与 byte stream
+- `ResponsePassthrough` 在返回 DTO 时修改 status、header 或 cookie
+- URI、header 与 media type API versioning
+- host-scoped Controller 与 catch-all path
+
+保持 handler 返回类型明确。只有需要完整响应控制时才返回 `BootResponse`，普通 JSON endpoint 优先返回具体 DTO。
+
+## Multipart 与静态内容
+
+`file-upload` 提供 `MultipartOptions`、`MultipartForm`、`UploadedFile` 和 `#[uploaded_file]`、`#[uploaded_files]`。必须设置总 body、字段、文件、数量与单文件上限。上传文件名来自不可信输入，不能直接拼接到磁盘路径。
+
+`static` 提供 `StaticModule` 与 `StaticFileService`，支持 GET、HEAD、index file、SPA fallback、cache-control 与 content type。实现会拒绝 traversal 和 dotfile。部署时仍应让 CDN 或反向代理承担大量静态流量。
+
+## View、压缩与出站 HTTP
+
+- `ViewModule` 与 `ViewEngine` 是可替换渲染边界，`StringTemplateViewEngine` 适合简单场景和测试。
+- `compression` 根据 `Accept-Encoding: gzip` 与最小 body 大小压缩响应，并维护 `Vary` 与 content length。
+- `HttpModule` 导出 `HttpService`，支持 base URL、默认 header、timeout、JSON helper、async options 和自定义 `HttpClientBackend`。
+
+出站请求的 timeout、重试和身份 header 应在对应模块边界配置。不要把 inbound request 的所有 header 无筛选转发给下游。
+
+## Cookie、缓存与代理
+
+`CookieOptions` 控制响应 cookie。`CacheInterceptor` 只缓存符合策略的 HTTP 响应，并可由 `#[cache_key]` 与 `#[cache_ttl]` 覆盖。缓存 key 必须包含真正影响表示的身份、租户、locale 和版本信息。
+
+Boot 只接收适配器提供的 client IP hint。部署在代理之后时，应由受信任网络层规范化 forwarded header，应用不能直接相信任意客户端发送的同名 header。
+
+## 契约验证
+
+- 在 CI 中生成并 diff OpenAPI，评审删除字段、收紧类型与状态码变化。
+- 为 JSON、空 body、stream、file、SSE 与错误响应分别写 integration test。
+- 验证 body 和 multipart 上限在解析前生效。
+- 对 Swagger UI 和 OpenAPI JSON 使用与业务要求一致的访问控制。
+- 把实际 API version strategy 与文档中的 server URL、path 和 media type 保持一致。

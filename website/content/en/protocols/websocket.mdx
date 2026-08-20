@@ -1,0 +1,98 @@
+---
+title: WebSocket gateways
+description: Build adapter-neutral WebSocket gateways with lifecycle hooks, rooms, broadcasts, and a protocol-specific execution pipeline.
+---
+
+# WebSocket gateways
+
+A WebSocket gateway organizes an upgrade path, event subscriptions, and connection lifecycle around an ordinary Rust type. The Boot core owns definitions and pipelines. The default Axum adapter performs the real HTTP upgrade.
+
+## Declare a gateway
+
+```rust
+use a3s_boot::{message_body, subscribe_message, websocket_gateway, Result};
+
+#[derive(Debug)]
+struct EventsGateway;
+
+#[websocket_gateway("/events", namespace = "/events")]
+impl EventsGateway {
+    #[subscribe_message("room.join")]
+    async fn join(&self, #[message_body] room: String) -> Result<String> {
+        Ok(room)
+    }
+}
+```
+
+Place the generated gateway in `#[module(gateways = [EventsGateway])]`. The explicit API uses `WebSocketGatewayDefinition` and `WebSocketSubscriptionDefinition` and fits dynamic subscriptions.
+
+A subscription can bind a typed message body, the complete `WebSocketMessage`, `WebSocketConnection`, `WebSocketGatewayServer`, and protocol context. Macros and builders produce the same definitions.
+
+## Lifecycle
+
+Gateways support:
+
+| Hook                       | Timing                                   |
+| -------------------------- | ---------------------------------------- |
+| `#[on_gateway_init]`       | The gateway server handle is initialized |
+| `#[on_gateway_connection]` | A connection enters the namespace        |
+| `#[on_gateway_disconnect]` | A connection closes and leaves rooms     |
+
+Implement hooks through explicit traits or attributes. Connection and disconnection work should be bounded and cancellable. A slow external call must not block connection cleanup.
+
+## Namespaces, rooms, and sending
+
+`WebSocketGatewayServer` manages a logical namespace and connection registry. A handler can:
+
+- Send a direct message to the current connection
+- Join or leave a room
+- Broadcast to one room
+- Broadcast across the gateway
+- Return a value that implements `IntoWebSocketReply`
+
+A room is an in-process logical group. Multi-instance deployment needs external fanout or sticky routing to broadcast across processes. Boot does not present the local registry as distributed presence.
+
+## Execution pipeline
+
+```text
+incoming frame
+      |
+event lookup
+      |
+application / gateway / subscription pipes
+      |
+guards
+      |
+around interceptors
+      |
+typed validation
+      |
+handler
+      |
+reply or outbound messages
+
+unrecovered error -> WebSocket exception filters
+```
+
+`WebSocketContext` exposes the gateway, subscription, connection, message, and metadata. Apply `#[use_guard]`, `#[use_pipe]`, `#[use_interceptor]`, `#[use_filter]`, and `#[metadata]` to a gateway or subscription.
+
+Register application-level components with `use_global_websocket_guard`, `use_global_websocket_pipe`, `use_global_websocket_interceptor`, and `use_global_websocket_filter`. A genuinely cross-protocol policy can use an `ExecutionContext` enhancer.
+
+## Scopes and providers
+
+Provider-backed gateways and handlers resolve in the `ContextId` for each message dispatch. A request-scoped dependency does not automatically retain one instance for the connection lifetime. Put connection-level state in explicit connection state or an external store instead of misusing request scope.
+
+## Payloads and errors
+
+Typed payloads use the same `Validate` and `ValidationOptions` concepts as HTTP DTOs. Pipes transform a message before validation checks the DTO. A `WebSocketExceptionFilter` maps protocol errors into `WebSocketExceptionResponse`.
+
+Do not send internal `BootError` debug details to a client. Define stable replies for unknown events, malformed JSON, oversized frames, unauthorized subscriptions, and handler timeouts.
+
+## Production boundaries
+
+- Check origin, authentication, and size limits before upgrade.
+- Bound inbound frame size, outbound buffers, room count, and subscriptions per connection.
+- Define backpressure, slow-consumer, and reconnection policy.
+- Avoid serially blocking every connection on one slow broadcast recipient.
+- Stop accepting new connections during shutdown and bound the wait for existing connections.
+- Use separate shared infrastructure for multi-instance presence, rooms, and fanout.

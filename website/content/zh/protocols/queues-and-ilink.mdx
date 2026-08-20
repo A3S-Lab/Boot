@@ -1,0 +1,119 @@
+---
+title: Queue 与微信 iLink
+description: 运行进程内或持久化 PostgreSQL 队列，并接入有明确宿主责任边界的腾讯微信 iLink channel。
+---
+
+# Queue 与微信 iLink
+
+Queue 处理可重试的后台工作，iLink 连接外部消息 channel。两者都通过 Provider 与 lifecycle 接入 Boot，但交付语义和部署责任完全不同。
+
+## 进程内 Queue
+
+启用 `queue` 后，`QueueModule` 基于 A3S Lane 提供 worker、优先级、延迟、重试与 processor。
+
+```rust
+use a3s_boot::{QueueContext, QueueJob, QueueModule, QueueOptions, Result};
+
+let module = QueueModule::in_process_with_options(
+    "mail-queue",
+    QueueOptions::new().with_worker_count(4),
+)
+.processor("email.send", |job: QueueJob, context: QueueContext| async move {
+    let email = job.data_as::<EmailJob>()?;
+    let mailer = context.module_ref.get::<Mailer>()?;
+    mailer.send(email).await
+});
+```
+
+`Queue` 提供 typed serde JSON enqueue、processor 注册、start、shutdown、job 查询、failure 查询、stats 与 clear。`QueueJobOptions` 控制：
+
+- priority 与 FIFO 或 LIFO ordering
+- delay 和 processor timeout
+- fixed 或其他 `QueueRetryPolicy`
+- terminal retention
+- caller-assigned idempotency key
+- deduplication id 与 active keep-latest successor
+
+进程内 backend 不在重启后保留 job，也不被其他进程共享。
+
+## PostgreSQL 持久队列
+
+启用 `queue-postgres` 后，`PostgresQueueBackend` 通过 A3S ORM 管理共享 job 表和 migration ledger。
+
+```rust
+use std::time::Duration;
+use a3s_boot::{ModuleRef, PostgresQueueBackend, Queue, QueueOptions, Result};
+
+async fn open_queue(database_url: &str) -> Result<Queue> {
+    let options = QueueOptions::new()
+        .with_worker_count(4)
+        .with_lease_duration(Duration::from_secs(30));
+    let backend = PostgresQueueBackend::connect(
+        database_url,
+        "workflow",
+        options,
+    ).await?;
+    let queue = Queue::new("workflow", backend);
+    queue.start(ModuleRef::new()).await?;
+    Ok(queue)
+}
+```
+
+后端使用 PostgreSQL `SKIP LOCKED` claim ready job，通过 lease renewal 保持活跃 ownership，通过 fencing 阻止 stale worker 完成新 owner 的 job，并在 worker 或进程死亡后恢复过期 lease。
+
+<!-- @if orm-0-3 -->
+
+Boot {{DOC_VERSION}} 使用 A3S ORM 0.3.0。内部 claim 可以使用类型化 UPDATE CTE、`UPDATE FROM` 与表达式赋值，把候选行锁和状态更新保持在一个参数化数据库操作中。
+
+<!-- @endif -->
+
+<!-- @unless orm-0-3 -->
+
+Boot {{DOC_VERSION}} 使用 A3S ORM 0.2.0。Queue 的 public API、lease、fencing 与恢复契约不变，内部 claim 使用该发布版本可用的 ORM 路径。
+
+<!-- @endif -->
+
+为 Boot Queue 使用独立 PostgreSQL schema，并让 database URL 的 search path 指向它。宿主创建 schema，Boot 拥有其中的 queue 表与自己的 A3S ORM migration ledger。与 Flow 或应用表共享 schema 可能让一个组件错误接受另一个组件的 migration history。
+
+保留 backend handle 时，异步服务应使用 `jobs_async`、`failures_async`、`stats_async` 与 `clear_async` 做非阻塞诊断。
+
+## Queue 可靠性
+
+交付是 at-least-once。Processor 超时、失联或在提交业务副作用后崩溃，都可能导致同一 job 再次执行。业务 Handler 必须以 job id、idempotency key 或领域操作 key 做幂等。
+
+PostgreSQL backend 支持共享 leasing、process-death recovery、retry、timeout、retention、idempotency 与 deduplication。Repeat job 和 Lane parent-child flow 选项会明确拒绝，不会静默降级。
+
+生产前定义：
+
+- queue 容量、worker 并发和 poll interval
+- lease duration 相对最长处理时间的余量
+- retry 次数、backoff 与 dead-letter 或 failure 运维流程
+- terminal retention 与清理频率
+- schema backup、migration 和 database outage 行为
+- shutdown 时停止 claim、续租与释放 lease 的顺序
+
+## 腾讯微信 iLink
+
+启用 `ilink` 后，`IlinkModule` 导出类型化 `IlinkClient`：
+
+```rust
+use a3s_boot::ilink::IlinkModule;
+
+let module = IlinkModule::weixin("A3S/0.10.1");
+```
+
+客户端负责 QR login request、redirect、认证 header、严格 server URL validation、update polling、文本 reply、typing call 与 channel start/stop notification。敏感认证数据使用受限类型，并在适当位置清零。
+
+wire 默认值兼容 Tencent `openclaw-weixin` v2.4.6：`iLink-App-Id: bot`、`bot_type=3` 与 packed client version `2.4.6`。产品专属 `bot_agent` 保持 `A3S/<version>`，避免上游诊断误认调用方。
+
+## iLink 宿主责任
+
+Boot 刻意不拥有：
+
+- browser API 与 QR 展示 UI
+- credential 持久化和 secret storage
+- owner authorization
+- agent 或 session command
+- 产品级重连、告警和运营策略
+
+这些策略属于宿主应用。持久化 credential 前应使用平台 secret store，并为登出、撤销、过期、server URL 变化、poll timeout 与重复 update 写测试。回复和 typing call 必须有 timeout 与有界 payload。

@@ -1,0 +1,75 @@
+---
+title: Overview
+description: Understand the A3S Boot module boundary, dependency injection, execution pipeline, and adapter-first architecture.
+---
+
+# Overview
+
+A3S Boot is a modular framework for asynchronous Rust services. It borrows the module, provider, controller, and enhancer organization of NestJS while preserving static types, explicit ownership, and replaceable adapters.
+
+Boot is not an Axum wrapper. Requests, responses, routes, execution contexts, and errors belong to the framework core. Axum is the default HTTP adapter. Attribute macros generate ordinary Boot definitions at compile time and do not depend on runtime decorator metadata.
+
+## Where an application starts
+
+A Boot application follows one explicit construction path:
+
+```text
+Module declarations
+        |
+Provider graph and visibility checks
+        |
+Controller / Gateway / Message Pattern registration
+        |
+Protocol-neutral execution pipeline
+        |
+HTTP Adapter / WebSocket / MessageTransport
+```
+
+| Concept    | Responsibility                                                       | Primary types                             |
+| ---------- | -------------------------------------------------------------------- | ----------------------------------------- |
+| Module     | Compose imports, providers, controllers, exports, and lifecycle      | `Module`, `DynamicModule`                 |
+| Provider   | Construct and resolve application dependencies                       | `ProviderDefinition`, `ModuleRef`         |
+| Controller | Bind HTTP routes to ordinary Rust methods                            | `ControllerDefinition`, `RouteDefinition` |
+| Pipeline   | Run middleware, guards, interceptors, pipes, validation, and filters | `ExecutionContext`, `CallHandler`         |
+| Protocol   | Attach HTTP, WebSocket, or message transports                        | `HttpAdapter`, `MessageTransport`         |
+
+## Core guarantees
+
+- Providers use typed or named tokens and respect module import and export visibility.
+- Singleton, request, and transient scopes propagate explicitly through the resolution graph.
+- HTTP, WebSocket, and message handlers use a consistent guard, interceptor, pipe, and exception model.
+- Generic interfaces do not hide the behavior of the selected network protocol or message broker.
+- Optional capabilities are Cargo features, so disabled service dependencies do not enter the build.
+- `BootError` and `Result<T>` consistently represent module, resolution, routing, validation, transport, and runtime failures.
+
+## What Boot owns
+
+Boot owns the application graph, execution order, and adapter contracts. It does not select deployment policy for the application.
+
+| Boot provides                               | The application still decides                         |
+| ------------------------------------------- | ----------------------------------------------------- |
+| Typed provider container                    | Domain boundaries and persistence models              |
+| Axum HTTP and WebSocket adapter             | Listen addresses, TLS termination, and proxy topology |
+| Local and replaceable technique modules     | Distributed cache, session, and rate-limit backends   |
+| Multiple message transports                 | Broker durability, topology, and operational policy   |
+| Queue retry, lease, and processor contracts | Business idempotency and side-effect deduplication    |
+| OpenAPI generation                          | API lifecycle and compatibility policy                |
+
+## Choose an entry point
+
+`BootFactory` provides four common entry points:
+
+- `create` builds an HTTP-capable application.
+- `create_application_context` builds a provider-only worker or command process.
+- `create_microservice` builds a standalone message service.
+- Their async variants await asynchronous provider factories.
+
+The same module graph can be configured explicitly through `BootApplication::builder()` with global enhancers, OpenAPI, and adapter options.
+
+## Current documentation version
+
+You are reading A3S Boot {{DOC_VERSION}}, which documents crate release `{{RELEASE}}`. v0.2.0 and v0.1.4 expose the same Boot capabilities. The release difference is the A3S ORM version used by the persistent PostgreSQL queue.
+
+## Next steps
+
+Read [installation and features](/getting-started/installation), then complete the [quick start](/getting-started/quick-start). Continue to the [application model](/core/application-model) when you are ready to split business modules.

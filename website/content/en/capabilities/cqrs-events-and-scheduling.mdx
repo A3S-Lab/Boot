@@ -1,0 +1,99 @@
+---
+title: CQRS, events, and scheduling
+description: Organize background collaboration with typed commands, queries, events, A3S Event providers, and lifecycle-managed schedulers.
+---
+
+# CQRS, events, and scheduling
+
+Boot provides three related but distinct in-application collaboration models. `cqrs` dispatches types to handlers, `events` supplies named events and a provider boundary, and `schedule` triggers work by time. Each model registers through a module and uses the same provider graph.
+
+## CQRS buses
+
+Commands and queries declare their output type. Each command or query type has one handler, while an event can have multiple handlers.
+
+```rust
+use a3s_boot::{Command, CqrsContext, CqrsModule};
+
+#[derive(Debug)]
+struct RenameUser {
+    id: u64,
+    name: String,
+}
+
+impl Command for RenameUser {
+    type Output = String;
+}
+
+let module = CqrsModule::new("users-cqrs")
+    .command_handler::<RenameUser, _>(
+        |command: RenameUser, context: CqrsContext| async move {
+            let users = context.get::<UserRepository>()?;
+            users.rename(command.id, command.name).await
+        },
+    );
+```
+
+`CommandBus::execute` and `QueryBus::execute` return the declared output. `EventBus::publish` calls all matching handlers and returns the call count. Duplicate command or query handlers fail during registration. A missing handler returns an error at dispatch.
+
+`CqrsContext` resolves providers from the declaring module scope, so handlers do not need a global service locator. Register buses at a business boundary and use `.global()` only when they genuinely span modules.
+
+## Application events
+
+With `events`, `EventModule` exports `EventEmitter` and an A3S Event bus. Event names use dot-separated lowercase form, such as `user.profile.updated`.
+
+```rust
+#[derive(Debug)]
+struct UserEventHandlers;
+
+#[a3s_boot::event_listener]
+impl UserEventHandlers {
+    #[a3s_boot::on_event("user.created")]
+    async fn created(&self, payload: UserCreated, context: EventContext) -> Result<()> {
+        let audit = context.get::<AuditWriter>()?;
+        audit.record(payload.id).await
+    }
+}
+```
+
+A listener can receive a typed payload or a complete `EventEnvelope`, and `user.*` wildcard patterns are supported. Registration order is call order. `EventModule::in_process` uses the memory provider. Use `from_provider` to attach another A3S Event provider.
+
+In-process event dispatch is not automatically durable cross-service messaging. Persistence, replay, deduplication, and cross-process delivery depend on the selected event provider.
+
+## Scheduling
+
+`ScheduleModule` supports one-shot timeouts, fixed intervals, and cron:
+
+```rust
+let module = ScheduleModule::in_process("schedule")
+    .interval("cache.refresh", Duration::from_secs(30), |context| async move {
+        let cache = context.module_ref.get::<CatalogCache>()?;
+        cache.refresh().await
+    })
+    .timeout("startup.warm", Duration::from_secs(2), |_| async move {
+        Ok(())
+    });
+```
+
+The `#[schedule]` macro combines with `#[cron]`, `#[interval]`, and `#[timeout]` to generate the same `ScheduledJob` definitions. `ScheduleContext` contains the job name, trigger, run count, and `ModuleRef`.
+
+The scheduler starts during application bootstrap and stops during shutdown. The in-process scheduler does not elect a leader or catch up work missed while a process was stopped. Every instance runs the same job unless the application applies an external lease, leader election, or shared backend.
+
+## Select a model
+
+| Need                                                   | Select                                        |
+| ------------------------------------------------------ | --------------------------------------------- |
+| One typed operation with one result                    | Command                                       |
+| A typed read with a result                             | Query                                         |
+| Several listeners responding to an in-process fact     | CQRS Event or `events`                        |
+| A3S Event providers, named wildcards, or event queries | `events`                                      |
+| Work triggered by time                                 | `schedule`                                    |
+| Retry, priority, persistence, and workers              | [Queue](/protocols/queues-and-ilink)          |
+| Delivery through a cross-service protocol              | [Message transport](/protocols/microservices) |
+
+## Reliability boundaries
+
+- Handlers and listeners should return contextual errors and never panic for production input.
+- Design idempotency for event, schedule, and queue side effects that may repeat.
+- Put long work on a queue instead of blocking scheduler control paths.
+- Define timezone, overlapping-run policy, and shutdown behavior for every cron job.
+- Use stable schemas and compatibility rules for events that cross an external boundary.

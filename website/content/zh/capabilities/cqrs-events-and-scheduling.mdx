@@ -1,0 +1,99 @@
+---
+title: CQRS、事件与调度
+description: 使用类型化 Command、Query、Event、A3S Event provider 与生命周期托管调度器组织后台协作。
+---
+
+# CQRS、事件与调度
+
+Boot 提供三个相关但不同的应用内协作模型。`cqrs` 负责类型到 handler 的分发，`events` 负责命名事件与 provider，`schedule` 负责按时间触发工作。它们都通过 Module 注册，并使用同一个 Provider 图。
+
+## CQRS bus
+
+Command 和 Query 声明输出类型。每种 Command 或 Query 只能有一个 handler，Event 可以有多个 handler。
+
+```rust
+use a3s_boot::{Command, CqrsContext, CqrsModule};
+
+#[derive(Debug)]
+struct RenameUser {
+    id: u64,
+    name: String,
+}
+
+impl Command for RenameUser {
+    type Output = String;
+}
+
+let module = CqrsModule::new("users-cqrs")
+    .command_handler::<RenameUser, _>(
+        |command: RenameUser, context: CqrsContext| async move {
+            let users = context.get::<UserRepository>()?;
+            users.rename(command.id, command.name).await
+        },
+    );
+```
+
+`CommandBus::execute` 与 `QueryBus::execute` 返回声明的输出。`EventBus::publish` 调用所有匹配 handler 并返回调用数量。重复 Command 或 Query handler 在注册时失败，缺失 handler 在 dispatch 时返回错误。
+
+`CqrsContext` 从声明模块的 scope 解析 Provider，因此 handler 不需要使用全局 service locator。根据业务边界注册 bus，只有确实跨模块共享时才使用 `.global()`。
+
+## 应用事件
+
+启用 `events` 后，`EventModule` 导出 `EventEmitter` 与 A3S Event bus。事件名使用点分隔的小写格式，例如 `user.profile.updated`。
+
+```rust
+#[derive(Debug)]
+struct UserEventHandlers;
+
+#[a3s_boot::event_listener]
+impl UserEventHandlers {
+    #[a3s_boot::on_event("user.created")]
+    async fn created(&self, payload: UserCreated, context: EventContext) -> Result<()> {
+        let audit = context.get::<AuditWriter>()?;
+        audit.record(payload.id).await
+    }
+}
+```
+
+Listener 可以接收类型化 payload 或完整 `EventEnvelope`，并支持 `user.*` wildcard。注册顺序是调用顺序。`EventModule::in_process` 使用内存 provider，`from_provider` 可以接入其他 A3S Event provider。
+
+应用内事件分发不自动等同于跨服务 durable messaging。是否持久化、重放、去重与跨进程交付由选定 Event provider 决定。
+
+## 调度
+
+`ScheduleModule` 支持一次性 timeout、固定 interval 与 cron：
+
+```rust
+let module = ScheduleModule::in_process("schedule")
+    .interval("cache.refresh", Duration::from_secs(30), |context| async move {
+        let cache = context.module_ref.get::<CatalogCache>()?;
+        cache.refresh().await
+    })
+    .timeout("startup.warm", Duration::from_secs(2), |_| async move {
+        Ok(())
+    });
+```
+
+属性宏 `#[schedule]` 配合 `#[cron]`、`#[interval]` 和 `#[timeout]` 生成相同的 `ScheduledJob` 定义。`ScheduleContext` 包含 job name、trigger、run count 与 `ModuleRef`。
+
+Scheduler 在 application bootstrap 时启动，在 shutdown 时停止。进程内调度器不选 leader，也不会在进程停止期间补跑。多实例中每个进程都会运行同一 job，除非应用通过外部租约、leader election 或共享 backend 限制。
+
+## 选择模型
+
+| 需求                                              | 选择                                 |
+| ------------------------------------------------- | ------------------------------------ |
+| 一个请求对应一个类型化操作与结果                  | Command                              |
+| 读取并返回类型化结果                              | Query                                |
+| 同进程多个 listener 响应一个事实                  | CQRS Event 或 `events`               |
+| 需要 A3S Event provider、命名 wildcard 或事件查询 | `events`                             |
+| 按时间触发工作                                    | `schedule`                           |
+| 需要重试、优先级、持久化和 worker                 | [Queue](/protocols/queues-and-ilink) |
+| 需要跨服务协议交付                                | [消息传输](/protocols/microservices) |
+
+## 可靠性边界
+
+- Handler 和 listener 应返回带上下文的错误，不要 panic。
+- 为可能重复的 event、schedule 和 queue side effect 设计幂等性。
+- 长任务应交给 queue，避免阻塞 scheduler 的控制路径。
+- 为每个 cron 明确时区、重叠执行策略和停机行为。
+- 对外部事件使用稳定 schema 与兼容演进规则。

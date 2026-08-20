@@ -1,0 +1,92 @@
+---
+title: 配置、数据与运维模块
+description: 组合 ACL 配置、日志、缓存、数据库、健康检查、出站 HTTP、文件和请求上下文模块。
+---
+
+# 配置、数据与运维模块
+
+Boot 的技术模块都遵守同一模型：Module 注册一个接口或 facade Provider，应用通过命名或类型 token 注入，测试可以替换 backend。内置实现主要用于默认路径和测试，不代表自动获得分布式生产语义。
+
+## ACL 配置
+
+启用 `config` 后，`ConfigModule<T>` 使用 `a3s-acl` 解析 ACL 文档并反序列化为类型化配置。
+
+```rust
+use a3s_boot::ConfigModule;
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+struct AppConfig {
+    port: u16,
+    database_url: String,
+}
+
+let module = ConfigModule::<AppConfig>::from_acl_file(
+    "app-config",
+    "config/production.acl",
+).await?;
+```
+
+也可以从字符串、默认函数和 environment override 构建，并在注册前运行 validation hook。ACL 是 A3S Agent Configuration Language，应使用 `a3s-acl`，不能用 HCL parser 替代。
+
+不要把 secret 写入仓库配置。由宿主 secret manager 注入值，并避免在 Debug 或错误消息中输出完整配置。
+
+## 日志与健康
+
+`LoggingModule` 导出 `Logger`。`LogRecord` 包含 level、target、message 和结构化字段，`LogSink` 是输出边界。`InMemoryLogSink` 用于断言，`NoopLogSink` 用于明确禁用。
+
+`RequestLoggingMiddleware` 记录请求进入，`RequestLoggingInterceptor` 可以记录完成状态和耗时。敏感 header、query、body 与 token 必须在进入字段前脱敏。
+
+`HealthModule` 组合异步 indicator 并默认暴露 `/health` JSON 路由。任意 indicator down 或失败时返回 503。使用 `.without_route()` 可以只注入 `HealthCheckService`，由应用决定 endpoint。
+
+区分 liveness 与 readiness。不要让 liveness 依赖短暂的外部服务，否则 orchestrator 可能在依赖故障时反复重启健康进程。
+
+## Cache
+
+`CacheModule` 导出 `Cache`，支持默认 TTL、命名实例和 global export。`CacheStore` 是 backend 契约，内置 `InMemoryCacheStore` 只在当前进程有效。
+
+`CacheInterceptor` 可以缓存 HTTP 响应，`#[cache_key]` 和 `#[cache_ttl]` 提供 Controller 或 Route metadata。必须定义 invalidation，并让 cache key 包含租户、身份、locale、API version 及其他影响表示的维度。
+
+## Database facade
+
+`DatabaseModule` 提供 adapter-neutral `Database`、`DatabaseBackend`、statement、row、result 与 transaction 契约。内置 `InMemoryDatabaseBackend` 用于测试执行和事务行为。
+
+这个 facade 不是 A3S ORM，也不捆绑 production SQL driver。应用可以实现 backend，或者直接把自己的 A3S ORM runtime、repository 或 pool 作为 Provider 注入。不要为了使用 Module 系统而把类型化 repository 降级成无类型 SQL 字符串。
+
+## 出站 HTTP
+
+`HttpModule` 导出 `HttpService`，支持：
+
+- base URL、默认 header 与 timeout
+- GET 和 JSON request helper
+- named 与 global export
+- async options factory
+- 可替换 `HttpClientBackend`
+
+相对 URL 只有在配置 base URL 时有效。为每个下游定义 timeout、重试条件、并发上限与日志字段，不能无限等待。不要自动转发所有 inbound header。
+
+## 文件、View 与压缩
+
+| Feature           | Module 或类型                   | 边界                                              |
+| ----------------- | ------------------------------- | ------------------------------------------------- |
+| `file-upload`     | `MultipartForm`, `UploadedFile` | 限制大小与数量，文件名不可信                      |
+| `static`          | `StaticModule`                  | traversal 防护、index、SPA fallback、cache header |
+| core              | `ViewModule`, `ViewEngine`      | 模板渲染 backend 可替换                           |
+| `compression`     | `CompressionInterceptor`        | 根据协商压缩响应，不处理已经不适合压缩的类型      |
+| `request-context` | `RequestContext`                | task-local request id、path、metadata、principal  |
+
+`RequestContext` 只在对应异步调用范围内有效。不要把引用泄漏到 detached task；需要后台继续处理时，把必要值复制进明确的 job payload。
+
+## 生产选择清单
+
+| 能力       | 内置路径            | 多实例常见需求                      |
+| ---------- | ------------------- | ----------------------------------- |
+| Cache      | 内存 store          | 共享 cache 或接受实例局部缓存       |
+| Database   | 内存测试 backend    | 实际 driver、pool、migration 与观测 |
+| Session    | 内存 store          | 共享 store、过期与撤销              |
+| Rate limit | 内存 Provider       | 原子共享 Provider                   |
+| Schedule   | 进程内 scheduler    | leader 或分布式租约                 |
+| Queue      | 进程内或 PostgreSQL | 幂等处理、容量与清理策略            |
+| Logging    | noop 或自定义 sink  | 结构化采集、采样与敏感字段策略      |
+
+技术模块的目标是提供清晰替换边界，不是替部署环境做容量、durability 或安全决策。

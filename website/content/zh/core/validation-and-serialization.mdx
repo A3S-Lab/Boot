@@ -1,0 +1,109 @@
+---
+title: 验证与序列化
+description: 验证输入 DTO、转换与过滤字段，并在响应边界执行确定性 JSON shaping。
+---
+
+# 验证与序列化
+
+Boot 把输入验证和输出序列化放在显式管线阶段。它们不会隐式访问数据库，也不会修改领域对象的持久化状态。
+
+## `Validate` 契约
+
+任何输入 DTO 都可以实现 `Validate`：
+
+```rust
+use a3s_boot::{BootError, Result, Validate};
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+struct CreateAccount {
+    email: String,
+}
+
+impl Validate for CreateAccount {
+    fn validate(&self) -> Result<()> {
+        if self.email.contains('@') {
+            Ok(())
+        } else {
+            Err(BootError::bad_request("email must contain @"))
+        }
+    }
+}
+```
+
+通过 `#[validate]`、Controller 或 Route builder 的 validation 设置，或者全局 builder 启用验证：
+
+```rust
+let app = BootApplication::builder()
+    .import(AppModule)
+    .use_global_validation()
+    .build()?;
+```
+
+验证发生在 Pipe 转换之后、Handler 之前。
+
+## Schema 与输入策略
+
+`ValidationSchema` 描述命名 DTO 字段。启用 `macros` 时可以为命名 struct derive schema。`ValidationOptions` 支持：
+
+| 选项                     | 行为                                 |
+| ------------------------ | ------------------------------------ |
+| `transform`              | 根据 schema 对 JSON 值执行允许的转换 |
+| `whitelist`              | 移除 schema 未声明字段               |
+| `forbid_non_whitelisted` | 遇到未声明字段时拒绝请求             |
+
+```rust
+let options = ValidationOptions::new()
+    .transform(true)
+    .whitelist(true)
+    .forbid_non_whitelisted(true);
+
+let app = BootApplication::builder()
+    .import(AppModule)
+    .use_global_validation_options(options)
+    .build()?;
+```
+
+属性形式支持 `#[validate(transform)]`、`#[validate(whitelist)]` 与 `#[validate(forbidNonWhitelisted)]`。`#[skip_validation]` 可以在明确的健康或原始 payload 路由上覆盖外层设置。
+
+Whitelist 不是授权。DTO 字段存在不代表调用者有权修改对应领域属性，授权仍应在 Guard 或应用服务中检查。
+
+## Pipe 与 DTO 验证的区别
+
+Pipe 处理一个提取值，例如把路径参数转为整数或 UUID。DTO 验证检查完整对象及字段之间的约束。推荐顺序是：
+
+```text
+raw request value -> extractor pipe -> DTO decoding -> schema policy -> Validate -> handler
+```
+
+解析整数、bool、float、array、enum 和 UUID 时优先使用内置 Pipe。涉及两个以上字段的规则放进 `Validate` 或应用层 value object。
+
+## 响应序列化
+
+`SerializationInterceptor` 对 JSON 响应执行字段 shaping：
+
+- `include` 只保留允许字段
+- `exclude` 删除指定字段
+- `skip_null` 删除值为 null 的字段
+- body 改写后同步更新 content length
+
+```rust
+let app = BootApplication::builder()
+    .import(AppModule)
+    .use_global_serialization()
+    .build()?;
+```
+
+`#[serialize(include = ["id", "name"], exclude = ["secret"], skip_null)]` 可以放在 Controller 或 Route 上，局部选项覆盖外层选项。显式 `SerializationOptions` 也可以传给 Interceptor。
+
+序列化器只处理 JSON 响应。stream、file、SSE、HTML 和已经选择的其他 media type 保持各自语义。
+
+## 安全建议
+
+- 响应 DTO 本身应先排除 secret，序列化 exclude 作为第二道边界。
+- 把 whitelist 作为兼容策略，不要用它静默接受拼错的关键字段。
+- 面向公共 API 时优先启用 `forbid_non_whitelisted` 并记录拒绝原因。
+- Validation 错误使用可安全暴露的消息，内部解析上下文写入日志而不是响应。
+- 对每种输入策略测试有效、缺失、错误类型、额外字段与边界长度。
+
+OpenAPI schema 与请求元数据见[HTTP 与 OpenAPI](/capabilities/openapi-and-http)。

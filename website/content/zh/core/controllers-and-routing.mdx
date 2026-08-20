@@ -1,0 +1,113 @@
+---
+title: Controller 与路由
+description: 使用属性宏或显式定义构建 HTTP 路由、提取类型化输入并选择响应与版本策略。
+---
+
+# Controller 与路由
+
+Controller 把一组 HTTP 路由绑定到普通 Rust 类型。路由定义属于 Boot 核心，只有监听和网络转换交给 Axum 适配器。
+
+## 属性路由
+
+```rust
+use a3s_boot::{body, controller, get, header, param, post, query, Result};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Deserialize)]
+struct ListQuery {
+    limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateUser {
+    name: String,
+}
+
+#[derive(Debug, Serialize)]
+struct UserDto {
+    id: String,
+    name: String,
+}
+
+#[controller("/users")]
+impl UserController {
+    #[get("/{id}")]
+    async fn find(
+        &self,
+        #[param("id")] id: String,
+        #[query] query: ListQuery,
+        #[header("x-request-id")] request_id: Option<String>,
+    ) -> Result<UserDto> {
+        self.users.find(id, query.limit, request_id).await
+    }
+
+    #[post("/", status = 201)]
+    async fn create(&self, #[body] input: CreateUser) -> Result<UserDto> {
+        self.users.create(input).await
+    }
+}
+```
+
+HTTP 方法宏包括 `all`、`get`、`post`、`put`、`patch`、`delete`、`head`、`options` 与 JSON 快捷变体。`sse` 用于 server-sent events。
+
+## 输入提取
+
+| 属性                              | 输入                           |
+| --------------------------------- | ------------------------------ |
+| `#[body]`, `#[body("field")]`     | 完整 JSON DTO 或单个 JSON 字段 |
+| `#[param("name")]`, `#[params]`   | 单个或全部路径参数             |
+| `#[query]`, `#[query("name")]`    | 完整 query DTO 或单值          |
+| `#[header("name")]`, `#[headers]` | 单个或全部请求头               |
+| `#[cookie("name")]`, `#[cookies]` | 单个或全部 cookie              |
+| `#[host_param("name")]`           | host pattern 捕获值            |
+| `#[ip]`                           | 适配器提供的 client IP hint    |
+| `#[request]`                      | 完整 `BootRequest`             |
+| `#[extract(...)]`                 | 自定义 `RequestExtractor`      |
+
+单值提取器可以声明 `pipe = <expr>` 和 `default = <expr>`。内置 Pipe 包括 int、bool、float、array、enum、UUID 与默认值转换。解析失败成为正常的 `BootError`，并进入 Filter。
+
+## 路由匹配
+
+Boot 在构建阶段检查 Controller prefix、module prefix、global prefix 与 route path。静态段优先于参数段，参数段优先于 catch-all。完全相同的方法与 pattern 冲突会在监听前失败。
+
+`#[host("{account}.example.com")]` 或 `with_host(...)` 可以限定 host。`all` 是方法 fallback，具体方法路由仍拥有更高优先级。
+
+```rust
+let app = BootApplication::builder()
+    .import(AppModule)
+    .global_prefix("/api")
+    .exclude_global_prefix([MiddlewareRoute::new("/health")?])
+    .build()?;
+```
+
+## API 版本
+
+Boot 支持 URI、header 与 media type 三种 version strategy。`#[version("1")]`、`#[versions("1", "2")]` 和 `#[version_neutral]` 可以放在 Controller 或 route 上。
+
+```rust
+let app = BootApplication::builder()
+    .import(AppModule)
+    .enable_api_versioning(ApiVersioning::uri().with_default_version("1"))
+    .build()?;
+```
+
+应用版本与本站文档版本是不同概念。API versioning 只影响运行时路由匹配。
+
+## 响应类型
+
+Handler 可以返回可序列化 DTO、`String`、`BootResponse` 或框架支持的专用响应：
+
+- JSON、text、HTML 与 raw bytes
+- redirect 与状态码、header、cookie
+- `ResponsePassthrough` 在返回 DTO 的同时修改响应
+- `SseStream` 和 `SseEvent`
+- `StreamableFile` 与 download
+- 由 `ViewRenderer` 渲染的 view
+
+错误应返回 `BootError`。常见 HTTP constructor 和通用 `http_exception(status, message)` 会生成一致的默认 JSON 错误响应。
+
+## 显式 builder
+
+`ControllerDefinition` 和 `RouteDefinition` 支持完全相同的 host、metadata、version、pipeline、validation、OpenAPI 与响应设置。属性宏只是编译期生成这些定义。运行时动态路由应使用 builder，不需要构造假的宏层。
+
+继续阅读[验证与序列化](/core/validation-and-serialization)和[HTTP 与 OpenAPI](/capabilities/openapi-and-http)。

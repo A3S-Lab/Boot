@@ -1,0 +1,114 @@
+---
+title: Security, authentication, and sessions
+description: Compose authentication strategies, roles and scopes, CORS, CSRF, security headers, rate limiting, and replaceable session stores.
+---
+
+# Security, authentication, and sessions
+
+Boot separates security into composable guards, middleware, interceptors, and providers. Enabling a feature supplies a mechanism. The application still selects its identity source, shared-state backend, cookie policy, and proxy trust boundary.
+
+## Authentication module
+
+With `auth`, `AuthModule` registers `AuthService` and one or more strategies. A strategy returns an `AuthPrincipal` or `None`, so identity verification does not become controller logic.
+
+```rust
+let app = BootApplication::builder()
+    .import(
+        AuthModule::new("auth")
+            .bearer(|token: String, _context: ExecutionContext| async move {
+                if token == "service-token" {
+                    Ok(Some(
+                        AuthPrincipal::new("service-1")
+                            .with_role("operator")
+                            .with_scope("jobs:read"),
+                    ))
+                } else {
+                    Ok(None)
+                }
+            })
+            .global(),
+    )
+    .use_global_auth()
+    .build()?;
+```
+
+A strategy can use the bearer helper or inspect `ExecutionContext` for an API key or another credential. Named strategies let one application distinguish user tokens, service tokens, and internal keys.
+
+`AuthGuard` can require roles or scopes. Macros and metadata support public routes, strategy selection, roles, and scopes. A handler reads the verified principal through `BootRequest::require_auth_principal()`, and `request-context` propagates it.
+
+A missing identity returns 401. An authenticated identity without permission returns 403. Do not parse the Authorization header again inside business handlers.
+
+## CORS and security headers
+
+With `security`, configure preflight middleware and actual response headers together:
+
+```rust
+let app = BootApplication::builder()
+    .use_global_cors(
+        CorsOptions::new()
+            .allow_origin("https://app.example")
+            .allow_methods([HttpMethod::Get, HttpMethod::Post])
+            .allow_headers(["content-type", "x-csrf-token"])
+            .allow_credentials(),
+    )
+    .use_global_security_headers(
+        SecurityHeadersOptions::new()
+            .with_content_security_policy("default-src 'self'")
+            .with_strict_transport_security("max-age=31536000"),
+    )
+    .import(AppModule)
+    .build()?;
+```
+
+List production origins explicitly. A credentialed policy must not treat a wildcard origin as a general convenience. Enable HSTS only after confirming HTTPS termination and subdomain policy.
+
+## CSRF
+
+`use_global_csrf(CsrfOptions::new())` adds a double-submit-token guard to unsafe HTTP methods. By default it compares a cookie with a header. This fits cookie-based browser sessions. It does not replace authentication or protect a bearer-only API from token disclosure.
+
+Login, logout, and other endpoints that change authentication state must participate in the CSRF policy. Cross-site cookies require a coordinated review of SameSite, Secure, and CORS credentials.
+
+## Rate limiting
+
+`use_global_rate_limit` uses process-local state and fits a single process, development, and tests. `RateLimitOptions` controls the window, request count, and subject source.
+
+Implement `RateLimitProvider` and call `use_global_rate_limit_provider` when multiple instances share one budget. Each atomic acquisition receives:
+
+- A stable policy identifier
+- A policy-scoped SHA-256 subject digest
+- The request limit and window
+
+Selected header values and bearer credentials do not cross the provider boundary in plaintext. Every process using one policy identifier must configure identical limits and windows. Provider failures reject requests and do not fail open.
+
+The bundled `InMemoryRateLimitProvider` does not share state. Boot does not bundle a distributed implementation such as Redis, and it does not treat streaming disconnects, backpressure, or graceful drain as rate limiting.
+
+## Sessions
+
+With `session`, `SessionModule` exports a `SessionManager`. Global middleware resolves or creates a session id, and an interceptor writes or clears the cookie with the response.
+
+```rust
+use std::time::Duration;
+
+let manager = SessionManager::in_memory(
+    SessionOptions::new()
+        .with_cookie_name("sid")
+        .with_ttl(Duration::from_secs(3600)),
+);
+
+let app = BootApplication::builder()
+    .use_global_session_module(SessionModule::from_manager("sessions", manager))
+    .import(AppModule)
+    .build()?;
+```
+
+A cookie is only written after the session contains data. `SessionManager` provides typed get, set, remove, and destroy operations. `SessionStore` is the public replacement boundary. The in-memory store neither spans processes nor retains login state across restarts.
+
+Production configuration should specify the cookie name, TTL, path, domain, Secure, HttpOnly, and SameSite settings. Session data does not replace server-side authorization, and sensitive values should not be placed directly in the client cookie.
+
+## Deployment checklist
+
+- Trust client IP and forwarded headers only when a known proxy strips and rewrites them.
+- Redact credentials, cookies, CSRF tokens, and rate-limit subjects from logs.
+- Define behavior for key rotation, session revocation, and authentication-provider failure.
+- Select shared session and rate-limit backends for multi-instance deployment, or explicitly accept instance-local semantics.
+- Test missing, invalid, expired, wrong role, wrong scope, CSRF mismatch, and backend-failure paths.

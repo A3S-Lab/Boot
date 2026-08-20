@@ -9,6 +9,7 @@
 </p>
 
 <p align="center">
+  <a href="https://a3s-lab.github.io/Boot/">Documentation</a> •
   <a href="#overview">Overview</a> •
   <a href="#features">Features</a> •
   <a href="#quick-start">Quick Start</a> •
@@ -31,6 +32,10 @@ Boot is not an Axum wrapper. Requests, responses, routes, and execution contexts
 belong to the framework core; Axum is the bundled default HTTP adapter. Rust
 attribute macros generate ordinary Boot definitions at compile time rather than
 relying on runtime decorator metadata.
+
+The [documentation website](https://a3s-lab.github.io/Boot/) provides complete
+Chinese and English guides for v0.2.0 and v0.1.4, including same-page language
+and version switching.
 
 ### Basic usage
 
@@ -448,6 +453,16 @@ feature-gated infrastructure. Tests for external transports may require their
 corresponding services or environment configuration.
 
 See [Roadmap](ROADMAP.md) for the Nest compatibility plan and remaining work.
+
+The versioned bilingual documentation site lives in `website/`:
+
+```bash
+cd website
+npm ci
+npm run check
+npm run build
+npm run check:site
+```
 
 ## License
 

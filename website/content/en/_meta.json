@@ -1,0 +1,31 @@
+[
+  {
+    "type": "section-header",
+    "label": "Get started"
+  },
+  {
+    "type": "dir",
+    "name": "getting-started",
+    "label": "Get started"
+  },
+  {
+    "type": "dir",
+    "name": "core",
+    "label": "Framework core"
+  },
+  {
+    "type": "dir",
+    "name": "capabilities",
+    "label": "Application capabilities"
+  },
+  {
+    "type": "dir",
+    "name": "protocols",
+    "label": "Protocols and workers"
+  },
+  {
+    "type": "dir",
+    "name": "reference",
+    "label": "Reference"
+  }
+]

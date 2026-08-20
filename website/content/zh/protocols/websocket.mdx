@@ -1,0 +1,98 @@
+---
+title: WebSocket Gateway
+description: 构建适配器中立的 WebSocket Gateway、生命周期 hook、room、broadcast 与专属执行管线。
+---
+
+# WebSocket Gateway
+
+WebSocket Gateway 把 upgrade path、事件订阅和 connection lifecycle 组织在一个普通 Rust 类型中。Boot 核心拥有定义与管线，默认 Axum 适配器执行真实 HTTP upgrade。
+
+## 声明 Gateway
+
+```rust
+use a3s_boot::{message_body, subscribe_message, websocket_gateway, Result};
+
+#[derive(Debug)]
+struct EventsGateway;
+
+#[websocket_gateway("/events", namespace = "/events")]
+impl EventsGateway {
+    #[subscribe_message("room.join")]
+    async fn join(&self, #[message_body] room: String) -> Result<String> {
+        Ok(room)
+    }
+}
+```
+
+把生成的 Gateway 放进 `#[module(gateways = [EventsGateway])]`。显式 API 使用 `WebSocketGatewayDefinition` 和 `WebSocketSubscriptionDefinition`，适合动态订阅。
+
+订阅可以绑定类型化 message body、完整 `WebSocketMessage`、`WebSocketConnection`、`WebSocketGatewayServer` 与协议 context。宏与 builder 最终生成相同定义。
+
+## 生命周期
+
+Gateway 支持：
+
+| Hook                       | 时机                             |
+| -------------------------- | -------------------------------- |
+| `#[on_gateway_init]`       | Gateway server handle 完成初始化 |
+| `#[on_gateway_connection]` | 一个 connection 进入 namespace   |
+| `#[on_gateway_disconnect]` | connection 关闭并离开 room       |
+
+Hook 可以通过显式 trait 或属性实现。连接与断开逻辑应有界且可取消，不能让慢外部调用阻塞 connection cleanup。
+
+## Namespace、room 与发送
+
+`WebSocketGatewayServer` 管理逻辑 namespace 和 connection registry。Handler 可以：
+
+- 向当前 connection 发送 direct message
+- 让 connection 加入或离开 room
+- 向一个 room broadcast
+- 向整个 Gateway broadcast
+- 返回实现 `IntoWebSocketReply` 的响应
+
+Room 是进程内逻辑分组。多实例部署需要外部 fanout 或 sticky routing 才能跨进程 broadcast，Boot 不会把本地 registry 伪装成分布式 presence。
+
+## 执行管线
+
+```text
+incoming frame
+      |
+event lookup
+      |
+application / gateway / subscription pipes
+      |
+guards
+      |
+around interceptors
+      |
+typed validation
+      |
+handler
+      |
+reply or outbound messages
+
+unrecovered error -> WebSocket exception filters
+```
+
+`WebSocketContext` 暴露 Gateway、subscription、connection、message 与 metadata。属性 `#[use_guard]`、`#[use_pipe]`、`#[use_interceptor]`、`#[use_filter]` 和 `#[metadata]` 可用于 Gateway 或订阅。
+
+应用级组件通过 `use_global_websocket_guard`、`use_global_websocket_pipe`、`use_global_websocket_interceptor` 与 `use_global_websocket_filter` 注册。真正跨协议的策略可以使用 `ExecutionContext` enhancer。
+
+## Scope 与 Provider
+
+Provider-backed Gateway 和 handler 会在每次消息 dispatch 的 `ContextId` 中解析。request-scoped 依赖不会在 connection 生命周期内自动保持同一实例。如果需要 connection 级状态，应放在明确的 connection state 或外部 store 中，不要误用 request scope。
+
+## Payload 与错误
+
+类型化 payload 使用与 HTTP DTO 相同的 `Validate` 与 `ValidationOptions` 概念。Pipe 先转换消息，验证再检查 DTO。协议错误由 `WebSocketExceptionFilter` 映射为 `WebSocketExceptionResponse`。
+
+不要把内部 `BootError` 调试细节直接发送给 client。为 unknown event、malformed JSON、oversized frame、unauthorized subscription 和 handler timeout 分别定义稳定响应。
+
+## 生产边界
+
+- 在 upgrade 前完成 origin、认证与大小限制检查。
+- 为 inbound frame、outbound buffer、room 数量和每 connection 订阅设置上限。
+- 定义 backpressure、慢 consumer 与断线重连策略。
+- broadcast handler 必须避免在一个慢 connection 上串行阻塞所有 connection。
+- 通过 shutdown hook 停止接收新连接并有界等待现有连接关闭。
+- 多实例 presence、room 与 fanout 需要独立共享基础设施。

@@ -1,0 +1,110 @@
+---
+title: 快速开始
+description: 用属性宏、类型化 Provider 和 Axum 适配器运行第一个 A3S Boot 应用。
+---
+
+# 快速开始
+
+这一示例注册一个 singleton Provider、一个 Controller 和一条带路径参数的 GET 路由。它只使用默认 feature。
+
+## 1. 创建依赖
+
+```toml title="Cargo.toml"
+[package]
+name = "boot-hello"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+a3s-boot = "{{RELEASE}}"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+## 2. 声明 Provider 与 Controller
+
+```rust title="src/main.rs"
+use std::sync::Arc;
+
+use a3s_boot::{
+    controller, get, injectable, module, param, AxumAdapter, BootFactory, Result,
+};
+
+#[injectable]
+#[derive(Debug)]
+struct GreetingService;
+
+impl GreetingService {
+    fn hello(&self, name: &str) -> String {
+        format!("Hello, {name}")
+    }
+}
+
+#[injectable]
+#[derive(Debug)]
+struct GreetingController {
+    greeting: Arc<GreetingService>,
+}
+
+#[controller("/greetings")]
+impl GreetingController {
+    #[get("/{name}")]
+    async fn greet(&self, #[param("name")] name: String) -> Result<String> {
+        Ok(self.greeting.hello(&name))
+    }
+}
+
+#[module(
+    name = "app",
+    providers = [GreetingService, GreetingController],
+    controllers = [GreetingController],
+)]
+#[derive(Debug)]
+struct AppModule;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let mut app = BootFactory::create(AppModule)?;
+    app.listen_with(&AxumAdapter::new(), ([127, 0, 0, 1], 3000).into())
+        .await
+}
+```
+
+`#[injectable]` 为普通 Rust 类型生成 `FromModuleRef` 实现。`GreetingController` 的 `Arc<GreetingService>` 字段成为显式依赖，模块同时把 Controller 注册为 Provider 和 HTTP Controller。
+
+## 3. 运行与请求
+
+```bash
+cargo run
+```
+
+另一个终端中请求：
+
+```bash
+curl http://127.0.0.1:3000/greetings/A3S
+```
+
+响应正文是：
+
+```text
+Hello, A3S
+```
+
+## 构建时发生了什么
+
+1. `BootFactory::create` 收集 `AppModule` 的声明。
+2. 容器检查 Provider token、依赖与模块可见性。
+3. Controller 宏生成 `ControllerDefinition` 与 `RouteDefinition`。
+4. Axum 适配器把框架路由转换为实际 router。
+5. 请求进入 Boot 管线，路径参数被提取为 `String`，然后调用 handler。
+
+任何依赖缺失、重复路由或非法模块图都会在监听前返回 `BootError`。
+
+## 显式 API 仍然可用
+
+属性宏并不是另一套运行时。动态注册或不使用宏的应用可以直接实现 `Module`，返回 `ProviderDefinition` 和 `ControllerDefinition`。两种写法最终进入同一个应用图与执行管线。
+
+## 下一步
+
+- 在[应用模型](/core/application-model)中拆分模块、导出 Provider 并选择 scope。
+- 在[Controller 与路由](/core/controllers-and-routing)中学习请求提取、版本与响应类型。
+- 在[请求管线](/core/request-pipeline)中加入认证、转换和统一错误处理。

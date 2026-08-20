@@ -1,0 +1,90 @@
+---
+title: 架构、生产边界与 Roadmap
+description: 理解 A3S Boot 的源码分层、扩展契约、生产责任、兼容方向与明确不做的范围。
+---
+
+# 架构、生产边界与 Roadmap
+
+Boot 的核心目标是让应用结构熟悉，同时让 Rust 类型、错误、scope 与协议适配器保持可见。
+
+## 运行时分层
+
+```text
+modules + typed providers
+          |
+controllers / gateways / message patterns
+          |
+protocol-neutral and protocol-specific pipelines
+          |
+BootRequest / WebSocketMessage / TransportMessage
+          |
+HTTP adapter / WebSocket adapter / MessageTransport
+```
+
+上层不能依赖具体 Axum request 或 broker client。适配器把 wire 输入转换为 Boot 类型，并把 Boot reply 转回 wire。
+
+## 源码职责
+
+| 目录或文件        | 责任                                                                 |
+| ----------------- | -------------------------------------------------------------------- |
+| `app/`            | Factory、builder、application shell、context、lifecycle、lazy module |
+| `module/`         | Module trait 与 DynamicModule                                        |
+| `provider/`       | token、definition、scope、resolution 与 ModuleRef                    |
+| `routing/`        | Controller、route、matching、handler 与 response                     |
+| `pipeline/`       | Middleware、Guard、Interceptor、Pipe、Filter 与 context              |
+| `http/`           | Adapter-neutral request、response、提取、cookie、SSE 与 file         |
+| `websocket/`      | Gateway、connection、subscription、room 与 WebSocket pipeline        |
+| `transport/`      | Message pattern、client 与各网络 transport                           |
+| 可选 feature 文件 | auth、cache、config、events、queue、schedule、security 等技术模块    |
+| `macros/`         | 独立 proc-macro crate，生成核心显式定义                              |
+
+公共 `HttpAdapter`、`MessageTransport` 和各 backend trait 是主要扩展点。新实现应保留 `Send + Sync`、异步 cleanup、上下文错误和协议真实语义。
+
+## 图在何时冻结
+
+Module import、Provider 可见性、route、Gateway、message pattern 与 application enhancer 在构建阶段解析。`DiscoveryService` 和 `ApplicationGraph` 提供最终快照。
+
+Lazy Module 适合隔离的 Provider 功能，不适合改变已经编译的全局 pipeline。动态需求应在 builder 阶段收集，再一次构建应用。
+
+## 生产责任矩阵
+
+| 关注点        | Boot 机制                                | 部署责任                                          |
+| ------------- | ---------------------------------------- | ------------------------------------------------- |
+| HTTP          | Axum adapter、request、response、routing | TLS、proxy、timeout、connection limit             |
+| WebSocket     | upgrade、Gateway、room、pipeline         | 跨实例 fanout、backpressure、drain                |
+| Message       | transport contract 与多种实现            | broker durability、topology、credential、capacity |
+| DI            | scope、cycle、lifecycle                  | 清晰 Module 边界与资源关闭                        |
+| Security      | auth、CORS、CSRF、header、rate limit     | identity source、key rotation、共享 backend       |
+| Data          | facade、Queue PostgreSQL backend         | schema ownership、backup、migration、幂等性       |
+| Observability | structured record、health indicator      | sink、trace correlation、sampling、alerts         |
+
+## 当前兼容方向
+
+已实现的 Nest 风格表面包括 parameter extraction、OpenAPI metadata、validation、module encapsulation、DynamicModule、Provider scope、application enhancer、Middleware、WebSocket Gateway、microservice transport 与主要技术模块。
+
+Boot 的目标不是逐项复制 JavaScript runtime。属性宏生成静态 Rust 定义，ModuleRef 受类型和可见性约束，协议错误与交付语义保持显式。
+
+GraphQL 明确不在当前 Roadmap 范围内。当前重点是 HTTP、SSE、WebSocket、消息 transport、Module 与 Controller 体验。如果未来需要 GraphQL，应评估独立 companion crate，而不是把它塞进核心。
+
+## 版本兼容
+
+当前站点提供 v0.2.0 与 v0.1.4。
+
+- 两个版本的 Boot 源码公共能力一致。
+- v0.2.0 的 `queue-postgres` 依赖 A3S ORM 0.3.0。
+- v0.1.4 的 `queue-postgres` 依赖 A3S ORM 0.2.0。
+- 升级时应一起验证 Cargo feature、数据库 queue schema、worker recovery 与 lockfile。
+
+Release tag、crate version 与本站 version switcher 使用同一版本号。应用自身的 API versioning 不受文档版本影响。
+
+## 变更检查
+
+完成框架能力时应同步：
+
+1. 为行为添加 unit 或 integration test。
+2. 更新 crate root export 与 feature gating。
+3. 更新 README、Roadmap 与对应中英文页面。
+4. 验证默认 feature、focused feature 与 all-features 构建。
+5. 检查 Rustdoc、OpenAPI 示例和生产边界说明。
+
+完整实现计划见仓库中的 [ROADMAP.md](https://github.com/A3S-Lab/Boot/blob/main/ROADMAP.md)，发布记录见 [GitHub Releases](https://github.com/A3S-Lab/Boot/releases)。

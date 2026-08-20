@@ -1,0 +1,114 @@
+---
+title: 安全、认证与 Session
+description: 组合认证策略、角色与 scope、CORS、CSRF、安全响应头、限流和可替换 Session store。
+---
+
+# 安全、认证与 Session
+
+Boot 把安全能力拆成可组合的 Guard、Middleware、Interceptor 与 Provider。启用 feature 只提供机制，应用仍要选择身份源、共享状态 backend、cookie 策略和代理信任边界。
+
+## 认证模块
+
+启用 `auth` 后，`AuthModule` 注册 `AuthService` 和一个或多个策略。策略返回 `AuthPrincipal` 或 `None`，不会把身份验证写死到 Controller。
+
+```rust
+let app = BootApplication::builder()
+    .import(
+        AuthModule::new("auth")
+            .bearer(|token: String, _context: ExecutionContext| async move {
+                if token == "service-token" {
+                    Ok(Some(
+                        AuthPrincipal::new("service-1")
+                            .with_role("operator")
+                            .with_scope("jobs:read"),
+                    ))
+                } else {
+                    Ok(None)
+                }
+            })
+            .global(),
+    )
+    .use_global_auth()
+    .build()?;
+```
+
+策略可以使用 bearer helper，也可以从 `ExecutionContext` 读取 API key 或其他凭证。命名策略允许同一应用区分用户 token、服务 token 与内部 key。
+
+`AuthGuard` 可以要求 role 或 scope。宏与 metadata 支持 public route、策略选择、角色和 scope。Handler 可通过 `BootRequest::require_auth_principal()` 取得已经验证的 principal，`request-context` 也会传播它。
+
+身份不存在返回 401，身份存在但缺少权限返回 403。不要在业务 Handler 中重新解析 Authorization header。
+
+## CORS 与安全响应头
+
+启用 `security` 后，可以一次配置 preflight middleware 与实际响应 header：
+
+```rust
+let app = BootApplication::builder()
+    .use_global_cors(
+        CorsOptions::new()
+            .allow_origin("https://app.example")
+            .allow_methods([HttpMethod::Get, HttpMethod::Post])
+            .allow_headers(["content-type", "x-csrf-token"])
+            .allow_credentials(),
+    )
+    .use_global_security_headers(
+        SecurityHeadersOptions::new()
+            .with_content_security_policy("default-src 'self'")
+            .with_strict_transport_security("max-age=31536000"),
+    )
+    .import(AppModule)
+    .build()?;
+```
+
+明确列出 production origin。允许 credentials 时不能把 wildcard origin 当成通用便利配置。HSTS 只应在确认 HTTPS 终止和子域策略后开启。
+
+## CSRF
+
+`use_global_csrf(CsrfOptions::new())` 为不安全 HTTP 方法加入 double-submit token Guard。默认从 cookie 与 header 比较 token。它适合基于 cookie 的浏览器会话，不代替认证，也不保护非浏览器 bearer-only API 的 token 泄漏。
+
+登录、登出和其他改变认证状态的 endpoint 也必须纳入 CSRF 策略。跨站 cookie 需要同时审查 SameSite、Secure 和 CORS credentials。
+
+## 限流
+
+`use_global_rate_limit` 使用进程内状态，适合单进程服务、开发和测试。`RateLimitOptions` 配置窗口、请求数与 subject 来源。
+
+多个实例共享一个预算时，实现 `RateLimitProvider` 并使用 `use_global_rate_limit_provider`。Provider 每次原子获取会收到：
+
+- 稳定 policy identifier
+- policy-scoped SHA-256 subject digest
+- 请求上限与窗口
+
+选择的 header 值和 bearer credential 不会以明文跨过 Provider 边界。使用同一 policy identifier 的所有进程必须配置相同 limit 与 window。Provider 失败会拒绝请求，不会 fail open。
+
+内置 `InMemoryRateLimitProvider` 不共享状态。Boot 不捆绑 Redis 等分布式实现，也不把 streaming disconnect、backpressure 或 graceful drain 当成限流的一部分。
+
+## Session
+
+启用 `session` 后，`SessionModule` 导出 `SessionManager`，global middleware 解析或创建 session id，Interceptor 在响应时写入或清除 cookie。
+
+```rust
+use std::time::Duration;
+
+let manager = SessionManager::in_memory(
+    SessionOptions::new()
+        .with_cookie_name("sid")
+        .with_ttl(Duration::from_secs(3600)),
+);
+
+let app = BootApplication::builder()
+    .use_global_session_module(SessionModule::from_manager("sessions", manager))
+    .import(AppModule)
+    .build()?;
+```
+
+只有 session 存入数据时才写 cookie。`SessionManager` 提供类型化 get、set、remove 与 destroy。`SessionStore` 是公开替换边界，内存 store 不跨进程，也不适合需要重启保留的登录状态。
+
+生产配置应明确 cookie name、TTL、path、domain、Secure、HttpOnly 和 SameSite。Session 数据不能替代服务端授权检查，敏感值也不应直接放入客户端 cookie。
+
+## 部署检查
+
+- 只信任由已知代理清理并重写的 client IP 与 forwarded header。
+- 对凭证、cookie、CSRF token 和限流 subject 做日志脱敏。
+- 为 key rotation、session revocation 与认证 Provider 故障定义行为。
+- 多实例部署必须为 session 和 rate limit 选择共享 backend，或明确接受实例局部语义。
+- 测试 missing、invalid、expired、wrong role、wrong scope、CSRF mismatch 与 backend failure。

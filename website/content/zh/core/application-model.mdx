@@ -1,0 +1,130 @@
+---
+title: 应用模型
+description: 组织 Module、Provider、scope、导入导出、动态模块与完整应用生命周期。
+---
+
+# 应用模型
+
+Boot 把应用视为一张由 Module 组织的类型化 Provider 图。Module 决定边界和可见性，Provider 决定实例如何构造，Controller、Gateway 与消息模式消费这些实例。
+
+## Module 是边界
+
+一个 `Module` 可以声明：
+
+- 普通导入与显式 forward import
+- Provider 及其导出 token
+- HTTP Controller 与直接路由
+- WebSocket Gateway 与消息模式
+- module route prefix 和 middleware
+- 初始化、bootstrap 与 shutdown hook
+
+属性宏适合静态模块：
+
+```rust
+use a3s_boot::{injectable, module};
+
+#[injectable]
+#[derive(Debug)]
+struct UserRepository;
+
+#[module(
+    name = "users",
+    providers = [UserRepository],
+    exports = [UserRepository],
+)]
+#[derive(Debug)]
+struct UsersModule;
+```
+
+导出只让 importing module 看见 Provider。把模块标记为 global 会让导出对所有模块可见，但会弱化依赖来源，适合配置、日志等真正跨应用能力，不适合普通业务服务。
+
+## Provider 定义
+
+`ProviderDefinition` 支持以下构造方式：
+
+| 方式                | 用途                                          |
+| ------------------- | --------------------------------------------- |
+| value / `singleton` | 注册已经构造的值                              |
+| factory             | 根据 `ModuleRef` 同步构造                     |
+| async factory       | 在 async 应用构建中等待外部资源               |
+| named provider      | 同一 Rust 类型存在多个语义实例                |
+| alias               | 让另一个 token 指向已有 Provider 并保留 scope |
+| `FromModuleRef`     | 从声明的依赖自动构造类型                      |
+
+`#[injectable]` 支持命名字段中的 `Arc<T>`、`Option<Arc<T>>`、`ProviderRef<T>` 与 `Option<ProviderRef<T>>`。`#[inject("token")]` 把字段切换到命名 token。
+
+```rust
+use std::sync::Arc;
+use a3s_boot::{injectable, ProviderRef};
+
+#[injectable]
+#[derive(Debug)]
+struct BillingService {
+    orders: Arc<OrderRepository>,
+    #[inject("audit-writer")]
+    audit: Arc<AuditWriter>,
+    optional_metrics: Option<Arc<Metrics>>,
+    lazy_catalog: ProviderRef<CatalogService>,
+}
+```
+
+缺失的必需 token 和非法环会返回带上下文的 `BootError`。可选依赖只在 token 不可见时得到 `None`，不会吞掉 Provider factory 自身的构造错误。
+
+## 生命周期 scope
+
+| Scope     | 实例边界                           | 适用场景                       |
+| --------- | ---------------------------------- | ------------------------------ |
+| Singleton | 应用图内一个实例                   | 无请求状态的服务、连接池、配置 |
+| Request   | 每个 `ContextId` 一个实例          | 请求或消息级事务、租户上下文   |
+| Transient | 每个 inquirer 构造，单次解析中复用 | 轻量、调用方专属的协作对象     |
+
+如果 singleton 的 eager 依赖是 request-scoped，该依赖链会自动向上冒泡到 request scope。`ProviderRef<T>` 是 lazy edge，不参与 scope 冒泡；调用方必须使用捕获的请求 context 或显式 `resolve(...)`。
+
+`ContextIdFactory` 可以创建新上下文，也可以让多个解析共享同一个上下文。HTTP、WebSocket 与 transport dispatcher 会为每次调用建立对应上下文。
+
+## 动态与延迟模块
+
+`DynamicModule` 用于由配置决定的导入、Provider、导出、Controller、Gateway 与消息模式。它仍然遵守普通 Module 的可见性规则。
+
+`LazyModuleLoader` 可以在启动后加载隔离的 Provider 功能模块。应用级 Guard、Pipe、Interceptor 与 Filter 必须 eager import，因为 handler 在构建阶段已经编译，延迟加入全局增强器会让执行拓扑不一致。
+
+模块循环关系必须通过 forward import 明确声明。Provider 循环应优先重新划分职责；确有延迟解析需求时使用 `ProviderRef<T>`，不要关闭正常的 cycle 诊断。
+
+## Factory 与生命周期
+
+`BootFactory` 根据进程角色选择外壳：
+
+| 调用                         | 结果                                   |
+| ---------------------------- | -------------------------------------- |
+| `create`                     | HTTP-capable `BootApplication`         |
+| `create_application_context` | Provider-only `BootApplicationContext` |
+| `create_microservice`        | 独立 `BootMicroservice`                |
+| `create_async` 及 async 变体 | 支持 async Provider factory 的对应外壳 |
+
+Module 和 singleton Provider 可以观察以下阶段：
+
+```text
+on_module_init
+        |
+on_application_bootstrap
+        |
+application is serving
+        |
+on_module_destroy
+        |
+before_application_shutdown
+        |
+on_application_shutdown
+```
+
+使用 `shutdown-hooks` 时，SIGINT 与 SIGTERM 的标签会传给支持 signal 的 shutdown hook。所有外部资源都应在 hook 中显式关闭，不能依赖进程退出自动丢弃。
+
+## 图检查建议
+
+- 让业务 Module 只导出被其他边界真实消费的 token。
+- 让 Controller 只编排输入、应用服务和输出。
+- 使用 named token 表达同类型的不同 backend，不用字符串选项在运行时分支。
+- 把连接池和客户端作为 Provider 注入，不在 injectable class 内直接 `new`。
+- 通过 `DiscoveryService` 或 `ApplicationGraph` 检查模块、Provider、路由、Gateway 与消息模式快照。
+
+下一步阅读[Controller 与路由](/core/controllers-and-routing)或[请求管线](/core/request-pipeline)。

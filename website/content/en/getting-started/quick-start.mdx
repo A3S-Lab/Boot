@@ -1,0 +1,110 @@
+---
+title: Quick start
+description: Run your first A3S Boot application with attribute macros, a typed provider, and the Axum adapter.
+---
+
+# Quick start
+
+This example registers one singleton provider, one controller, and one GET route with a path parameter. It only uses default features.
+
+## 1. Add dependencies
+
+```toml title="Cargo.toml"
+[package]
+name = "boot-hello"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+a3s-boot = "{{RELEASE}}"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+## 2. Declare a provider and controller
+
+```rust title="src/main.rs"
+use std::sync::Arc;
+
+use a3s_boot::{
+    controller, get, injectable, module, param, AxumAdapter, BootFactory, Result,
+};
+
+#[injectable]
+#[derive(Debug)]
+struct GreetingService;
+
+impl GreetingService {
+    fn hello(&self, name: &str) -> String {
+        format!("Hello, {name}")
+    }
+}
+
+#[injectable]
+#[derive(Debug)]
+struct GreetingController {
+    greeting: Arc<GreetingService>,
+}
+
+#[controller("/greetings")]
+impl GreetingController {
+    #[get("/{name}")]
+    async fn greet(&self, #[param("name")] name: String) -> Result<String> {
+        Ok(self.greeting.hello(&name))
+    }
+}
+
+#[module(
+    name = "app",
+    providers = [GreetingService, GreetingController],
+    controllers = [GreetingController],
+)]
+#[derive(Debug)]
+struct AppModule;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let mut app = BootFactory::create(AppModule)?;
+    app.listen_with(&AxumAdapter::new(), ([127, 0, 0, 1], 3000).into())
+        .await
+}
+```
+
+`#[injectable]` generates a `FromModuleRef` implementation for an ordinary Rust type. The `Arc<GreetingService>` field on `GreetingController` becomes an explicit dependency. The module registers the controller as both a provider and an HTTP controller.
+
+## 3. Run and call the route
+
+```bash
+cargo run
+```
+
+In another terminal:
+
+```bash
+curl http://127.0.0.1:3000/greetings/A3S
+```
+
+The response body is:
+
+```text
+Hello, A3S
+```
+
+## What happened during construction
+
+1. `BootFactory::create` collected the `AppModule` declarations.
+2. The container checked provider tokens, dependencies, and module visibility.
+3. Controller macros generated `ControllerDefinition` and `RouteDefinition` values.
+4. The Axum adapter converted framework routes into a concrete router.
+5. The request entered the Boot pipeline, the path parameter became a `String`, and the handler ran.
+
+Missing dependencies, duplicate routes, and invalid module graphs return a `BootError` before the server listens.
+
+## The explicit API remains available
+
+Attribute macros are not a second runtime. Dynamic applications and projects that avoid procedural macros can implement `Module` directly and return `ProviderDefinition` and `ControllerDefinition` values. Both styles enter the same application graph and execution pipeline.
+
+## Next steps
+
+- Split modules, export providers, and choose scopes in the [application model](/core/application-model).
+- Learn extraction, versioning, and response types in [controllers and routing](/core/controllers-and-routing).
+- Add authentication, transformation, and unified error handling in the [request pipeline](/core/request-pipeline).

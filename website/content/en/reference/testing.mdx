@@ -1,0 +1,102 @@
+---
+title: Testing
+description: Test Boot applications with TestingModule, provider and module overrides, and protocol-specific pipeline replacements.
+---
+
+# Testing
+
+`TestingModule` compiles a real Boot application graph in process while allowing providers, modules, and pipeline components to be replaced before controllers are constructed. A test call does not need to open a socket.
+
+## Minimal HTTP test
+
+```rust
+#[tokio::test]
+async fn greeting_uses_test_provider() {
+    let testing = TestingModule::builder()
+        .import(GreetingModule)
+        .override_provider(ProviderDefinition::singleton(GreetingService {
+            message: "fake",
+        }))
+        .compile()?;
+
+    let response = testing
+        .call(BootRequest::new(HttpMethod::Get, "/greetings"))
+        .await?;
+
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.body_text()?, "fake");
+    Ok::<(), BootError>(())
+}
+```
+
+An override is applied before import-graph resolution and controller factories, so an injected controller receives the replacement. Boot does not construct a production instance and mutate it afterward.
+
+## Builder capabilities
+
+| Method                                   | Use                                              |
+| ---------------------------------------- | ------------------------------------------------ |
+| `import`, `import_arc`                   | Import a production module                       |
+| `provider`                               | Add a provider to the dynamic test module        |
+| `controller`, `route`                    | Add an HTTP surface directly                     |
+| `gateway`                                | Add a WebSocket gateway                          |
+| `message_pattern`                        | Add a transport pattern                          |
+| `override_provider`                      | Replace a `ProviderDefinition` by token          |
+| `override_module`, `override_module_arc` | Replace a direct or nested module by stable name |
+| `compile`                                | Build a synchronous provider graph               |
+| `compile_async`                          | Await async provider factories and build         |
+
+Resolve providers with `TestingModule::get`, `get_named`, and optional variants. `app()` exposes the complete in-process application. `into_app()` transfers ownership.
+
+## Pipeline overrides
+
+The testing builder can replace components by their concrete type:
+
+- HTTP `Guard`, `Interceptor`, `Pipe`, and `ExceptionFilter`
+- WebSocket `WebSocketGuard`, `WebSocketInterceptor`, `WebSocketPipe`, and `WebSocketExceptionFilter`
+- Transport `TransportGuard`, `TransportInterceptor`, `TransportPipe`, and `TransportExceptionFilter`
+
+Replacements apply to compiled routes, gateways, message patterns, and global filters. Use them to isolate an external authentication or observation component while keeping the real business handler.
+
+Do not replace every guard with an allow-all guard. Keep at least one integration group for real authentication, authorization, and error mapping.
+
+## HTTP calls
+
+`TestingModule::call` and `BootApplication::call` return framework-level errors and fit success paths or explicit error assertions. `BootApplication::handle` converts a failure into the final default or filtered response and fits HTTP wire-contract assertions.
+
+Set the method, path, query, headers, cookies, and body explicitly on `BootRequest`. Tests for path specificity, global prefixes, hosts, API versions, and content negotiation must include every input that affects matching.
+
+## WebSocket tests
+
+Get a gateway from `testing.app().gateway_for(path)`, create an in-process connection with `connect(BootRequest)`, then call `dispatch(WebSocketMessage)` to verify replies, rooms, broadcasts, lifecycle, and filters.
+
+Cover unknown events, bad payloads, guard denial, pipe transformation, interceptor recovery, disconnect cleanup, and multiple-connection room behavior. The actual Axum upgrade still needs a socket-level integration test.
+
+## Transport tests
+
+Call `app.dispatch_message(TransportMessage)` to verify a registered pattern directly. `InProcessTransport` fits client request-response and event flows. A network implementation also needs its broker or an ephemeral service to test connection, serialization, timeout, and restart.
+
+Never infer Redis, Kafka, RabbitMQ, or MQTT durability and ordering from an in-process result.
+
+## Scopes and lifecycle
+
+- Request-scoped providers should be reused within one request or dispatch.
+- Request state must not leak between different `ContextId` values.
+- Transient providers should follow per-inquirer construction semantics.
+- Bootstrap and shutdown tests should assert hook order and signal labels.
+- Tests with async providers must use `compile_async` and must not block inside an async context.
+
+## External-resource tests
+
+Tests must clean up temporary files, listeners, connections, and tasks. A PostgreSQL queue integration test should use a dedicated schema or unique queue name and clean up afterward. If an external service is absent, use an explicit skip condition and never report a connection failure as a pass.
+
+Recommended repository checks:
+
+```bash
+cargo fmt --all -- --check
+cargo test
+cargo test --all-features
+cargo clippy --all-targets --all-features -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps
+```
+
+Run these commands from the `a3s-boot` crate directory.

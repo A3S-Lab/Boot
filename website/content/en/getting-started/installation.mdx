@@ -1,0 +1,120 @@
+---
+title: Installation and features
+description: Install A3S Boot, choose the default or minimal core, and enable optional modules and transports by boundary.
+---
+
+# Installation and features
+
+A3S Boot uses Cargo features to control protocol adapters and technique modules. Start an HTTP application with the defaults, then enable additional capabilities only at real business boundaries.
+
+## Default installation
+
+```toml
+[dependencies]
+a3s-boot = "{{RELEASE}}"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+The default features are:
+
+| Feature          | Contents                                                     |
+| ---------------- | ------------------------------------------------------------ |
+| `axum`           | Axum HTTP and WebSocket adapter                              |
+| `macros`         | Module, provider, controller, route, and protocol attributes |
+| `shutdown-hooks` | SIGINT and SIGTERM shutdown handling                         |
+
+The final application selects Tokio runtime features. The configuration above is appropriate for a multithreaded service with `#[tokio::main]`.
+
+## Minimal core
+
+Disable defaults when you do not need the HTTP adapter, macros, or signal handling:
+
+```toml
+[dependencies]
+a3s-boot = { version = "{{RELEASE}}", default-features = false }
+```
+
+This combination fits libraries that only use explicit builders, integrations whose host owns the runtime, or applications that only need the protocol-neutral core.
+
+## Enable capabilities explicitly
+
+```toml
+[dependencies]
+a3s-boot = {
+  version = "{{RELEASE}}",
+  features = ["auth", "security", "session", "openapi-schemas"]
+}
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+### Application and HTTP
+
+| Feature           | Capability                                                       |
+| ----------------- | ---------------------------------------------------------------- |
+| `config`          | Parse and validate typed configuration through `a3s-acl`         |
+| `auth`            | Strategy-backed authentication service and guard                 |
+| `security`        | CORS, CSRF, rate limiting, and security response headers         |
+| `session`         | Session middleware, cookies, and replaceable stores              |
+| `cache`           | Cache interface, in-memory store, and response cache interceptor |
+| `database`        | Replaceable database facade and in-memory test backend           |
+| `http-client`     | Provider-managed outbound HTTP client                            |
+| `compression`     | gzip response compression                                        |
+| `file-upload`     | Bounded multipart uploads                                        |
+| `static`          | Static files and SPA fallback                                    |
+| `request-context` | Task-local access to the current request context                 |
+| `openapi-schemas` | Collect component schemas from `schemars::JsonSchema`            |
+
+### Background capabilities
+
+| Feature          | Capability                                                         |
+| ---------------- | ------------------------------------------------------------------ |
+| `cqrs`           | Command, query, and event buses                                    |
+| `events`         | A3S Event providers and listeners                                  |
+| `queue`          | A3S Lane-backed in-process queues                                  |
+| `queue-postgres` | A3S ORM-backed shared PostgreSQL queues, also enables `queue`      |
+| `schedule`       | Timeout, interval, and cron scheduling                             |
+| `logging`        | Structured logger and request logging enhancers                    |
+| `health`         | Health checks and indicators                                       |
+| `ilink`          | Tencent Weixin iLink login, polling, reply, and lifecycle boundary |
+
+### Message transports
+
+`tcp-transport`, `redis-transport`, `nats-transport`, `mqtt-transport`, `rabbitmq-transport`, `kafka-transport`, and `grpc-transport` enable their corresponding network implementations. `InProcessTransport` needs no additional feature.
+
+Enabling a transport adds its client and adapter implementation. It does not create or manage an external broker.
+
+## PostgreSQL queue version difference
+
+```toml
+[dependencies]
+a3s-boot = { version = "{{RELEASE}}", features = ["queue-postgres"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+<!-- @if orm-0-3 -->
+
+The `queue-postgres` feature in Boot {{DOC_VERSION}} uses A3S ORM 0.3.0. That ORM release provides typed UPDATE CTEs, `UPDATE FROM`, and expression assignments used by queue claims.
+
+<!-- @endif -->
+
+<!-- @unless orm-0-3 -->
+
+The `queue-postgres` feature in Boot {{DOC_VERSION}} uses A3S ORM 0.2.0. The public queue contract is the same as v0.2.0, while the internal claim implementation uses the ORM capabilities available in that release.
+
+<!-- @endif -->
+
+Do not manually override Boot's optional A3S ORM dependency. Cargo features are unified across the dependency graph, so inspect the final result with `cargo tree -e features` before deployment.
+
+## Verify the selection
+
+```bash
+cargo check
+cargo tree -e features -p a3s-boot
+cargo test
+```
+
+Use `cargo check --all-features` when you need to evaluate all integrations together. End-to-end tests for network transports and PostgreSQL can require their corresponding external services.
+
+Continue to the [quick start](/getting-started/quick-start) and run the first route.

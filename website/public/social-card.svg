@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">A3S Boot</title>
+  <desc id="desc">Modular Rust applications with explicit protocol pipelines.</desc>
+  <defs>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0H0V48" fill="none" stroke="#dfe3ea" stroke-width="1"/>
+    </pattern>
+    <linearGradient id="mark" x1="0" y1="0" x2="52" y2="52" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5d8ef3"/>
+      <stop offset="1" stop-color="#315fc4"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="#f3f4f7"/>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+  <rect x="46" y="46" width="1108" height="538" rx="20" fill="#fff" stroke="#cfd4dd"/>
+  <g transform="translate(92 92)" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC',sans-serif">
+    <rect width="42" height="42" rx="11" fill="url(#mark)"/>
+    <path d="M10 32 21 9l11 23M14 25c4.5-2.7 9 3.2 15-.3" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="58" y="29" fill="#17191e" font-size="22" font-weight="700">A3S Boot</text>
+    <text x="0" y="130" fill="#17191e" font-size="68" font-weight="680" letter-spacing="-4">Modular applications.</text>
+    <text x="0" y="204" fill="#315fc4" font-size="68" font-weight="680" letter-spacing="-4">Rust-level control.</text>
+    <text x="2" y="258" fill="#69717e" font-size="21">typed providers / explicit pipelines / replaceable adapters</text>
+    <g transform="translate(0 322)" font-family="ui-monospace,SFMono-Regular,Consolas,monospace" font-size="14">
+      <rect width="470" height="66" rx="9" fill="#f7f8fa" stroke="#d9dde5"/>
+      <text x="20" y="40" fill="#315fc4">a3s-boot</text>
+      <text x="106" y="40" fill="#343942">= "0.2.0"</text>
+    </g>
+  </g>
+  <g transform="translate(724 98)" font-family="ui-monospace,SFMono-Regular,Consolas,monospace">
+    <rect width="382" height="430" rx="14" fill="#171820" stroke="#315fc4"/>
+    <text x="24" y="42" fill="#8fa8da" font-size="13" font-weight="700">EXECUTION / HTTP</text>
+    <path d="M0 62H382" stroke="#303443"/>
+    <g font-size="17">
+      <text x="24" y="112" fill="#8fb1ff">01</text><text x="66" y="112" fill="#f2f3f5">Middleware</text>
+      <text x="24" y="160" fill="#8fb1ff">02</text><text x="66" y="160" fill="#f2f3f5">Guard</text>
+      <text x="24" y="208" fill="#8fb1ff">03</text><text x="66" y="208" fill="#f2f3f5">Interceptor</text>
+      <text x="24" y="256" fill="#8fb1ff">04</text><text x="66" y="256" fill="#f2f3f5">Pipe + Validation</text>
+      <text x="24" y="304" fill="#8fb1ff">05</text><text x="66" y="304" fill="#f2f3f5">Handler</text>
+    </g>
+    <path d="M42 124V141M42 172V189M42 220V237M42 268V285" stroke="#596071" stroke-width="2"/>
+    <rect x="24" y="348" width="334" height="50" rx="8" fill="#20222c"/>
+    <text x="44" y="379" fill="#98b7ff" font-size="14">HTTP / WS / MESSAGE</text>
+  </g>
+</svg>

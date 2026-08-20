@@ -1,0 +1,120 @@
+---
+title: 安装与 feature
+description: 安装 A3S Boot，选择默认能力或最小核心，并按边界启用可选模块与传输。
+---
+
+# 安装与 feature
+
+A3S Boot 使用 Cargo feature 控制协议适配器和技术模块。先使用默认集合启动 HTTP 应用，再只为实际业务边界启用额外能力。
+
+## 默认安装
+
+```toml
+[dependencies]
+a3s-boot = "{{RELEASE}}"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+默认 feature 是：
+
+| Feature          | 内容                                           |
+| ---------------- | ---------------------------------------------- |
+| `axum`           | Axum HTTP 与 WebSocket 适配器                  |
+| `macros`         | Module、Provider、Controller、路由与协议属性宏 |
+| `shutdown-hooks` | SIGINT 与 SIGTERM 停机信号处理                 |
+
+`tokio` 的 runtime feature 由最终应用决定。上面的配置适合带 `#[tokio::main]` 的多线程服务。
+
+## 最小核心
+
+不需要 HTTP 适配器、宏或信号处理时，关闭默认 feature：
+
+```toml
+[dependencies]
+a3s-boot = { version = "{{RELEASE}}", default-features = false }
+```
+
+这种组合适合只使用显式 builder、由宿主提供 runtime 的库，或者只想依赖协议中立核心的集成。
+
+## 按能力启用
+
+```toml
+[dependencies]
+a3s-boot = {
+  version = "{{RELEASE}}",
+  features = ["auth", "security", "session", "openapi-schemas"]
+}
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+### 应用与 HTTP
+
+| Feature           | 能力                                          |
+| ----------------- | --------------------------------------------- |
+| `config`          | 使用 `a3s-acl` 解析与验证类型化配置           |
+| `auth`            | 策略驱动的认证服务与 Guard                    |
+| `security`        | CORS、CSRF、限流和安全响应头                  |
+| `session`         | Session middleware、cookie 与可替换 store     |
+| `cache`           | Cache 接口、内存 store 与响应缓存 Interceptor |
+| `database`        | 可替换数据库 facade 与内存测试 backend        |
+| `http-client`     | Provider 管理的出站 HTTP 客户端               |
+| `compression`     | gzip 响应压缩                                 |
+| `file-upload`     | 有边界限制的 multipart 上传                   |
+| `static`          | 静态文件与 SPA fallback                       |
+| `request-context` | task-local 当前请求上下文                     |
+| `openapi-schemas` | 从 `schemars::JsonSchema` 收集组件 schema     |
+
+### 后台能力
+
+| Feature          | 能力                                                 |
+| ---------------- | ---------------------------------------------------- |
+| `cqrs`           | Command、Query 与 Event bus                          |
+| `events`         | A3S Event provider 与 listener                       |
+| `queue`          | A3S Lane 支持的进程内队列                            |
+| `queue-postgres` | A3S ORM 支持的共享 PostgreSQL 队列，同时启用 `queue` |
+| `schedule`       | timeout、interval 与 cron 调度                       |
+| `logging`        | 结构化 Logger 与请求日志增强器                       |
+| `health`         | 健康检查与 indicator                                 |
+| `ilink`          | 腾讯微信 iLink 客户端与登录、轮询、回复边界          |
+
+### 消息传输
+
+`tcp-transport`、`redis-transport`、`nats-transport`、`mqtt-transport`、`rabbitmq-transport`、`kafka-transport` 与 `grpc-transport` 分别启用对应网络实现。`InProcessTransport` 不需要额外 feature。
+
+启用 transport 只会加入客户端与适配器实现，不会创建或管理外部 broker。
+
+## PostgreSQL 队列版本差异
+
+```toml
+[dependencies]
+a3s-boot = { version = "{{RELEASE}}", features = ["queue-postgres"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+```
+
+<!-- @if orm-0-3 -->
+
+Boot {{DOC_VERSION}} 的 `queue-postgres` 使用 A3S ORM 0.3.0。该 ORM 版本提供队列 claim 所需的类型化 UPDATE CTE、`UPDATE FROM` 与表达式赋值。
+
+<!-- @endif -->
+
+<!-- @unless orm-0-3 -->
+
+Boot {{DOC_VERSION}} 的 `queue-postgres` 使用 A3S ORM 0.2.0。队列对外契约与 v0.2.0 相同，内部 claim 实现使用当时可用的 ORM 能力。
+
+<!-- @endif -->
+
+不要在应用中手动覆盖 Boot 的可选 A3S ORM 依赖版本。Cargo feature 会在整个依赖图中合并，部署前应检查 `cargo tree -e features` 的最终结果。
+
+## 验证选择
+
+```bash
+cargo check
+cargo tree -e features -p a3s-boot
+cargo test
+```
+
+需要评估所有集成能否一起编译时，再运行 `cargo check --all-features`。网络 transport 和 PostgreSQL 的端到端测试可能需要对应外部服务。
+
+接下来使用[快速开始](/getting-started/quick-start)运行第一条路由。

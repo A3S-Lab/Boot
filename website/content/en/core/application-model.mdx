@@ -1,0 +1,130 @@
+---
+title: Application model
+description: Organize modules, providers, scopes, imports, exports, dynamic modules, and the complete application lifecycle.
+---
+
+# Application model
+
+Boot treats an application as a typed provider graph organized by modules. A module determines boundaries and visibility. A provider determines how an instance is constructed. Controllers, gateways, and message patterns consume those instances.
+
+## A module is a boundary
+
+A `Module` can declare:
+
+- Ordinary imports and explicit forward imports
+- Providers and exported tokens
+- HTTP controllers and direct routes
+- WebSocket gateways and message patterns
+- A module route prefix and middleware
+- Initialization, bootstrap, and shutdown hooks
+
+Attribute macros fit static modules:
+
+```rust
+use a3s_boot::{injectable, module};
+
+#[injectable]
+#[derive(Debug)]
+struct UserRepository;
+
+#[module(
+    name = "users",
+    providers = [UserRepository],
+    exports = [UserRepository],
+)]
+#[derive(Debug)]
+struct UsersModule;
+```
+
+An export only makes a provider visible to importing modules. Marking a module global exposes its exports to every module. This is appropriate for truly application-wide capabilities such as configuration or logging, but it obscures dependency origins when used for ordinary business services.
+
+## Provider definitions
+
+`ProviderDefinition` supports these construction forms:
+
+| Form                 | Use                                                                |
+| -------------------- | ------------------------------------------------------------------ |
+| Value or `singleton` | Register an already constructed value                              |
+| Factory              | Construct synchronously from a `ModuleRef`                         |
+| Async factory        | Await an external resource during async application construction   |
+| Named provider       | Give multiple semantic instances of one Rust type distinct tokens  |
+| Alias                | Point another token at an existing provider while preserving scope |
+| `FromModuleRef`      | Construct a type from declared dependencies                        |
+
+`#[injectable]` supports `Arc<T>`, `Option<Arc<T>>`, `ProviderRef<T>`, and `Option<ProviderRef<T>>` in named fields. `#[inject("token")]` switches a field to a named token.
+
+```rust
+use std::sync::Arc;
+use a3s_boot::{injectable, ProviderRef};
+
+#[injectable]
+#[derive(Debug)]
+struct BillingService {
+    orders: Arc<OrderRepository>,
+    #[inject("audit-writer")]
+    audit: Arc<AuditWriter>,
+    optional_metrics: Option<Arc<Metrics>>,
+    lazy_catalog: ProviderRef<CatalogService>,
+}
+```
+
+A missing required token or invalid cycle returns a contextual `BootError`. An optional dependency becomes `None` only when its token is not visible. It does not suppress a construction error raised by the provider factory itself.
+
+## Lifecycle scopes
+
+| Scope     | Instance boundary                                         | Typical use                                         |
+| --------- | --------------------------------------------------------- | --------------------------------------------------- |
+| Singleton | One instance in an application graph                      | Stateless services, connection pools, configuration |
+| Request   | One instance for each `ContextId`                         | Request or message transactions, tenant context     |
+| Transient | Constructed per inquirer and reused within one resolution | Lightweight caller-specific collaborators           |
+
+If a singleton eagerly depends on a request-scoped provider, that dependency chain bubbles to request scope. A `ProviderRef<T>` is a lazy edge and does not participate in scope bubbling. The caller must use a captured request context or call `resolve(...)` explicitly.
+
+`ContextIdFactory` can create a fresh context or let multiple resolutions share one. HTTP, WebSocket, and transport dispatchers create the appropriate context for each invocation.
+
+## Dynamic and lazy modules
+
+`DynamicModule` supports imports, providers, exports, controllers, gateways, and message patterns chosen from runtime configuration. It follows the same visibility rules as an ordinary module.
+
+`LazyModuleLoader` can load an isolated provider feature module after startup. Application-level guards, pipes, interceptors, and filters must be imported eagerly because handlers are compiled during application construction. Adding a global enhancer later would make execution topology inconsistent.
+
+Declare intentional module cycles with forward imports. Prefer separating responsibilities in a provider cycle. When delayed resolution is actually required, use `ProviderRef<T>` instead of disabling normal cycle diagnostics.
+
+## Factories and lifecycle
+
+Select the process shell with `BootFactory`:
+
+| Call                              | Result                                                |
+| --------------------------------- | ----------------------------------------------------- |
+| `create`                          | HTTP-capable `BootApplication`                        |
+| `create_application_context`      | Provider-only `BootApplicationContext`                |
+| `create_microservice`             | Standalone `BootMicroservice`                         |
+| `create_async` and async variants | The corresponding shell with async provider factories |
+
+Modules and singleton providers can observe these stages:
+
+```text
+on_module_init
+        |
+on_application_bootstrap
+        |
+application is serving
+        |
+on_module_destroy
+        |
+before_application_shutdown
+        |
+on_application_shutdown
+```
+
+With `shutdown-hooks`, SIGINT and SIGTERM labels are passed to signal-aware shutdown hooks. Close every external resource explicitly in hooks instead of relying on process termination to drop it.
+
+## Graph review checklist
+
+- Export only tokens that another business boundary actually consumes.
+- Keep controllers focused on input, application service orchestration, and output.
+- Use named tokens for distinct backends of one type instead of runtime string switches.
+- Inject pools and clients as providers instead of constructing them inside injectable classes.
+- Inspect module, provider, route, gateway, and message-pattern snapshots through `DiscoveryService` or `ApplicationGraph`.
+
+Continue to [controllers and routing](/core/controllers-and-routing) or the [request pipeline](/core/request-pipeline).

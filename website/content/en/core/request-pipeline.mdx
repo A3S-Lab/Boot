@@ -1,0 +1,104 @@
+---
+title: Request pipeline
+description: Understand the deterministic order of middleware, guards, interceptors, pipes, validation, handlers, and filters.
+---
+
+# Request pipeline
+
+Boot gives HTTP, WebSocket, and message transports consistent execution concepts while preserving protocol-specific contexts and reply types.
+
+## HTTP execution order
+
+```text
+request
+  |
+middleware
+  |
+guards
+  |
+interceptors before
+  |
+pipes
+  |
+validation
+  |
+handler
+  |
+interceptors after
+  |
+response
+
+unrecovered error -> exception filters
+```
+
+Components of the same category are composed from application, module, controller, and route topology. Explicit order is part of the API contract. A component should not rely on an undeclared global side effect.
+
+## Responsibility by stage
+
+| Stage       | Appropriate work                                                     | Inappropriate work                                |
+| ----------- | -------------------------------------------------------------------- | ------------------------------------------------- |
+| Middleware  | Request mutation, logging start, short circuit, CORS preflight       | Authorization that needs handler metadata         |
+| Guard       | Authentication, authorization, quota decisions                       | Rewriting a business response body                |
+| Interceptor | Timing, caching, wrapping, result transformation, controlled retries | Changing an already extracted argument type       |
+| Pipe        | Transforming or rejecting one value                                  | Opening a long-lived resource                     |
+| Validation  | DTO structure and precondition checks                                | Concurrent facts such as database uniqueness      |
+| Handler     | Calling application services and producing a result                  | Application-wide logging and error format policy  |
+| Filter      | Mapping unrecovered errors into protocol replies                     | Suppressing internal failures that require alerts |
+
+## Register global components
+
+```rust
+let app = BootApplication::builder()
+    .import(AppModule)
+    .use_global_middleware(RequestIdMiddleware)
+    .use_global_guard(AuthGuard::new())
+    .use_global_interceptor(TracingInterceptor)
+    .use_global_pipe(NormalizeInputPipe)
+    .use_global_validation()
+    .use_global_filter(ApiErrorFilter)
+    .build()?;
+```
+
+Controllers and routes add local components through `#[use_guard]`, `#[use_interceptor]`, `#[use_pipe]`, and `#[use_filter]`. `#[apply_decorators(...)]` composes a reusable group of attributes.
+
+Declare application-wide enhancers as HTTP, WebSocket, or transport enhancer providers when they must be resolved from the DI container. Provider-backed enhancers support scope bubbling and resolve in the invocation context. Values passed directly to the builder do not receive module injection.
+
+## Around interceptors
+
+An `Interceptor` receives a `CallHandler`, so it can:
+
+- Run work before and after downstream execution
+- Short circuit without calling `next`
+- Transform a successful response
+- Recover a selected failure
+- Call `next.handle()` more than once for a sequential retry or timeout wrapper
+
+Retries have at-least-once semantics. Provider state, logs, database writes, and external side effects do not roll back automatically. Retry only explicitly replayable work and use idempotency keys for side effects.
+
+Filters only receive failures an interceptor did not recover. A local filter is closer to the handler than a global filter. Use `catch_errors(...)` or `#[catch]` to restrict handling by `BootErrorKind`.
+
+## Protocol-neutral and protocol-specific components
+
+`ExecutionContext` exposes a protocol kind and shared metadata for guards or interceptors that genuinely span HTTP, WebSocket, and transports. Protocol-specific components use:
+
+| Protocol  | Context                              | Pipe / Guard / Interceptor / Filter                                                   |
+| --------- | ------------------------------------ | ------------------------------------------------------------------------------------- |
+| HTTP      | `ExecutionContext` and `BootRequest` | `Pipe`, `Guard`, `Interceptor`, `ExceptionFilter`                                     |
+| WebSocket | `WebSocketContext`                   | `WebSocketPipe`, `WebSocketGuard`, `WebSocketInterceptor`, `WebSocketExceptionFilter` |
+| Message   | `TransportContext`                   | `TransportPipe`, `TransportGuard`, `TransportInterceptor`, `TransportExceptionFilter` |
+
+Use a protocol-neutral enhancer only for a shared policy. WebSocket rooms, message acknowledgements, and HTTP headers belong in protocol-specific layers.
+
+## Middleware consumer
+
+A module's `configure` method can use `MiddlewareConsumer` to include and exclude routes. This is useful for applying logging, compatibility handling, or request labels to selected controllers without repeating branches in handlers.
+
+## Error boundaries
+
+- Adapter validation finishes before middleware and handler execution.
+- A guard rejection does not enter the handler.
+- Pipe and validation errors use the same filter chain.
+- A result recovered by an interceptor does not reach a filter.
+- Boot returns a stable default error response when no filter handles the failure.
+
+Continue to [validation and serialization](/core/validation-and-serialization) to configure the DTO boundary.

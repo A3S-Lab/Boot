@@ -1,0 +1,125 @@
+---
+title: Feature 与 API 地图
+description: 查找 A3S Boot Cargo feature、核心类型、技术模块、协议类型和属性宏的入口。
+---
+
+# Feature 与 API 地图
+
+本页是 crate 公共表面的导航。精确 trait bound、方法签名与 Rustdoc 请以 [docs.rs](https://docs.rs/a3s-boot) 为准。
+
+## 默认与核心
+
+| Feature          | 默认 | 主要导出                                                                        |
+| ---------------- | :--: | ------------------------------------------------------------------------------- |
+| `axum`           |  是  | `AxumAdapter`                                                                   |
+| `macros`         |  是  | Module、Provider、HTTP、WebSocket、message 与技术模块宏                         |
+| `shutdown-hooks` |  是  | `wait_for_shutdown_signal`, `ShutdownSignal`                                    |
+| core             | 总是 | 应用、Module、DI、HTTP、Pipeline、OpenAPI、Validation、View、Testing、Discovery |
+
+## 应用与 DI
+
+| 领域         | 主要类型                                                                                                                                                  |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 应用创建     | `BootFactory`, `BootApplication`, `BootApplicationBuilder`                                                                                                |
+| 非 HTTP 外壳 | `BootApplicationContext`, `BootMicroservice`, `BootApplicationHandle`                                                                                     |
+| Module       | `Module`, `DynamicModule`, `LazyModuleLoader`, `LazyLoadedModule`                                                                                         |
+| Provider     | `ProviderDefinition`, `ProviderToken`, `ProviderScope`, `ProviderDependency`                                                                              |
+| 解析         | `ModuleRef`, `ProviderRef`, `FromModuleRef`, `ContextId`, `ContextIdFactory`                                                                              |
+| 生命周期     | `ProviderOnModuleInit`, `ProviderOnApplicationBootstrap`, `ProviderOnModuleDestroy`, `ProviderBeforeApplicationShutdown`, `ProviderOnApplicationShutdown` |
+| 检查         | `DiscoveryService`, `Reflector`, `ApplicationGraph` 及 discovered 类型                                                                                    |
+
+## HTTP 与 Pipeline
+
+| 领域               | 主要类型                                                                                                                                                          |
+| ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Adapter            | `HttpAdapter`, `AxumAdapter`                                                                                                                                      |
+| Route              | `ControllerDefinition`, `RouteDefinition`, `RouteHandler`, `HttpMethod`                                                                                           |
+| Request / Response | `BootRequest`, `BootResponse`, `ResponsePassthrough`                                                                                                              |
+| 提取与 Pipe        | `RequestExtractor`, `RequestValuePipe`, `ParseIntPipe`, `ParseBoolPipe`, `ParseFloatPipe`, `ParseArrayPipe`, `ParseEnumPipe`, `ParseUuidPipe`, `DefaultValuePipe` |
+| Pipeline           | `Middleware`, `Guard`, `Interceptor`, `ExecutionInterceptor`, `Pipe`, `ExceptionFilter`, `CallHandler`, `ExecutionContext`                                        |
+| Middleware 路由    | `MiddlewareConsumer`, `MiddlewareConsumerBuilder`, `MiddlewareRoute`, `MiddlewareOutcome`                                                                         |
+| 错误               | `BootError`, `BootErrorKind`, `Result<T>`, `catch_errors`                                                                                                         |
+| Streaming          | `SseEvent`, `SseStream`, `StreamableFile`, `StreamableFileStream`                                                                                                 |
+| Cookie             | `CookieOptions`, `CookieSameSite`                                                                                                                                 |
+| API 版本           | `ApiVersioning`, `ApiVersioningStrategy`, `RouteVersioning`                                                                                                       |
+
+## Validation、OpenAPI 与 View
+
+| 领域             | 主要类型                                                                                                      |
+| ---------------- | ------------------------------------------------------------------------------------------------------------- |
+| Validation       | `Validate`, `ValidationSchema`, `ValidationOptions`                                                           |
+| Serialization    | `SerializationInterceptor`, `SerializationOptions`                                                            |
+| OpenAPI          | `OpenApiDocument`, `OpenApiInfo`, `OpenApiOperation`, `OpenApiPathItem`, `OpenApiSchema`, `OpenApiComponents` |
+| OpenAPI security | `OpenApiSecurityScheme`, `OpenApiSecurityRequirement`, `OpenApiOAuthFlow`, `OpenApiOAuthFlows`                |
+| View             | `ViewModule`, `ViewEngine`, `ViewRenderer`, `StringTemplateViewEngine`                                        |
+| Testing          | `TestingModule`, `TestingModuleBuilder`                                                                       |
+
+## 可选应用模块
+
+| Feature           | 主要 Module 与接口                                                                   |
+| ----------------- | ------------------------------------------------------------------------------------ |
+| `auth`            | `AuthModule`, `AuthService`, `AuthGuard`, `AuthPrincipal`, `AuthStrategy`            |
+| `cache`           | `CacheModule`, `Cache`, `CacheStore`, `CacheInterceptor`, `InMemoryCacheStore`       |
+| `compression`     | `CompressionInterceptor`, `CompressionOptions`                                       |
+| `config`          | `ConfigModule`, ACL parse helper                                                     |
+| `cqrs`            | `CqrsModule`, `CommandBus`, `QueryBus`, `EventBus`, `CqrsContext`                    |
+| `database`        | `DatabaseModule`, `Database`, `DatabaseBackend`, `DatabaseTransaction`               |
+| `events`          | `EventModule`, `EventEmitter`, `A3sEventBus`, `A3sEventProvider`                     |
+| `file-upload`     | `MultipartForm`, `MultipartField`, `UploadedFile`, `MultipartOptions`                |
+| `health`          | `HealthModule`, `HealthCheckService`, `HealthIndicator`, `HealthReport`              |
+| `http-client`     | `HttpModule`, `HttpService`, `HttpClientBackend`, `HttpClientOptions`                |
+| `logging`         | `LoggingModule`, `Logger`, `LogSink`, `LogRecord`, request logging enhancer          |
+| `queue`           | `QueueModule`, `Queue`, `QueueBackend`, `QueueJob`, `QueueOptions`, `QueueProcessor` |
+| `queue-postgres`  | `PostgresQueueBackend`                                                               |
+| `request-context` | `RequestContext`                                                                     |
+| `schedule`        | `ScheduleModule`, `Scheduler`, `ScheduledJob`, `ScheduleContext`                     |
+| `security`        | CORS、CSRF、限流与安全 header 类型                                                   |
+| `session`         | `SessionModule`, `SessionManager`, `SessionStore`, `SessionOptions`                  |
+| `static`          | `StaticModule`, `StaticFileService`, `StaticFileOptions`                             |
+| `ilink`           | `a3s_boot::ilink` 中的 Module、client、auth、login、message 与 update 类型           |
+
+## WebSocket 与消息传输
+
+| 领域           | 主要类型                                                                                                                      |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| WebSocket 定义 | `WebSocketGatewayDefinition`, `WebSocketSubscriptionDefinition`                                                               |
+| 连接与消息     | `WebSocketConnection`, `WebSocketMessage`, `WebSocketOutbound`, `WebSocketGatewayServer`                                      |
+| WebSocket 管线 | `WebSocketContext`, `WebSocketGuard`, `WebSocketPipe`, `WebSocketInterceptor`, `WebSocketExceptionFilter`                     |
+| 消息模式       | `MessagePatternDefinition`, `MessagePatternKind`, `TransportMessage`, `TransportReply`                                        |
+| Transport 契约 | `MessageTransport`, `TransportContext`, `TransportGuard`, `TransportPipe`, `TransportInterceptor`, `TransportExceptionFilter` |
+| 默认 transport | `InProcessTransport`, `InProcessTransportClient`                                                                              |
+| 网络 transport | TCP、Redis、NATS、MQTT、RabbitMQ、Kafka 与 gRPC 类型由对应 feature 导出                                                       |
+
+## 属性宏索引
+
+### 应用声明
+
+`module`, `injectable`, `controller`, `websocket_gateway`, `message_controller`, `event_listener`, `schedule`。
+
+### HTTP 方法与提取
+
+`all`, `get`, `post`, `put`, `patch`, `delete`, `head`, `options`, 对应 JSON 变体，`sse`, `body`, `request`, `param`, `params`, `query`, `header`, `headers`, `cookie`, `cookies`, `host_param`, `ip`, `extract`, `res`, `uploaded_file`, `uploaded_files`。
+
+### 路由与响应
+
+`host`, `http_code`, `redirect`, `render`, `serialize`, `version`, `versions`, `version_neutral`, `validate`, `skip_validation`, `metadata`, `cache_key`, `cache_ttl`。
+
+### Pipeline
+
+`use_guard`, `use_interceptor`, `use_pipe`, `use_filter`, `catch`, `apply_decorators`。
+
+### OpenAPI 与认证
+
+`operation`, `tag`, `request_body`, `api_param`, `api_query`, `api_header`, `api_response_header`, `api_extension`, `api_extra_model`, `hide_from_openapi`, `bearer_auth`, `api_security`, `api_cookie_auth`, `api_key_auth`, `oauth2_auth`, `open_id_connect_auth`。
+
+### WebSocket、消息、事件与调度
+
+`subscribe_message`, `message_body`, `payload`, `message_pattern`, `event_pattern`, `on_gateway_init`, `on_gateway_connection`, `on_gateway_disconnect`, `on_event`, `cron`, `interval`, `timeout`。
+
+## Feature 选择规则
+
+- 从默认 feature 开始，只有存在真实边界时才加入模块。
+- library crate 不应强迫下游启用所有 Boot feature。
+- 使用 `cargo tree -e features -p a3s-boot` 检查 feature 合并。
+- 为生产使用的组合运行 focused test，再为 release 运行 `cargo check --all-features`。
+- 外部 transport feature 的编译成功不代表 broker 已正确配置。

@@ -1,0 +1,109 @@
+---
+title: Validation and serialization
+description: Validate input DTOs, transform and filter fields, and apply deterministic JSON shaping at the response boundary.
+---
+
+# Validation and serialization
+
+Boot puts input validation and output serialization in explicit pipeline stages. Neither stage accesses a database implicitly or mutates persistence state on a domain object.
+
+## The `Validate` contract
+
+Any input DTO can implement `Validate`:
+
+```rust
+use a3s_boot::{BootError, Result, Validate};
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+struct CreateAccount {
+    email: String,
+}
+
+impl Validate for CreateAccount {
+    fn validate(&self) -> Result<()> {
+        if self.email.contains('@') {
+            Ok(())
+        } else {
+            Err(BootError::bad_request("email must contain @"))
+        }
+    }
+}
+```
+
+Enable validation with `#[validate]`, controller or route builder settings, or the global builder:
+
+```rust
+let app = BootApplication::builder()
+    .import(AppModule)
+    .use_global_validation()
+    .build()?;
+```
+
+Validation runs after pipe transformation and before the handler.
+
+## Schema and input policy
+
+`ValidationSchema` describes the named fields of a DTO. With `macros`, a named struct can derive the schema. `ValidationOptions` supports:
+
+| Option                   | Behavior                                                 |
+| ------------------------ | -------------------------------------------------------- |
+| `transform`              | Apply allowed JSON value conversion from schema metadata |
+| `whitelist`              | Remove fields that are not declared in the schema        |
+| `forbid_non_whitelisted` | Reject input that contains undeclared fields             |
+
+```rust
+let options = ValidationOptions::new()
+    .transform(true)
+    .whitelist(true)
+    .forbid_non_whitelisted(true);
+
+let app = BootApplication::builder()
+    .import(AppModule)
+    .use_global_validation_options(options)
+    .build()?;
+```
+
+Attribute forms include `#[validate(transform)]`, `#[validate(whitelist)]`, and `#[validate(forbidNonWhitelisted)]`. `#[skip_validation]` can override an outer setting for an intentional health route or raw-payload route.
+
+A whitelist is not authorization. The presence of a DTO field does not grant permission to modify the corresponding domain attribute. Check authorization in a guard or application service.
+
+## Pipes compared with DTO validation
+
+A pipe handles one extracted value, such as parsing a path parameter into an integer or UUID. DTO validation checks a complete object and constraints between fields. The recommended order is:
+
+```text
+raw request value -> extractor pipe -> DTO decoding -> schema policy -> Validate -> handler
+```
+
+Use built-in pipes for integer, boolean, float, array, enum, and UUID parsing. Put a rule involving two or more fields in `Validate` or an application-layer value object.
+
+## Response serialization
+
+`SerializationInterceptor` applies field shaping to JSON responses:
+
+- `include` retains only allowed fields
+- `exclude` removes selected fields
+- `skip_null` removes fields whose value is null
+- Content length is updated after the body is rewritten
+
+```rust
+let app = BootApplication::builder()
+    .import(AppModule)
+    .use_global_serialization()
+    .build()?;
+```
+
+Apply `#[serialize(include = ["id", "name"], exclude = ["secret"], skip_null)]` to a controller or route. Local settings override outer settings. Explicit `SerializationOptions` can also be passed to the interceptor.
+
+Serialization only processes JSON responses. Streams, files, SSE, HTML, and any other selected media type retain their own semantics.
+
+## Security guidance
+
+- Exclude secrets from the response DTO itself, then use serialization exclusion as a second boundary.
+- Treat whitelist mode as a compatibility policy and do not silently accept misspelled critical fields.
+- Prefer `forbid_non_whitelisted` for public APIs and record the rejection reason.
+- Use safe messages for validation failures and write internal parsing context to logs, not responses.
+- Test valid input, missing fields, wrong types, extra fields, and boundary lengths for every input policy.
+
+OpenAPI schemas and request metadata are covered in [HTTP and OpenAPI](/capabilities/openapi-and-http).

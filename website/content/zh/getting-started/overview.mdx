@@ -1,0 +1,75 @@
+---
+title: 概览
+description: 理解 A3S Boot 的模块边界、依赖注入、执行管线与适配器优先架构。
+---
+
+# 概览
+
+A3S Boot 是一个面向异步 Rust 服务的模块化框架。它借鉴 NestJS 的模块、Provider、Controller 和增强器组织方式，同时保留 Rust 的静态类型、显式所有权与可替换适配器。
+
+Boot 不是 Axum 的包装层。请求、响应、路由、执行上下文与错误属于框架核心，Axum 只是默认启用的 HTTP 适配器。属性宏在编译期生成普通 Boot 定义，不依赖运行时装饰器元数据。
+
+## 应用从哪里开始
+
+一个 Boot 应用沿着同一条明确路径构建：
+
+```text
+Module 声明
+    |
+Provider 图与可见性检查
+    |
+Controller / Gateway / Message Pattern 注册
+    |
+协议中立执行管线
+    |
+HTTP Adapter / WebSocket / MessageTransport
+```
+
+| 概念       | 负责                                                | 关键类型                                  |
+| ---------- | --------------------------------------------------- | ----------------------------------------- |
+| Module     | 组合导入、Provider、Controller、导出与生命周期      | `Module`, `DynamicModule`                 |
+| Provider   | 构造和解析应用依赖                                  | `ProviderDefinition`, `ModuleRef`         |
+| Controller | 把 HTTP 路由绑定到普通 Rust 方法                    | `ControllerDefinition`, `RouteDefinition` |
+| Pipeline   | 执行中间件、Guard、Interceptor、Pipe、验证和 Filter | `ExecutionContext`, `CallHandler`         |
+| Protocol   | 连接 HTTP、WebSocket 或消息传输                     | `HttpAdapter`, `MessageTransport`         |
+
+## 核心保证
+
+- Provider 可以使用类型 token 或命名 token，并遵守模块导入与导出可见性。
+- singleton、request 和 transient scope 在解析图中显式传播。
+- HTTP、WebSocket 与消息处理使用一致的 Guard、Interceptor、Pipe 和异常处理模型。
+- 网络协议与消息 broker 的具体行为不会被通用接口掩盖。
+- 可选能力通过 Cargo feature 启用，未启用的服务依赖不会进入构建。
+- `BootError` 与 `Result<T>` 统一表达模块、解析、路由、验证、传输与运行时失败。
+
+## Boot 管什么
+
+Boot 管理应用图、执行顺序和适配器契约。它不替应用选择部署策略。
+
+| Boot 提供                     | 应用仍需决定                         |
+| ----------------------------- | ------------------------------------ |
+| 类型化 Provider 容器          | 业务领域边界与持久化模型             |
+| Axum HTTP 与 WebSocket 适配器 | 监听地址、TLS 终止与代理拓扑         |
+| 本地和可替换的技术模块        | 分布式 cache、session 与限流后端     |
+| 多种消息 transport            | broker 的 durability、拓扑和运维策略 |
+| 队列重试、租约与处理器契约    | 业务幂等性与副作用去重               |
+| OpenAPI 文档生成              | API 生命周期和兼容策略               |
+
+## 选择入口
+
+`BootFactory` 提供四类常见入口：
+
+- `create` 构建可提供 HTTP 服务的应用。
+- `create_application_context` 构建只有 Provider 的 worker 或命令进程。
+- `create_microservice` 构建独立消息服务。
+- 对应的 async 变体会等待异步 Provider factory。
+
+同一个模块图也可以通过 `BootApplication::builder()` 显式配置全局增强器、OpenAPI 与适配器选项。
+
+## 当前文档版本
+
+你正在阅读 A3S Boot {{DOC_VERSION}}，对应 crate 版本 `{{RELEASE}}`。v0.2.0 与 v0.1.4 的公共 Boot 能力相同，发布差异是持久化 PostgreSQL 队列所使用的 A3S ORM 版本。
+
+## 下一步
+
+先查看[安装与 feature](/getting-started/installation)，再完成[快速开始](/getting-started/quick-start)。准备拆分业务模块时，继续阅读[应用模型](/core/application-model)。
