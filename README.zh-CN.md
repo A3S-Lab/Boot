@@ -6,20 +6,21 @@
   <a href="README.zh-CN.md">中文</a>
 </p>
 
+
 <p align="center">
   <strong>A3S 的渐进式 Rust Web 框架</strong>
 </p>
 
 <p align="center">
-  <em>使用类型化Provider、显式管道和可替换协议适配器构建模块化异步服务</em>
+  <em>使用类型化提供程序、显式管道和可替换协议适配器构建模块化异步服务</em>
 </p>
 
 <p align="center">
   <a href="https://a3s-lab.github.io/Boot/">文档</a> •
   <a href="#overview">概述</a> •
-  <a href="#features">功能</a> •
-  <a href="#quick-start">快速开始</a> •
-  <a href="#application-model">应用模型</a> •
+  <a href="#features">特点</a> •
+  <a href="#quick-start">快速入门</a> •
+  <a href="#application-model">应用型号</a> •
   <a href="#protocols">协议</a> •
   <a href="#architecture">架构</a> •
   <a href="#development">开发</a>
@@ -30,16 +31,16 @@
 ## 概述
 
 **A3S Boot** 是 Rust 的模块化异步服务框架，灵感来自
-[Nest.js](https://nestjs.com/)。模块组织应用程序、类型Provider
+[Nest.js](https://nestjs.com/)。模块组织应用程序、类型提供程序
 供应依赖性、控制器公开路由以及协议中立的管道
 应用防护、拦截器、管道、验证和异常过滤器。
 
 Boot 不是 Axum 包装器。请求、响应、路由和执行上下文
-属于框架核心； Axum 是捆绑的默认 HTTP 适配器。铁锈
+属于框架核心； Axum 是捆绑的默认 HTTP 适配器。铁Rust
 属性宏在编译时生成普通的 Boot 定义，而不是
 依赖运行时装饰器元数据。
 
-[文档网站](https://a3s-lab.github.io/Boot/)提供了完整的
+[documentation website](https://a3s-lab.github.io/Boot/)提供完整的
 v0.2.0和v0.1.4的中英文指南，包括同页语言
 和版本切换。
 
@@ -99,7 +100,7 @@ async fn main() -> Result<()> {
   响应、cookie、重定向、文件、视图和服务器发送的事件
 - **执行管道**：在拦截器、管道周围应用中间件、防护装置、
   全局和局部范围内的验证和异常过滤器
-- **编译时宏**：对模块、Provider使用 Nest 样式属性，
+- **编译时宏**：对模块、提供程序使用 Nest 样式属性，
   控制器、路由、提取、验证、OpenAPI 和协议处理程序
 - **OpenAPI**：生成 OpenAPI 文档并从路由提供 Swagger UI
   元数据、可重用组件和安全方案
@@ -109,12 +110,12 @@ async fn main() -> Result<()> {
   进程内或可选的网络传输
 - **应用程序生命周期**：引导、关闭、延迟加载模块或创建
   仅提供者的应用程序上下文和独立的微服务
-- **测试支持**：编译测试模块并覆盖Provider或管道
+- **测试支持**：编译测试模块并覆盖提供程序或管道
   无需替换应用程序代码的组件
 
 ### 特征矩阵
 
-默认特征为 `axum`、`macros` 和 `shutdown-hooks`。其他集成
+默认特征是`axum`、`macros`和`shutdown-hooks`。其他集成
 正在选择加入。
 
 |面积 |特色|包含的功能 |
@@ -128,7 +129,7 @@ async fn main() -> Result<()> {
 |会议 | `session` |会话中间件和可替换存储|
 |缓存| `cache` |缓存抽象、拦截器和内存存储 |
 |数据库| `database` |可替换的数据库外观和内存后端|
-|活动 | `events` | A3S 事件支持的发射器和侦听器 |
+|活动 | `events` | A3S Event 支持的发射器和监听器 |
 | CQRS | `cqrs` |命令、查询和事件总线 |
 |队列| `queue` | A3S Lane 支持的进程内作业、重试、优先级和处理器 |
 |队列持久化 | `queue-postgres` | A3S ORM 支持的共享 PostgreSQL 租赁、恢复、防护和保留 |
@@ -149,7 +150,7 @@ async fn main() -> Result<()> {
 是持久共享队列的实现；其他捆绑实现是
 并不声称支持每个生产后端。
 
-## 快速开始
+## 快速入门
 
 ### 安装
 
@@ -234,13 +235,13 @@ async fn main() -> Result<()> {
 
 ### 模块和提供者
 
-`Module` 拥有特征边界。它可以导入其他模块，注册和
-导出Provider、公开 HTTP 控制器、附加 WebSocket 网关和消息
+`Module` 拥有一个特征边界。它可以导入其他模块，注册和
+导出提供程序、公开 HTTP 控制器、附加 WebSocket 网关和消息
 模式、配置中间件以及参与启动或关闭。
 
 提供者使用类型化或命名的令牌并支持值、工厂、异步工厂、
 和别名定义。 `ModuleRef` 解决模块可见性内的依赖关系
-规则。 `ProviderRef<T>` 推迟可选或圆形图表的分辨率。
+规则。 `ProviderRef<T>` 推迟可选图或圆形图的分辨率。
 提供者范围可以是单例、请求范围或瞬态；请求范围是
 通过急切的依赖关系传播。
 
@@ -310,7 +311,7 @@ async fn run_worker(database_url: &str) -> Result<()> {
 规范迁移集。生产托管单独的权限：终止
 迁移过程调用`migrate_postgres_queue`，同时服务worker使用
 `connect_verified` 或 `from_executor_verified`。已验证的构造函数重用
-A3S ORM的只读账本准入并且从不创建表，获取一个
+A3S ORM的只读账本入场并且从不创建表，获取一个
 迁移锁，或者写入迁移历史。
 
 后端支持调用者分配的幂等键、优先级和 FIFO/LIFO
@@ -330,7 +331,7 @@ request → middleware → guards → interceptors → pipes → validation → 
                               └──── exception filters on unrecovered errors ────┘
 ```
 
-周围拦截器收到一个`CallHandler`，因此它们可以转换结果，
+周围拦截器接收`CallHandler`，因此它们可以转换结果，
 短路执行、恢复错误或重放剩余管道
 顺序重试。重试具有至少一次语义：提供者状态和
 外部副作用不会回滚。
@@ -359,7 +360,7 @@ OpenAPI 文档，支持可重用模式和安全方案，并且可以
 
 ### 提供商支持的速率限制
 
-默认情况下，`security` 功能将 `use_global_rate_limit` 保留在进程本地。
+默认情况下，`security` 功能保持 `use_global_rate_limit` 进程本地。
 需要跨多个流程的一个预算的应用程序可以实现
 public `RateLimitProvider` 合约并注册到
 `use_global_rate_limit_provider`。每个原子获取都会收到一个稳定的
@@ -370,7 +371,7 @@ public `RateLimitProvider` 合约并注册到
 使用相同策略标识符的每个进程必须使用相同的限制和
 窗户。提供者错误拒绝受保护的请求而不是绕过
 限制。 Boot故意不选择或捆绑分布式后端；的
-内置`InMemoryRateLimitProvider`不在进程之间共享状态。
+内置 `InMemoryRateLimitProvider` 不在进程之间共享状态。
 该边界不包括单独的流断开、背压、
 或优雅的排水工作。
 
@@ -378,7 +379,7 @@ public `RateLimitProvider` 合约并注册到
 
 ### WebSocket
 
-`WebSocketGatewayDefinition` 和 `#[websocket_gateway]` 定义升级路径和
+`WebSocketGatewayDefinition`和`#[websocket_gateway]`定义升级路径和
 消息订阅。网关支持初始化、连接和断开
 挂钩、直接消息、房间、广播、类型化有效负载提取、验证、
 以及 WebSocket 特定的防护、拦截器、管道和过滤器。捆绑的
@@ -397,7 +398,7 @@ gRPC 在通用 `MessageTransport` 合约背后进行传输。
 
 ### 微信iLink
 
-可选的 `ilink` 功能提供了本机 Rust 协议边界
+可选的 `ilink` 功能提供了使用的本机 Rust 协议边界
 腾讯微信频道。 `IlinkModule` 导出类型化的 `IlinkClient`
 提供者；客户端拥有 QR 登录请求、经过身份验证的标头、严格的
 服务器 URL 验证、更新轮询、文本回复、打字调用和频道
@@ -409,8 +410,8 @@ use a3s_boot::ilink::IlinkModule;
 let module = IlinkModule::weixin("A3S/0.10.1");
 ```
 
-线材默认兼容腾讯`openclaw-weixin` v2.4.6：
-`iLink-App-Id: bot`，`bot_type=3`，以及打包客户端版本`2.4.6`。的
+线路默认兼容腾讯`openclaw-weixin` v2.4.6：
+`iLink-App-Id: bot`、`bot_type=3`以及打包客户端版本`2.4.6`。的
 产品特定的 `bot_agent` 保留 `A3S/<version>`，因此上游诊断会这样做
 不会误认来电者。 Boot故意不拥有浏览器API，
 凭证持久性、所有者授权或代理/会话命令；那些
@@ -432,13 +433,13 @@ modules + typed providers
  HTTP adapter / WebSocket adapter / MessageTransport
 ```
 
-来源按责任划分为`app/`、`module/`、`provider/`、
+来源按责任划分为 `app/`、`module/`、`provider/`，
 `routing/`、`pipeline/`、`websocket/` 和 `transport/`。可选的基础设施
 模块是功能门控的。公众`HttpAdapter`、`MessageTransport`、以及
 后端特征是主要的扩展合约。
 
 Axum 当前是捆绑的 HTTP 适配器。编译时属性位于
-单独的`a3s-boot-macros`板条箱并扩展为相同的显式定义
+单独的`a3s-boot-macros`crate并扩展为相同的显式定义
 由核心 API 使用。
 
 ## 发展
@@ -453,12 +454,12 @@ cargo clippy --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --all-features --no-deps
 ```
 
-测试套件涵盖模块和Provider、范围上下文、生命周期、
+测试套件涵盖模块和提供程序、范围上下文、生命周期、
 路由、管道、宏、验证、OpenAPI、WebSocket、传输和
 功能门控基础设施。外部传输的测试可能需要它们
 相应的服务或环境配置。
 
-有关 Nest 兼容性计划和剩余工作，请参阅 [路线图](ROADMAP.md)]。
+请参阅 [Roadmap](ROADMAP.md) 了解 Nest 兼容性计划和剩余工作。
 
 版本化双语文档站点位于 `website/`：
 
