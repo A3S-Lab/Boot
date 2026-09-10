@@ -1,5 +1,16 @@
 # A3S Boot Nest Parity Roadmap
 
+**Status as of 2026-09-10.**
+
+## A3S Cloud substrate obligations
+
+Boot composes Cloud process roles (`api`, `worker`, `relay`, Node Agent). It
+owns aspect mechanics, not authz/tenancy policy. Cloud registers those policies
+explicitly (`F0`). See
+[foundations-and-execution.md](https://github.com/A3S-Lab/Cloud/blob/main/docs/project-roadmaps/foundations-and-execution.md)
+and
+[cloud-substrate-dependency-roadmap.md](https://github.com/A3S-Lab/a3s/blob/main/docs/cloud-substrate-dependency-roadmap.md).
+
 This roadmap tracks the work needed to move `a3s-boot` from a Nest-inspired
 HTTP framework slice toward a fuller Rust equivalent of the high-value Nest.js
 developer experience.
