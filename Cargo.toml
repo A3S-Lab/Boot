@@ -61,7 +61,7 @@ a3s-acl = { version = "0.2.1", optional = true }
 a3s-boot-macros = { version = "0.1.2", path = "macros", optional = true }
 a3s-event = { version = "0.3.0", default-features = false, optional = true }
 a3s-lane = { version = "0.5.1", default-features = false, optional = true }
-a3s-orm = { version = "0.3.1", git = "https://github.com/A3S-Lab/ORM.git", rev = "52944002dc84b07d88a85f2a4a87f913655e62b5", default-features = false, features = ["postgres"], optional = true }
+a3s-orm = { version = "0.3.1", git = "https://github.com/A3S-Lab/ORM.git", rev = "4c0cd9eb1ed586e27a5fd0446a92824717eb095e", default-features = false, features = ["postgres"], optional = true }
 async-trait = { version = "0.1", optional = true }
 async-nats = { version = "0.49.1", default-features = false, optional = true }
 axum = { version = "0.8", features = ["ws"], optional = true }
