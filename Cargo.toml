@@ -27,7 +27,7 @@ database = []
 events = ["dep:a3s-event"]
 file-upload = ["dep:bytes", "dep:multer"]
 health = []
-http-client = ["dep:reqwest"]
+http-client = ["dep:reqwest", "dep:tokio", "request-context"]
 ilink = [
     "dep:async-trait",
     "dep:base64",
@@ -54,6 +54,7 @@ session = ["dep:getrandom"]
 shutdown-hooks = ["dep:tokio", "tokio/macros", "tokio/signal"]
 static = ["dep:tokio"]
 tcp-transport = ["dep:tokio"]
+etcd-discovery = ["dep:etcd-client", "dep:tokio"]
 
 [dependencies]
 a3s-acl = { version = "0.2.1", optional = true }
@@ -68,6 +69,7 @@ base64 = { version = "0.22", optional = true }
 bytes = { version = "1", optional = true }
 chrono = { version = "0.4", optional = true }
 cron = { version = "0.17.0", optional = true }
+etcd-client = { version = "0.20", default-features = false, optional = true }
 flate2 = { version = "1", optional = true }
 futures-core = "0.3"
 futures-util = "0.3"

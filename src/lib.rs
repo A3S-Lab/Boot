@@ -24,9 +24,12 @@ mod cqrs;
 #[cfg(feature = "database")]
 mod database;
 mod discovery;
+#[cfg(feature = "http-client")]
+mod discovery_backends;
 mod error;
 #[cfg(feature = "events")]
 mod events;
+mod feature_flags;
 #[cfg(feature = "file-upload")]
 mod file_upload;
 #[cfg(feature = "health")]
@@ -34,13 +37,21 @@ mod health;
 mod http;
 #[cfg(feature = "http-client")]
 mod http_client;
+#[cfg(feature = "http-client")]
+mod idempotency;
 #[cfg(feature = "ilink")]
 pub mod ilink;
+#[cfg(feature = "etcd-discovery")]
+mod lifecycle;
 #[cfg(feature = "logging")]
 mod logging;
 mod module;
+mod observability;
 mod openapi;
 mod openapi_security;
+#[cfg(feature = "http-client")]
+mod outbound_identity;
+mod outbox;
 mod percent;
 mod pipeline;
 mod provider;
@@ -48,12 +59,16 @@ mod provider;
 mod queue;
 #[cfg(feature = "request-context")]
 mod request_context;
+mod resilience;
 mod routing;
 #[cfg(feature = "schedule")]
 mod schedule;
 #[cfg(feature = "security")]
 mod security;
 mod serialization;
+#[cfg(feature = "http-client")]
+mod service_client;
+mod service_discovery;
 #[cfg(feature = "session")]
 mod session;
 #[cfg(feature = "static")]
@@ -129,12 +144,15 @@ pub use discovery::{
     ApplicationGraph, ApplicationGraphModule, DiscoveredGateway, DiscoveredMessagePattern,
     DiscoveredModule, DiscoveredRoute, DiscoveryService, Reflector,
 };
+#[cfg(feature = "http-client")]
+pub use discovery_backends::{ConsulServiceDiscovery, KubernetesServiceDiscovery};
 pub use error::{BootError, BootErrorKind};
 #[cfg(feature = "events")]
 pub use events::{
     A3sEvent, A3sEventBus, A3sEventProvider, A3sMemoryEventConfig, A3sMemoryEventProvider,
     EventContext, EventEmitter, EventEnvelope, EventListener, EventListenerDefinition, EventModule,
 };
+pub use feature_flags::{FeatureFlagClient, StaticFeatureFlags};
 #[cfg(feature = "file-upload")]
 pub use file_upload::{MultipartField, MultipartForm, MultipartOptions, UploadedFile};
 #[cfg(feature = "health")]
@@ -154,12 +172,17 @@ pub use http_client::{
     HttpClientBackend, HttpClientOptions, HttpClientRequest, HttpClientResponse, HttpModule,
     HttpService, ReqwestHttpClientBackend,
 };
+#[cfg(feature = "http-client")]
+pub use idempotency::{idempotency_key, replay_if_present, IdempotencyStore};
+#[cfg(feature = "etcd-discovery")]
+pub use lifecycle::{try_register_from_env, ServiceLifecycle};
 #[cfg(feature = "logging")]
 pub use logging::{
     InMemoryLogSink, LogFields, LogLevel, LogRecord, LogSink, Logger, LoggingModule, NoopLogSink,
     RequestLoggingInterceptor, RequestLoggingMiddleware,
 };
 pub use module::{DynamicModule, Module};
+pub use observability::{MetricsModule, NoopOtelHooks, OtelHooks, RedMetrics, RedSnapshot};
 pub use openapi::{
     openapi_schema_name, OpenApiComponents, OpenApiDocument, OpenApiExample, OpenApiExternalDocs,
     OpenApiHeader, OpenApiInfo, OpenApiMediaType, OpenApiOperation, OpenApiParameter,
@@ -170,6 +193,9 @@ pub use openapi_security::{
     OpenApiApiKeyLocation, OpenApiOAuthFlow, OpenApiOAuthFlows, OpenApiSecurityRequirement,
     OpenApiSecurityScheme,
 };
+#[cfg(feature = "http-client")]
+pub use outbound_identity::{BearerOutboundIdentity, NoopOutboundIdentity, OutboundIdentity};
+pub use outbox::{InMemoryOutbox, OutboxMessage, OutboxStore};
 pub use pipeline::{
     catch_errors, CallHandler, CatchFilter, ExceptionFilter, ExecutionContext,
     ExecutionInterceptor, ExecutionProtocol, ExecutionTransportKind, Guard, Interceptor,
@@ -194,6 +220,10 @@ pub use queue::{
 };
 #[cfg(feature = "request-context")]
 pub use request_context::RequestContext;
+pub use resilience::{
+    Bulkhead, BulkheadError, BulkheadOptions, CircuitBreaker, CircuitBreakerOptions, CircuitState,
+    CircuitTripError, DegradePolicy, FallbackResponse, RetryClassifier, RetryOptions, RetryPolicy,
+};
 pub use routing::{ControllerDefinition, RouteDefinition, RouteHandler};
 #[cfg(feature = "schedule")]
 pub use schedule::{
@@ -207,6 +237,14 @@ pub use security::{
     RateLimitProvider, RateLimitRequest, SecurityHeadersInterceptor, SecurityHeadersOptions,
 };
 pub use serialization::{SerializationInterceptor, SerializationOptions};
+#[cfg(feature = "http-client")]
+pub use service_client::{ServiceClient, ServiceClientModule, ServiceClientOptions};
+#[cfg(feature = "etcd-discovery")]
+pub use service_discovery::{EtcdDiscoveryOptions, EtcdRegistration, EtcdServiceDiscovery};
+pub use service_discovery::{
+    ServiceBalanceStrategy, ServiceDiscovery, ServiceInstance, ServiceLoadBalancer,
+    StaticServiceDiscovery,
+};
 #[cfg(feature = "session")]
 pub use session::{
     InMemorySessionStore, Session, SessionCookieInterceptor, SessionCookieSameSite, SessionManager,

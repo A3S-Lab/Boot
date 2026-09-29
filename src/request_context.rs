@@ -31,7 +31,7 @@ pub struct RequestContext {
 }
 
 impl RequestContext {
-    pub(crate) fn from_route_request(
+    pub fn from_route_request(
         request: &BootRequest,
         route_path: impl Into<String>,
         module_name: Option<String>,

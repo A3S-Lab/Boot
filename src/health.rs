@@ -191,7 +191,11 @@ impl HealthCheckService {
     }
 }
 
-/// Module that registers a [`HealthCheckService`] provider and optional route.
+/// Module that registers a [`HealthCheckService`] provider and optional routes.
+///
+/// By default exposes:
+/// - `GET /health` — readiness (dependency indicators)
+/// - `GET /live` — liveness (process up; no dependency checks)
 #[derive(Clone)]
 pub struct HealthModule {
     name: &'static str,
@@ -199,6 +203,7 @@ pub struct HealthModule {
     service: Arc<HealthCheckService>,
     indicators: Vec<(String, Arc<dyn HealthIndicator>)>,
     route_path: Option<String>,
+    liveness_path: Option<String>,
     global: bool,
 }
 
@@ -209,6 +214,7 @@ impl fmt::Debug for HealthModule {
             .field("token", &self.token)
             .field("indicators", &self.indicators.len())
             .field("route_path", &self.route_path)
+            .field("liveness_path", &self.liveness_path)
             .field("global", &self.global)
             .finish_non_exhaustive()
     }
@@ -226,6 +232,7 @@ impl HealthModule {
             service: Arc::new(service),
             indicators: Vec::new(),
             route_path: Some("/health".to_string()),
+            liveness_path: Some("/live".to_string()),
             global: false,
         }
     }
@@ -252,8 +259,18 @@ impl HealthModule {
         self
     }
 
+    pub fn with_liveness_route(mut self, path: impl Into<String>) -> Self {
+        self.liveness_path = Some(path.into());
+        self
+    }
+
     pub fn without_route(mut self) -> Self {
         self.route_path = None;
+        self
+    }
+
+    pub fn without_liveness_route(mut self) -> Self {
+        self.liveness_path = None;
         self
     }
 
@@ -289,23 +306,32 @@ impl Module for HealthModule {
     }
 
     fn routes(&self) -> Result<Vec<RouteDefinition>> {
-        let Some(path) = &self.route_path else {
-            return Ok(Vec::new());
-        };
-
-        let service = Arc::clone(&self.service);
-        Ok(vec![RouteDefinition::get(
-            path.clone(),
-            move |request: BootRequest| {
-                let service = Arc::clone(&service);
-                async move {
+        let mut routes = Vec::new();
+        if let Some(path) = &self.route_path {
+            let service = Arc::clone(&self.service);
+            routes.push(RouteDefinition::get(
+                path.clone(),
+                move |request: BootRequest| {
+                    let service = Arc::clone(&service);
+                    async move {
+                        request.require_accepts_json()?;
+                        let report = service.check().await?;
+                        let status = if report.is_healthy() { 200 } else { 503 };
+                        BootResponse::json_with_status(status, &report)
+                    }
+                },
+            )?);
+        }
+        if let Some(path) = &self.liveness_path {
+            routes.push(RouteDefinition::get(
+                path.clone(),
+                move |request: BootRequest| async move {
                     request.require_accepts_json()?;
-                    let report = service.check().await?;
-                    let status = if report.is_healthy() { 200 } else { 503 };
-                    BootResponse::json_with_status(status, &report)
-                }
-            },
-        )?])
+                    BootResponse::json(&serde_json::json!({ "status": "up" }))
+                },
+            )?);
+        }
+        Ok(routes)
     }
 
     fn on_module_init(&self, _module_ref: &crate::ModuleRef) -> Result<()> {
